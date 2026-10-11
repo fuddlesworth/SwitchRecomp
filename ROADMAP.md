@@ -6,6 +6,10 @@ should land. A phase can start before the previous one is finished where it says
 
 Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 
+Current order (2026-10-10): Phase 4 (platform), then Phase 6 (GPU). The rest of Phase 2 waits for the GPU work,
+since the title-screen crash comes from how compute results and completion signals are ordered under OpenGL.
+Sound (Phase 3) comes after.
+
 ## Where things stand (2026-10-10)
 
 Catherine boots through the logos, the intro movie, the terms screen, the main menu and the New Game cutscene at
@@ -65,10 +69,21 @@ a renderer rewrite on top of a memory-corruption bug would make every regression
       runnable unattended (Xvfb or a headless Wayland compositor).
 - [x] VIC jobs wrote past NvRmStream's 128-entry syncpoint table into the game's heap (host1x syncpoints now come
       from the GPU's allocator).
-- [ ] The title-screen crash. Worker threads read job records whose pointers have been overwritten with float data
-      that looks like vertex positions (`x10=3f800000438e91de`, a position with w = 1.0). The leading suspect is the
-      compute write-back copying shader output into guest memory that the game has since reused. The fix is to
-      check every write-back target against the current memory map and the GPU fence the game waited on.
+- [x] Compute write-back wrote the whole SSBO range back late, reverting game writes made in the meantime. Only
+      bytes the shader changed land now, and only where guest memory still holds what the shader started from.
+- [~] The title-screen crash (paused until Phase 6). A vertex-skinning compute shader writes position + normal
+      records over the game's deferred-release list nodes (`{obj, arg1, arg2, fn1, fn2, next}`, walked at
+      `0x82df5c0`), and the game later calls a float as a function pointer. Established by measurement:
+      - The nodes are already inside the SSBO range when the GPU thread runs the dispatch, 1 to 8 ms after its
+        submit. The shader really writes that whole range; stores land at their true addresses.
+      - Not the cause: game-thread races (crashes pinned to one core), GPU VA remapping (all maps are made once),
+        pushbuffers changing after submit, out-of-bounds shader writes, stream syncpoint wait timeouts, GPU-thread
+        lag. Throttling DequeueBuffer on the frame fence made it worse.
+      - What stopped it (0 crashes in 17 runs, against about half before): holding semaphore and report releases
+        until compute results are in guest memory. Under OpenGL that waits for the whole rendering backlog
+        (40 to 80 ms per release, stretches at 1 FPS), so it was not kept. A Vulkan backend with its own compute
+        queue and explicit synchronization can order these without the stall.
+      - Open question: what the game waited on before allocating those nodes (`sdk-scout` on the allocator).
 - [ ] Turn compiler warnings back on (upstream builds with `-w`) and fix them file by file, starting with the
       files we change.
 
