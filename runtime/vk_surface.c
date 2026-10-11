@@ -46,11 +46,20 @@ void vk_surf_use(VkCommandBuffer cb, Surf* s, VkImageLayout layout, VkPipelineSt
     s->access = access;
 }
 
+float g_vk_scale = 1.0f;
+u32 vk_sc(u32 v) {
+    u32 r = (u32)((float)v * g_vk_scale + 0.5f);
+    return r ? r : 1;
+}
+float vk_scf(float v) { return v * g_vk_scale; }
+
 static Surf* surf_create(u64 gva, u32 w, u32 h, VkFmt f, u32 fkey, u32 bl, u32 bh, u32 pitch, int is_rt) {
     Surf* s = calloc(1, sizeof *s);
     s->gva = gva;
     s->w = w;
     s->h = h;
+    s->sw = is_rt ? vk_sc(w) : w;
+    s->sh = is_rt ? vk_sc(h) : h;
     s->layers = 1;
     s->levels = 1;
     s->fkey = fkey;
@@ -68,7 +77,7 @@ static Surf* surf_create(u64 gva, u32 w, u32 h, VkFmt f, u32 fkey, u32 bl, u32 b
                             .flags = f.depth ? 0 : VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, /* sRGB and linear views */
                             .imageType = VK_IMAGE_TYPE_2D,
                             .format = f.vk,
-                            .extent = {w, h, 1},
+                            .extent = {s->sw, s->sh, 1},
                             .mipLevels = 1,
                             .arrayLayers = 1,
                             .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -108,6 +117,33 @@ Surf* vk_rt_find(u64 gva) {
     return NULL;
 }
 
+/* an image of a scaled target's format at the guest's size, to move it to and from guest memory */
+static VkImage unscaled_image(const Surf* s, VmaAllocation* mem) {
+    VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                            .imageType = VK_IMAGE_TYPE_2D,
+                            .format = s->f.vk,
+                            .extent = {s->w, s->h, 1},
+                            .mipLevels = 1,
+                            .arrayLayers = 1,
+                            .samples = VK_SAMPLE_COUNT_1_BIT,
+                            .tiling = VK_IMAGE_TILING_OPTIMAL,
+                            .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                            .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+    VmaAllocationCreateInfo aci = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    VkImage img = VK_NULL_HANDLE;
+    if (!VK_OK(vmaCreateImage(g_vk.vma, &ii, &aci, &img, mem, NULL))) return VK_NULL_HANDLE;
+    return img;
+}
+/* src (TRANSFER_SRC) scaled into dst (TRANSFER_DST), whole images */
+static void scale_blit(VkCommandBuffer cb, VkImage src, u32 sw, u32 sh, VkImage dst, u32 dw, u32 dh, int is_int) {
+    VkImageBlit b = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                     .srcOffsets = {{0, 0, 0}, {(i32)sw, (i32)sh, 1}},
+                     .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                     .dstOffsets = {{0, 0, 0}, {(i32)dw, (i32)dh, 1}}};
+    vkCmdBlitImage(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b,
+                   is_int ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
+}
+
 /* the guest bytes of a render target: block linear or pitch linear, in guest memory */
 static u64 rt_bytes(const Surf* s) { return s->bl ? vk_bl_size(s->w * s->f.bpp, s->h, s->bh) : (u64)s->pitch * s->h; }
 
@@ -136,12 +172,26 @@ void vk_rt_reload(u64 gva) {
         else
             for (u32 y = 0; y < s->h; y++) memcpy(p + y * row, src + (u64)y * s->pitch, row);
         VkCommandBuffer cb = vk_cmd();
-        vk_surf_use(cb, s, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT,
+        vk_surf_use(cb, s, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
                     VK_ACCESS_2_TRANSFER_WRITE_BIT);
         VkBufferImageCopy c = {.bufferOffset = off,
                                .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                                .imageExtent = {s->w, s->h, 1}};
-        vkCmdCopyBufferToImage(cb, buf, s->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+        VmaAllocation tm;
+        VkImage t = s->sw == s->w && s->sh == s->h ? VK_NULL_HANDLE : unscaled_image(s, &tm);
+        if (!t)
+            vkCmdCopyBufferToImage(cb, buf, s->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+        else { /* a scaled target: the guest's pixels into an image of their size, then scaled up into it */
+            vk_barrier(cb, t, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COPY_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
+                       VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdCopyBufferToImage(cb, buf, t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+            vk_barrier(cb, t, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                       VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            scale_blit(cb, t, s->w, s->h, s->img, s->sw, s->sh, s->f.is_int);
+            vk_defer_image(t, tm, VK_NULL_HANDLE, VK_NULL_HANDLE);
+        }
     }
     free(tmp);
 }
@@ -155,10 +205,23 @@ void vk_rt_flush(u64 gva) {
     u8* p = vk_readback_buffer(row * s->h, &buf);
     if (!p) return;
     VkCommandBuffer cb = vk_cmd();
-    vk_surf_use(cb, s, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT,
-                VK_ACCESS_2_TRANSFER_READ_BIT);
+    vk_surf_use(cb, s, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
     VkBufferImageCopy c = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {s->w, s->h, 1}};
-    vkCmdCopyImageToBuffer(cb, s->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &c);
+    VmaAllocation tm;
+    VkImage t = s->sw == s->w && s->sh == s->h ? VK_NULL_HANDLE : unscaled_image(s, &tm);
+    if (!t)
+        vkCmdCopyImageToBuffer(cb, s->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &c);
+    else { /* a scaled target: scaled down to the guest's size first */
+        vk_barrier(cb, t, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
+                   VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        scale_blit(cb, s->img, s->sw, s->sh, t, s->w, s->h, s->f.is_int);
+        vk_barrier(cb, t, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        vkCmdCopyImageToBuffer(cb, t, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &c);
+        vk_defer_image(t, tm, VK_NULL_HANDLE, VK_NULL_HANDLE);
+    }
     vk_finish();
     vk_readback_ready();
     u64 sz = rt_bytes(s);
@@ -247,12 +310,17 @@ int vk_blit2d(const void* sp, const void* dp, int dx, int dy, int dw, int dh, do
     if (!dt || dt == st || dt->f.depth || st->f.is_int != dt->f.is_int) return 0;
     if (!blit_ok(st->f.vk, VK_FORMAT_FEATURE_BLIT_SRC_BIT) || !blit_ok(dt->f.vk, VK_FORMAT_FEATURE_BLIT_DST_BIT))
         return 0;
-    i32 x0 = (i32)sx, y0 = (i32)sy, x1 = (i32)(sx + sdx * dw + 0.5), y1 = (i32)(sy + sdy * dh + 0.5);
-    i32 X1 = dx + dw, Y1 = dy + dh;
-    if (x1 > (i32)st->w) x1 = (i32)st->w;
-    if (y1 > (i32)st->h) y1 = (i32)st->h;
-    if (X1 > (i32)dt->w) X1 = (i32)dt->w;
-    if (Y1 > (i32)dt->h) Y1 = (i32)dt->h;
+    /* in the images' pixels: targets are scaled */
+    float S = g_vk_scale;
+    i32 x0 = (i32)(sx * S), y0 = (i32)(sy * S), x1 = (i32)((sx + sdx * dw) * S + 0.5),
+        y1 = (i32)((sy + sdy * dh) * S + 0.5);
+    i32 X1 = (i32)((dx + dw) * S + 0.5f), Y1 = (i32)((dy + dh) * S + 0.5f);
+    dx = (i32)(dx * S);
+    dy = (i32)(dy * S);
+    if (x1 > (i32)st->sw) x1 = (i32)st->sw;
+    if (y1 > (i32)st->sh) y1 = (i32)st->sh;
+    if (X1 > (i32)dt->sw) X1 = (i32)dt->sw;
+    if (Y1 > (i32)dt->sh) Y1 = (i32)dt->sh;
     if (x1 <= x0 || y1 <= y0 || X1 <= dx || Y1 <= dy || dx < 0 || dy < 0) return 0;
     int scaled = x1 - x0 != X1 - dx || y1 - y0 != Y1 - dy;
     VkCommandBuffer cb = vk_cmd();

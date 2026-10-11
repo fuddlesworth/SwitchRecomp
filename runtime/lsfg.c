@@ -334,6 +334,11 @@ static int find_dll(char* out) {
 #endif
     return 0;
 }
+/* frame generation would run: it is on and the user's Lossless.dll is there (renderer.c picks OpenGL for it) */
+int lsfg_available(void) {
+    char p[1100];
+    return g_lsfg_opt && find_dll(p);
+}
 
 /* load + identify + compile everything, returns 1 when usable */
 int lsfg_init(void) {

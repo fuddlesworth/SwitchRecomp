@@ -9,6 +9,7 @@ int g_lsfg_opt = 0, g_lsfg_quality = 0, g_lsfg_mult = 2, g_lsfg_height = 720;
 float g_lsfg_flow = 0.5f, g_lsfg_target = 60.f;
 char g_lsfg_dll[1024];
 int lsfg_init(void) { return 0; }
+int lsfg_available(void) { return 0; }
 int lsfg_ready(void) { return 0; }
 int lsfg_context(u32 W, u32 H) {
     (void)W;

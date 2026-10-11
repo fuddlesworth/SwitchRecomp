@@ -118,6 +118,7 @@ typedef struct {
 typedef struct Surf {
     u64 gva;
     u32 w, h, layers, levels;
+    u32 sw, sh;  /* the image's size: render targets are w x h times the resolution scale */
     u32 depth3d; /* 3D textures: depth (layers is 1) */
     u32 fkey;    /* guest format | 0x10000 for depth */
     VkFmt f;
@@ -142,6 +143,10 @@ typedef struct Surf {
     u32 crop_gen;
     struct Surf* next;
 } Surf;
+/* resolution= in the .ini: render targets are made this much bigger (read once, at startup) */
+extern float g_vk_scale;
+u32 vk_sc(u32 v);      /* a size or coordinate scaled, at least 1 */
+float vk_scf(float v); /* the same for viewport values */
 Surf* vk_rt(u64 gva, u32 w, u32 h, u32 fmt, u32 tile, int depth);
 Surf* vk_rt_find(u64 gva);
 Surf* vk_rt_for_cpu(u64 cpu_addr, u32 w, u32 h); /* the render target the guest presents from that memory */

@@ -12,6 +12,7 @@
    Dispatches that read textures run on the graphics queue, after everything recorded before them. */
 #include "vk.h"
 #include "vk_shader.h"
+#include "renderer.h"
 
 typedef struct CsPipe {
     u64 key;
@@ -36,7 +37,6 @@ typedef struct {
 static CsOut g_out[256];
 static int g_nout;
 static u64 g_out_lo = ~0ull, g_out_hi;
-volatile int g_cs_any; /* results waiting to land (gpu.c checks it on every read) */
 
 static VkCommandPool g_cpool;
 static VkCommandBuffer g_ccb;
@@ -173,16 +173,15 @@ void vk_compute_land(void) {
     cs_land();
     vk_unlock();
 }
-void cs_mem_need(u64 a, u64 n);
 /* the front end writes guest memory (size > 0) or reaches a point the game can observe (size 0) */
 void vk_compute_before_write(u64 gva, u64 size) {
     if (!size)
         vk_compute_land();
     else if (g_cs_any)
-        cs_mem_need(gva, size);
+        vkr_cs_mem_need(gva, size);
 }
 /* a read of guest memory: results for it have to be there first */
-void cs_mem_need(u64 a, u64 n) {
+void vkr_cs_mem_need(u64 a, u64 n) {
     if (g_landing || a >= g_out_hi || a + n <= g_out_lo) return;
     for (int i = 0; i < g_nout; i++)
         if (a < g_out[i].addr + g_out[i].size && g_out[i].addr < a + n) {

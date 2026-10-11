@@ -209,8 +209,8 @@ static Surf* tex_create(u64 gva, u32 w, u32 h, u32 layers, u32 d3, u32 levels, V
                         u32 bl, u32 bh, u32 bd, u32 pitch) {
     Surf* t = calloc(1, sizeof *t);
     t->gva = gva;
-    t->w = w;
-    t->h = h;
+    t->w = t->sw = w;
+    t->h = t->sh = h;
     t->layers = layers;
     t->depth3d = d3;
     t->levels = levels;
@@ -260,6 +260,8 @@ static Surf* rt_crop(Surf* rt, u32 w, u32 h) {
         c->gva = rt->gva;
         c->w = w;
         c->h = h;
+        c->sw = vk_sc(w) < rt->sw ? vk_sc(w) : rt->sw; /* the same region of the scaled target */
+        c->sh = vk_sc(h) < rt->sh ? vk_sc(h) : rt->sh;
         c->layers = c->levels = c->depth3d = 1;
         c->f = rt->f;
         c->fkey = rt->fkey;
@@ -270,7 +272,7 @@ static Surf* rt_crop(Surf* rt, u32 w, u32 h) {
                                 .flags = rt->f.depth ? 0 : VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT,
                                 .imageType = VK_IMAGE_TYPE_2D,
                                 .format = rt->f.vk,
-                                .extent = {w, h, 1},
+                                .extent = {c->sw, c->sh, 1},
                                 .mipLevels = 1,
                                 .arrayLayers = 1,
                                 .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -298,7 +300,7 @@ static Surf* rt_crop(Surf* rt, u32 w, u32 h) {
         vk_surf_use(cb, c, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT,
                     VK_ACCESS_2_TRANSFER_WRITE_BIT);
         VkImageAspectFlags a = vk_aspect(&rt->f);
-        VkImageCopy r = {.srcSubresource = {a, 0, 0, 1}, .dstSubresource = {a, 0, 0, 1}, .extent = {w, h, 1}};
+        VkImageCopy r = {.srcSubresource = {a, 0, 0, 1}, .dstSubresource = {a, 0, 0, 1}, .extent = {c->sw, c->sh, 1}};
         vkCmdCopyImage(cb, rt->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, c->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        1, &r);
         c->crop_gen = rt->wgen;
@@ -483,7 +485,7 @@ VkImageView vk_null_view(VkImageViewType type, int num) {
     if (!s) {
         static const VkFormat fm[3] = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UINT, VK_FORMAT_R8G8B8A8_SINT};
         s = calloc(1, sizeof *s);
-        s->w = s->h = s->levels = s->depth3d = 1;
+        s->w = s->h = s->sw = s->sh = s->levels = s->depth3d = 1;
         s->layers = is3d ? 1 : 6;
         s->type = is3d ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
         s->f = (VkFmt){fm[num], 4, 1, 1, 0, 0, (u8)(num != 0), 0, (u8)(num == 2)};

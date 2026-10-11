@@ -136,8 +136,7 @@ The game stalls the first time it meets a shader (`waiting for shader=414` in a 
 Some GPU emulation can't be avoided: the shaders are compiled Maxwell code and have to be translated whatever sits
 underneath. What can change is how much of the hardware is emulated and how well it maps to the host.
 
-- [~] A Vulkan backend implementing the same interface as `gpu_gl.c`, built next to OpenGL with `-DSWR_GPU=vulkan`
-      until it matches it. Vulkan 1.3 (timeline semaphores, synchronization2, dynamic rendering), loaded through
+- [x] A Vulkan backend implementing the same interface as `gpu_gl.c`, in the same runtime as OpenGL. Vulkan 1.3 (timeline semaphores, synchronization2, dynamic rendering), loaded through
       SDL's loader with volk so nothing links against a Vulkan library.
   - [x] Step 1, presenting: instance, device with a graphics and a separate compute queue, swapchain through SDL3
         (Wayland and X11), and the CPU path's frames shown on it. Nothing is drawn yet.
@@ -168,7 +167,14 @@ underneath. What can change is how much of the hardware is emulated and how well
         stopped the title-screen crash, and on the compute queue it costs about 1 ms per batch of dispatches
         instead of the whole rendering backlog. 0 crashes in 7 runs past the title screen (GL: 2 of 5 the same
         day), at the same frame rate as GL.
-  - [ ] Step 5, parity with OpenGL, screenshot by screenshot, then Vulkan becomes the default, also on Windows.
+  - [x] Step 5, the default. The sdl3 backend builds both renderers into one runtime (`renderer.c` calls the active
+        one; `gl_names.h` renames `gpu_gl.c`'s side without editing it), and `renderer=auto` in the .ini picks Vulkan,
+        falling back to OpenGL when Vulkan can't start or when LSFG frame generation is set up. Vulkan has the
+        resolution scale (render targets at the scaled size, written back and reloaded through unscaled images) and
+        `shadows=0`. Catherine matches OpenGL from boot to the New Game cutscene: the logo frame is pixel-identical,
+        later screens match by eye. Only OpenGL has LSFG, dynamic resolution, the F7 recorder and F8 screenshots.
+        On Windows the default backend is still win32 (OpenGL), until the SDL3 backend has run on real Windows
+        (Phase 4); with `-DSWR_BACKEND=sdl3` it is the same as on Linux, and runs Catherine on Vulkan under Wine.
 - [ ] Texture and buffer cache tracking: invalidation on CPU writes and correct write-back, which is the same area
       as the Phase 2 crash.
 - [ ] Research: NVN-level emulation. The game reaches NVN through `nvnBootstrapLoader` and
