@@ -42,6 +42,7 @@ KThread* kthread_create(u64 entry, u64 arg, u64 stack_top, int prio, int core) {
     t->stack_top = stack_top;
     t->prio = prio;
     t->core = core < 0 ? 0 : core;
+    t->ideal_core = t->core;
     t->affinity = 1ull << t->core;
     t->tls = alloc_tls();
     pc_init(&t->cv);

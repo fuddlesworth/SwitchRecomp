@@ -42,7 +42,9 @@ struct KThread {
     KObj o;
     CPU cpu;
     u64 id;
-    int prio, core;
+    int prio;
+    int core;       /* the core it runs on, what svcGetCurrentProcessorNumber reports */
+    int ideal_core; /* as svcSetThreadCoreMask set it: -1 when the game doesn't care */
     u64 affinity;
     u64 tls;
     u64 entry, arg, stack_top;

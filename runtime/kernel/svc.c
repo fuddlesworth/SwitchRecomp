@@ -115,19 +115,37 @@ static void swr_svc_(CPU* c, u32 imm) {
                 return;
             }
             x[0] = 0;
-            x[1] = (u32)n->core;
+            x[1] = (u32)n->ideal_core;
             x[2] = n->affinity;
             return;
         }
-        case 0x0F: {
+        case 0x0F: { /* SetThreadCoreMask: core -1 = don't care, -2 = the process's default, -3 = keep the ideal core */
             KThread* n = (KThread*)h_get_type((u32)x[0], KO_THREAD);
             if (!n) {
                 x[0] = R_BADHANDLE;
                 return;
             }
             i32 core = (i32)(u32)x[1];
-            if (core >= 0) n->core = core;
-            if (x[2]) n->affinity = x[2];
+            u64 mask = x[2] & 0xF;
+            if (core == -2) { /* the NPDM's default core, 0 as CreateThread assumes */
+                core = 0;
+                mask = 1;
+            } else if (core == -3)
+                core = n->ideal_core;
+            if (!mask || (core >= 0 && !((mask >> core) & 1))) {
+                x[0] = R_BADCOMBO;
+                return;
+            }
+            n->ideal_core = core;
+            n->affinity = mask;
+            /* a thread the new mask leaves out moves to its ideal core, or with no ideal core to the highest core the
+               mask allows. Tears of the Kingdom moves its render workers with (-1, mask 4) and keeps per-core command
+               memory, indexed by svcGetCurrentProcessorNumber: a worker still reporting core 0 there records over the
+               commands of the thread on core 0 */
+            if (core >= 0)
+                n->core = core;
+            else if (!((mask >> n->core) & 1))
+                n->core = 63 - __builtin_clzll(mask);
             x[0] = 0;
             return;
         }
