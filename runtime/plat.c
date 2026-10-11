@@ -212,6 +212,18 @@ int plat_ww_collect(u8* base, u64 size, void (*cb)(u64)) {
     }
     return 0;
 }
+int plat_ww_scan(u8* p, u64 size, void (*cb)(u8* p, u64 size)) {
+    static PVOID a[4096];
+    if (!g_ww_ok) return -1;
+    for (int it = 0; it < 64; it++) {
+        ULONG_PTR n = 4096;
+        ULONG gran = 0;
+        if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, p, (SIZE_T)size, a, &n, &gran)) return -1;
+        for (ULONG_PTR i = 0; i < n; i++) cb((u8*)a[i], gran);
+        if (n < 4096) break;
+    }
+    return 0;
+}
 int plat_vm_commit(u8* p, u64 size) { return VirtualAlloc(p, size, MEM_COMMIT, PAGE_READWRITE) ? 0 : -1; }
 void plat_vm_decommit(u8* p, u64 size) { VirtualFree(p, size, MEM_DECOMMIT); }
 void* plat_dl_open(const char* path) { return (void*)LoadLibraryA(path); }
@@ -538,7 +550,14 @@ void plat_prof_start(int boot) {
 /* ------------------------------------------------------------------ POSIX */
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <sys/syscall.h>
+#include <fcntl.h>
 #include <unistd.h>
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <linux/fs.h>
+#include <linux/userfaultfd.h>
+#endif
 #include <dirent.h>
 #include <dlfcn.h>
 #include <signal.h>
@@ -631,9 +650,65 @@ int plat_ww_collect(u8* base, u64 size, void (*cb)(u64)) {
     (void)cb;
     return -1;
 }
+/* Written-page tracking for the GPU caches (plat_ww_scan): the reserved guest memory is registered with a
+   userfaultfd in asynchronous write-protect mode, which needs no handler thread: a write to a protected page just
+   unprotects it in the kernel, writes from the kernel (read() into guest memory) included. PAGEMAP_SCAN then lists
+   the written pages of a range and protects them again. Only ranges a cache scans are ever protected, so the rest of
+   guest memory costs nothing. Needs Linux 6.7; without it, the caches check contents as before */
+static int g_uffd_pagemap = -1;
+#if defined(__linux__) && !defined(__ANDROID__) && defined(PAGEMAP_SCAN)
+static void ww_init(u8* p, u64 size) {
+    if (getenv("SWR_NO_WW")) return;
+    int u = (int)syscall(SYS_userfaultfd, O_CLOEXEC | O_NONBLOCK | UFFD_USER_MODE_ONLY);
+    if (u < 0) return;
+    struct uffdio_api api = {.api = UFFD_API, .features = UFFD_FEATURE_WP_ASYNC | UFFD_FEATURE_WP_UNPOPULATED};
+    struct uffdio_register reg = {.range = {(u64)(uintptr_t)p, size}, .mode = UFFDIO_REGISTER_MODE_WP};
+    int pm = open("/proc/self/pagemap", O_RDONLY | O_CLOEXEC);
+    if (pm < 0 || ioctl(u, UFFDIO_API, &api) || ioctl(u, UFFDIO_REGISTER, &reg)) {
+        if (pm >= 0) close(pm);
+        close(u);
+        return;
+    }
+    g_uffd_pagemap = pm; /* the userfaultfd stays open for the registration to last */
+}
+int plat_ww_scan(u8* p, u64 size, void (*cb)(u8* p, u64 size)) {
+    if (g_uffd_pagemap < 0) return -1;
+    struct page_region r[64];
+    u64 start = (u64)(uintptr_t)p & ~4095ull, end = ((u64)(uintptr_t)p + size + 4095) & ~4095ull;
+    while (start < end) {
+        struct pm_scan_arg a = {.size = sizeof a,
+                                .flags = PM_SCAN_WP_MATCHING,
+                                .start = start,
+                                .end = end,
+                                .vec = (u64)(uintptr_t)r,
+                                .vec_len = 64,
+                                .category_mask = PAGE_IS_WRITTEN,
+                                .return_mask = PAGE_IS_WRITTEN};
+        long n = ioctl(g_uffd_pagemap, PAGEMAP_SCAN, &a);
+        if (n < 0) return -1;
+        for (long i = 0; i < n; i++) cb((u8*)(uintptr_t)r[i].start, r[i].end - r[i].start);
+        if (a.walk_end >= end || !a.walk_end) break; /* walk_end: where a full vec stopped the scan */
+        start = a.walk_end;
+    }
+    return 0;
+}
+#else
+static void ww_init(u8* p, u64 size) {
+    (void)p;
+    (void)size;
+}
+int plat_ww_scan(u8* p, u64 size, void (*cb)(u8* p, u64 size)) {
+    (void)p;
+    (void)size;
+    (void)cb;
+    return -1;
+}
+#endif
 u8* plat_vm_reserve(u64 size) {
     void* p = mmap(NULL, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-    return p == MAP_FAILED ? NULL : (u8*)p;
+    if (p == MAP_FAILED) return NULL;
+    ww_init(p, size);
+    return (u8*)p;
 }
 int plat_vm_commit(u8* p, u64 size) { return mprotect(p, size, PROT_READ | PROT_WRITE); }
 void plat_vm_decommit(u8* p, u64 size) {

@@ -139,6 +139,7 @@ typedef struct Surf {
     int nsv;
     u64 size, hash, shash;
     u32 checked, next_check, stable, tfull;
+    u32 wseen;         /* write-tracking clock when it last matched memory */
     struct Surf* crop; /* a smaller texture header over this render target: a copy of that region */
     u32 crop_gen;
     struct Surf* next;
@@ -178,6 +179,10 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off);
 /* a copy of len bytes made now (data that changes within a frame), or of zeros when gva is 0 */
 int vk_buf_copy(u64 gva, u64 len, VkBuffer* buf, u64* off);
 void vk_buf_frame(void);
+/* 1 if [host, host+len) was written since the write-tracking clock read `since`, 0 if not, -1 when write tracking
+   can't tell (no host pointer, or not available): then check the contents */
+int vk_written_since(const u8* host, u64 len, u32 since);
+u32 vk_ww_now(void);
 
 /* vk_pipeline.c */
 typedef struct VkSh {

@@ -359,7 +359,24 @@ Surf* vk_tex_from_tic(const u32* tic) {
             t->fkey != fkey || t->levels != levels || t->type != vt)
             continue;
         t->last_used = g_vk_present;
-        /* change check: often at first, backing off while the texture stays the same, within a per-frame budget */
+        /* with write tracking, checked once a frame only when its memory was written */
+        if (t->checked != g_vk_present) {
+            u32 wnow = vk_ww_now();
+            int w = vk_written_since(gmem_ptr(gva, t->size), t->size, t->wseen);
+            if (w >= 0) {
+                t->checked = g_vk_present;
+                if (w) {
+                    u64 hh = mem_hash(gva, t->size);
+                    if (hh != t->hash) {
+                        t->hash = hh;
+                        tex_upload(t);
+                    }
+                }
+                t->wseen = wnow + 1; /* this scan's marks are stamped with the clock after wnow */
+                return t;
+            }
+        }
+        /* without it: often at first, backing off while the texture stays the same, within a per-frame budget */
         if (t->checked != g_vk_present && (i32)(g_vk_present - t->next_check) >= 0) {
             if (g_bud_frame != g_vk_present) {
                 g_bud_frame = g_vk_present;
@@ -403,6 +420,9 @@ Surf* vk_tex_from_tic(const u32* tic) {
         sz = (sz + al - 1) / al * al;
     }
     t->size = sz * layers;
+    t->wseen = vk_ww_now();
+    vk_written_since(gmem_ptr(gva, t->size), t->size, 0); /* starts tracking it */
+    t->wseen = vk_ww_now();
     t->hash = mem_hash(gva, t->size);
     t->checked = g_vk_present;
     t->next_check = g_vk_present + 4;
