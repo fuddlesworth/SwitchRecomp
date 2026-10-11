@@ -26,6 +26,16 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
 | No warnings | Upstream builds with `-w` | Check a changed file with warnings on: `gcc -std=gnu23 -O2 -Wall -Wextra -fsyntax-only -Iruntime -Iruntime/bcn -Ideps/linux/include runtime/FILE.c`. Fix what comes from the change. |
 | Game crashes at startup with "recompiled code is from another SwitchRecomp version" | `ABI` in `switchrecomp.py` and the runtime's check disagree | Recompile the game. |
 
+## Windows
+
+CI (`.github/workflows/build.yml`) builds Windows natively with GCC and Clang from `scripts/bootstrap.ps1`, and
+cross-builds it on Linux. To check Windows code before pushing, cross-build it here: with a MinGW-w64 toolchain on
+PATH (Arch's `mingw-w64-gcc`, or the Linux build of llvm-mingw, which provides the `x86_64-w64-mingw32-*` names),
+run `python3 scripts/bootstrap.py --target win64`, then `cmake --preset mingw-cross && cmake --build --preset
+mingw-cross`. Upstream code that only Windows compiles (`backend_win32.c`, `rec_win32.c`, the `_WIN32` parts of
+`plat.c`) has relied on implicit declarations that `-w` hid and that GCC 14+ and Clang reject: a missing header shows
+up only there.
+
 ## When the game module must be recompiled
 
 Only when the generated code or its contract changed: `codegen.py`, `a64.py`, `nxloader.py`, `runtime/cpu.h`,
