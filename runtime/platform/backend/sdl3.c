@@ -27,7 +27,7 @@
 
 static SDL_Window* g_win;
 static volatile int g_ww = 1280, g_wh = 720;
-static int g_seconds = 0, g_maxframes = -1;
+static int g_seconds = 0, g_maxframes = -1, g_shot_every = 0;
 static char g_shot[1024];
 static u64 g_start;
 static u64 g_press = 0, g_press_at = 0, g_press_len = 300;
@@ -44,6 +44,8 @@ void backend_ini(const char* k, const char* v) {
         g_maxframes = atoi(v);
     else if (!strcmp(k, "shot"))
         strncpy(g_shot, v, 1023);
+    else if (!strcmp(k, "shot_every"))
+        g_shot_every = atoi(v);
     else if (!strcmp(k, "press"))
         g_press = strtoull(v, NULL, 16);
     else if (!strcmp(k, "press_at"))
@@ -288,6 +290,15 @@ void frontend_frame(void) {
         snprintf(p, sizeof p, "%scaptures/screenshot_%04d%02d%02d_%02d%02d%02d", g_exedir, t.tm_year + 1900,
                  t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
         g_renderer->screenshot(p);
+    }
+    { /* shot_every=N with shot=PATH: PATH_0000, PATH_0001... every N frames, to follow a scripted run */
+        static int last = -1, n;
+        if (g_shot_every > 0 && g_shot[0] && g_frames != last && g_frames % g_shot_every == 0) {
+            last = g_frames;
+            char p[1100];
+            snprintf(p, sizeof p, "%s_%04d", g_shot, n++);
+            g_renderer->screenshot(p);
+        }
     }
     u64 el = plat_ns() - g_start;
     if ((g_maxframes >= 0 && g_frames >= g_maxframes) || (g_seconds && el >= (u64)g_seconds * 1000000000ull)) {

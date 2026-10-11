@@ -23,6 +23,7 @@ The runtime options behind it, for a run by hand from `games/`:
 | --- | --- |
 | `--seconds=N` | Exit after N seconds, writing a screenshot |
 | `--shot=PATH` | Screenshot to `PATH.ppm` at exit |
+| `--shot_every=N` | With `--shot`, also `PATH_0000.ppm`, `PATH_0001.ppm`... every N frames: follows a scripted run through menus |
 | `--script=ms:hex,...` | Press buttons at those times, each held 300 ms (`--press_len=` changes it) |
 | `-v` | Log every IPC call (`<service> cmd N (in ...) -> rc`): huge, grep it |
 | `--fps_limit=0` | Unlimited frame rate |
