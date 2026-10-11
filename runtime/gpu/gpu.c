@@ -353,7 +353,6 @@ void gpu_init(void) {
     gpu3d_init();
 }
 
-/* with GL, submissions go to the GPU thread */
 volatile u64 g_gpu_submits;
 void gpu_submit(u64* e, u32 n, u32 channel, u32 incs) {
     g_gpu_submits++;

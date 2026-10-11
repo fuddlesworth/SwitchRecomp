@@ -1,5 +1,4 @@
-/* Vulkan renderer: its side of the renderer interface (renderer.c calls these vkr_ functions when the Vulkan
-   renderer is the active one, the GL names otherwise), and presenting.
+/* Vulkan renderer: the renderer interface (vk_renderer, the vkr_ functions it points to) and presenting.
 
    Render targets, clears, draws (gpu/vk/render.c), compute (gpu/vk/compute.c), write-backs to and reloads from guest memory,
    and presenting the game's framebuffer from its render target (or from memory, converted on the CPU, when no
@@ -21,7 +20,7 @@ static Surf* g_cpu_img;
 static Surf* g_last;
 static u32 g_last_w, g_last_h;
 
-/* 0 when Vulkan can't run here: the caller falls back to OpenGL */
+/* 0 when Vulkan can't run here */
 static int vkr_start(void) {
     if (!vk_init()) return 0;
     g_vk_scale = g_opt_resf >= 0.25f && g_opt_resf <= 4 ? g_opt_resf : 1.0f;
@@ -31,7 +30,7 @@ static int vkr_start(void) {
     g_gpu_before_write = vk_compute_before_write;
     VkSemaphoreCreateInfo sci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (int i = 0; i < VK_FRAMES; i++) VK_OK(vkCreateSemaphore(g_vk.dev, &sci, NULL, &g_acquired[i]));
-    g_gl = 1; /* a renderer is active */
+    g_renderer_up = 1; /* a renderer is active */
     return 1;
 }
 
@@ -292,19 +291,6 @@ out:
     return hash;
 }
 
-/* OpenGL's diagnostics that the Vulkan renderer doesn't have */
-static void vkr_present_cpu(const u32* px, int w, int h, int stride) {
-    (void)px;
-    (void)w;
-    (void)h;
-    (void)stride;
-}
-static void vkr_note_compute(void) {}
-static void vkr_dump_rts(void) {}
-static void vkr_rec_finish(void) {}
-static void vkr_trace(const char* s) { (void)s; }
-static u64 vkr_busy_ns(void) { return 0; }
-
 const Renderer vk_renderer = {
     .name = "Vulkan",
     .start = vkr_start,
@@ -320,11 +306,6 @@ const Renderer vk_renderer = {
     .before_syncwait = vkr_before_syncwait,
     .stream_incr = vkr_stream_incr,
     .present_buffer = vkr_present_buffer,
-    .present_cpu = vkr_present_cpu,
     .screenshot = vkr_screenshot,
-    .note_compute = vkr_note_compute,
-    .dump_rts = vkr_dump_rts,
-    .rec_finish = vkr_rec_finish,
-    .trace = vkr_trace,
-    .busy_ns = vkr_busy_ns,
 };
+const Renderer* g_renderer = &vk_renderer;

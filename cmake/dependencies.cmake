@@ -62,18 +62,6 @@ if(SWR_VULKAN)
     swr_quiet(glslang glslang-default-resource-limits)
 endif()
 
-if(SWR_LSFG_ENABLED)
-    # SPIRV-Cross turns LSFG's SPIR-V shaders into GLSL
-    CPMAddPackage(NAME SPIRV-Cross VERSION 1.4.363.0
-                  URL https://github.com/KhronosGroup/SPIRV-Cross/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz
-                  URL_HASH SHA256=f708982e88b763ef5b0394ed468fc2c3628f68cdab89f2e7a946cd628c04e721
-                  EXCLUDE_FROM_ALL YES SYSTEM YES
-                  OPTIONS "SPIRV_CROSS_STATIC ON" "SPIRV_CROSS_SHARED OFF" "SPIRV_CROSS_CLI OFF"
-                          "SPIRV_CROSS_ENABLE_TESTS OFF" "SPIRV_CROSS_ENABLE_HLSL OFF" "SPIRV_CROSS_ENABLE_MSL OFF"
-                          "SPIRV_CROSS_ENABLE_CPP OFF" "SPIRV_CROSS_ENABLE_REFLECT OFF" "SPIRV_CROSS_ENABLE_C_API OFF"
-                          "SPIRV_CROSS_ENABLE_UTIL OFF" "SPIRV_CROSS_SKIP_INSTALL ON")
-    swr_quiet(spirv-cross-core spirv-cross-glsl)
-endif()
 
 if(SWR_BACKEND STREQUAL "sdl3")
     if(WIN32)

@@ -70,12 +70,15 @@ def compile_all(files, cc, opt, outdir, target_win, jobs, say, extra_flags=()):
     t0 = time.time()
     done = [0]
 
-    # objects are keyed on compiler + flags + the ABI files, so tcc and clang objects never mix
+    # objects are keyed on compiler + flags + the ABI files (cpu.h, cpu_helpers.c and the helpers it includes), so
+    # objects from another compiler or another ABI never mix
     h = hashlib.sha1('|'.join(base + flags).encode())
-    for f in sorted(os.listdir(ABI_DIR)):
-        if f in ('cpu.h', 'cpu_helpers.c'):
-            with open(os.path.join(ABI_DIR, f), 'rb') as fh:
-                h.update(fh.read())
+    for abi_root, abi_dirs, abi_files in os.walk(ABI_DIR):
+        abi_dirs.sort()
+        for name in sorted(abi_files):
+            if name.endswith(('.h', '.c')):
+                with open(os.path.join(abi_root, name), 'rb') as fh:
+                    h.update(fh.read())
     sig = h.hexdigest()[:10]
 
     def one(src):

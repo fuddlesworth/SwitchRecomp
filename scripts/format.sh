@@ -5,7 +5,7 @@
 #   scripts/format.sh --check    list what is not formatted, exit 1 if anything is
 #   scripts/format.sh DIR        format another tree with this repository's settings (import-upstream.sh does this)
 #
-# Left alone: third-party code (third_party/, .cache/cpm), the font bitmap in runtime/gpu/gl/overlay_font.h, and the GL
+# Left alone: third-party code (.cache/cpm), the font bitmap in runtime/gpu/gl/overlay_font.h, and the GL
 # function list in runtime/gpu/gl/glfn.h, an X-macro list clang-format can't lay out stably.
 set -euo pipefail
 

@@ -2,23 +2,9 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* the renderer of the headless build (tests without a GPU): draws nothing, and finishes each submission at once */
-#include "gpu/gl/lsfg.h"
 #include "gpu/renderer.h"
-#include "gpu/shader/shader.h"
 #include "hle/nvdrv.h"
 #include "gpu/gpu.h"
-int g_gl = 0;
-u64 g_draws;
-volatile int g_cs_any;
-/* set by vi QueueBuffer, only the GL presenter reads them */
-volatile i32 g_vi_crop[4];
-volatile u32 g_vi_transform;
-int g_texoff_emul;
-
-void lsfg_ini(const char* k, const char* v) {
-    (void)k;
-    (void)v;
-}
 
 static int null_start(void) { return 1; }
 static int null_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
@@ -81,18 +67,10 @@ static void null_present_buffer(u64 a, u32 w, u32 h, u32 p, u32 l, u32 b, u32 f)
     (void)b;
     (void)f;
 }
-static void null_present_cpu(const u32* px, int w, int h, int stride) {
-    (void)px;
-    (void)w;
-    (void)h;
-    (void)stride;
-}
 static u64 null_screenshot(const char* path) {
     (void)path;
     return 0;
 }
-static void null_trace(const char* s) { (void)s; }
-static u64 null_busy_ns(void) { return 0; }
 
 const Renderer null_renderer = {
     .name = "null",
@@ -109,12 +87,6 @@ const Renderer null_renderer = {
     .before_syncwait = null_void,
     .stream_incr = syncpt_incr,
     .present_buffer = null_present_buffer,
-    .present_cpu = null_present_cpu,
     .screenshot = null_screenshot,
-    .note_compute = null_void,
-    .dump_rts = null_void,
-    .rec_finish = null_void,
-    .trace = null_trace,
-    .busy_ns = null_busy_ns,
 };
 const Renderer* g_renderer = &null_renderer;

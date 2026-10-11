@@ -308,8 +308,6 @@ typedef struct {
 #define IDX_OK(i) ((i) >= 11 && ((i) - 10) % 4 != 0)
 
 /* shader.c */
-extern int g_glsl_es;
-extern int g_shader_vulkan;
 void sb_put(Sb* s, const char* t);
 void sb_f(Sb* s, const char* f, ...);
 char* T(const char* f, ...);

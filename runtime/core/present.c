@@ -71,7 +71,7 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
         return;
     }
     a += offset;
-    if (g_gl) {
+    if (g_renderer_up) {
         g_renderer->present_buffer(a, w, h, pitch, layout, bhl, fmt);
     } else {
         pm_lock(&g_flock);
@@ -85,35 +85,9 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
         video_present_rgba(g_frame, (int)w, (int)h, (int)w);
         pm_unlock(&g_flock);
     }
-    {
-        static int once;
-        if (!once) {
-            once = 1;
-            if (getenv("SWR_VT")) vt_set(1);
-        }
-    } /* test smooth clock w/o recording */
     g_frames++;
-    vt_frame();
     /* fps_limit: 1 = 60, otherwise N fps */
-    /* in smooth recording the limiter has to count guest time, not real time.
-     games that tick once per frame would otherwise run sped up in the video */
-    if (g_vt_on) {
-        u64 per = g_opt_fps >= 60 && g_opt_fps <= 240 ? 1000000000ull / (u64)g_opt_fps : 16666667ull;
-        static u64 last_g;
-        u64 g = guest_ns(), next = last_g + per, t0 = plat_ns();
-        if (last_g && g < next && next - g < per * 2) {
-            while (g < next && plat_ns() - t0 < 1000000000ull) {
-                plat_sleep_ns(500000);
-                g = guest_ns();
-            }
-        }
-        g = guest_ns();
-        last_g = (last_g && g - last_g < 2 * per) ? next : g;
-        g_last_present = plat_ns();
-        return;
-    }
-    /* while recording keep at least the 60 cap, uncapped + per-frame logic = sped up video */
-    if (g_opt_fps || g_rec_active) {
+    if (g_opt_fps) {
         u64 per = g_opt_fps >= 60 && g_opt_fps <= 240 ? 1000000000ull / (u64)g_opt_fps : 16666667ull;
         if (g_opt_fps >= 10 && g_opt_fps < 60) {
             static int said;

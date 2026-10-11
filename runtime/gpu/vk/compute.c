@@ -1,14 +1,12 @@
-/* Compute: the compute class's launches (QMD), as gpu/gl/renderer.c's glr_dispatch reads them, on the separate compute
-   queue. Each dispatch gets copies of its constant and storage buffers in a host-visible arena and is recorded into
+/* Compute: the compute class's launches (QMD), on the separate compute queue. Each dispatch gets copies of its constant and storage buffers in a host-visible arena and is recorded into
    a batch. The batch is submitted and its results land in guest memory before anything could observe them: a read
    of that memory (gmem_read and gmem_ptr call cs_mem_need), anything after it in the stream
    the game can observe (semaphore releases and reports: gpu_signal_point), a GPU-side write of that memory, a
-   syncpoint increment or a wait. Results land the way gpu/gl/renderer.c
-   lands them: a byte is written only where the shader changed it and guest memory still holds what the shader
+   syncpoint increment or a wait. A byte is written only where the shader changed it and guest memory still holds what the shader
    read, since on the console the GPU stores while it runs and a later CPU write wins.
 
    The compute queue only waits for compute, so holding signals until results land costs a dispatch's run time,
-   not the rendering backlog's (which is what made that ordering too slow under OpenGL, ROADMAP.md Phase 2).
+   not the rendering backlog's (which made that ordering too slow under the old OpenGL renderer, ROADMAP.md Phase 2).
    Dispatches that read textures run on the graphics queue, after everything recorded before them. */
 #include <stdlib.h>
 #include <string.h>

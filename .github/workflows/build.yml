@@ -29,7 +29,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install tools
-        run: pacman -Syu --noconfirm --needed cmake ninja nasm python git clang mesa sdl3
+        run: pacman -Syu --noconfirm --needed cmake ninja nasm python git clang sdl3
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
         with:
@@ -39,10 +39,10 @@ jobs:
         run: |
           cmake --preset default
           cmake --build --preset default
-      - name: Build without the Vulkan renderer too
+      - name: Build the headless backend too
         run: |
-          cmake --preset default -B build/novulkan -DSWR_VULKAN=OFF
-          cmake --build build/novulkan
+          cmake --preset default -B build/headless -DSWR_BACKEND=headless -DSWR_DEPLOY=OFF
+          cmake --build build/headless
       - name: Check the Python scripts
         run: |
           python -m compileall -q switchrecomp scripts tools
@@ -102,7 +102,7 @@ jobs:
         with:
           release: '15.1'
           usesh: true
-          prepare: pkg install -y cmake ninja nasm python3 sdl3 libglvnd
+          prepare: pkg install -y cmake ninja nasm python3 sdl3
           run: |
             cmake --preset default
             cmake --build --preset default

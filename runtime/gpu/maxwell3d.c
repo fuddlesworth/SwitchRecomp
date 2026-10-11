@@ -29,7 +29,7 @@ static u32 bpp_of_rt(u32 f) {
     }
 }
 void r3d_clear(GpuChannel* ch, u32 v) {
-    if (g_gl) {
+    if (g_renderer_up) {
         g_renderer->clear(ch, v);
         return;
     }
@@ -75,7 +75,7 @@ void r3d_clear(GpuChannel* ch, u32 v) {
 }
 void r3d_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 base_vertex, u32 base_instance,
               u32 instances) {
-    if (g_gl) {
+    if (g_renderer_up) {
         g_renderer->draw(ch, indexed, topology, first, count, base_vertex, base_instance, instances);
         return;
     }
@@ -97,11 +97,11 @@ void r3d_const_upload(GpuChannel* ch, u32 v) {
     r[0x8E3] = off + 4;
 }
 void r3d_cb_bind(GpuChannel* ch, int stage, u32 v) {
-    if (g_gl) g_renderer->cb_bind(ch, stage, v);
+    if (g_renderer_up) g_renderer->cb_bind(ch, stage, v);
 }
 int r3d_blit(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
              double sdy) {
-    if (g_gl) return g_renderer->blit(s, d, dx, dy, dw, dh, sx, sy, sdx, sdy);
+    if (g_renderer_up) return g_renderer->blit(s, d, dx, dy, dw, dh, sx, sy, sdx, sdy);
     return 0;
 }
 void r3d_flush(GpuChannel* ch) { (void)ch; }

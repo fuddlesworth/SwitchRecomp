@@ -1,6 +1,6 @@
 /* The renderer interface: what the GPU front end (gpu.c, engines.c, maxwell3d.c) and the window backends ask of a
-   renderer. The OpenGL (gpu/gl/renderer.c), Vulkan (gpu/vk/renderer.c) and null (gpu/null/null.c) renderers each fill
-   in every operation, with a no-op where they have nothing to do, so callers never check. */
+   renderer. The Vulkan (gpu/vk/renderer.c) and null (gpu/null/null.c) renderers each fill in every operation, with a
+   no-op where they have nothing to do, so callers never check. */
 #ifndef SWR_RENDERER_H
 #define SWR_RENDERER_H
 #include "abi/cpu.h"
@@ -27,35 +27,18 @@ typedef struct Renderer {
     void (*cs_mem_need)(u64 a, u64 n);
     void (*before_syncwait)(void); /* the stream is about to wait on a syncpoint: flush everything in flight */
     void (*stream_incr)(u32 id);   /* a syncpoint increment in the stream, after everything before it is done */
-    /* presenting a guest framebuffer, or a finished RGBA image from the CPU */
+    /* presenting a guest framebuffer */
     void (*present_buffer)(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt);
-    void (*present_cpu)(const u32* px, int w, int h, int stride);
     u64 (*screenshot)(const char* path); /* the hash of the frame it saved */
-    /* diagnostics, OpenGL only so far */
-    void (*note_compute)(void);
-    void (*dump_rts)(void);
-    void (*rec_finish)(void); /* the F7 recorder finishes its file at exit */
-    void (*trace)(const char* s);
-    u64 (*busy_ns)(void); /* time the renderer's thread has spent working */
 } Renderer;
 
-extern const Renderer gl_renderer, vk_renderer, null_renderer;
-/* the active renderer: OpenGL (or null in a headless build) until the window backend starts one */
+extern const Renderer vk_renderer, null_renderer;
+/* the active renderer: Vulkan, or null in the headless build (defined next to each) */
 extern const Renderer* g_renderer;
 
-/* shared state, defined by the OpenGL renderer (or the null one) */
-extern int g_gl;   /* a renderer is up */
-extern int g_gles; /* the OpenGL renderer runs on GLES */
+/* shared state (gpu/renderer.c) */
+extern int g_renderer_up; /* the renderer started */
 extern u64 g_draws;
-extern volatile int g_cs_any;
-extern volatile i32 g_vi_crop[4]; /* crop and transform from vi's QueueBuffer */
-extern volatile u32 g_vi_transform;
-extern volatile int g_shot8_req;
-
-#ifdef SWR_VULKAN
-/* what the settings ask for: renderer=auto (Vulkan unless LSFG frame generation is set up), vulkan or opengl */
-int renderer_wants_vulkan(void);
-int renderer_ini(const char* k, const char* v); /* 1 if it was a renderer key */
-#endif
+extern volatile int g_cs_any; /* compute results are pending somewhere */
 
 #endif

@@ -39,22 +39,15 @@ if(NOT SWR_BACKEND MATCHES "^(sdl3|headless)$")
     message(FATAL_ERROR "SWR_BACKEND=${SWR_BACKEND}: the x11, x11es and win32 backends were removed, sdl3 covers them. "
                         "Configure a new build folder, or pass -DSWR_BACKEND=sdl3.")
 endif()
-# OpenGL is always built in. The sdl3 backend can also have Vulkan, picked at startup (renderer= in the game's .ini)
+# The renderer is Vulkan (1.3), which the sdl3 backend draws with. The headless backend has none.
 if(SWR_BACKEND STREQUAL "sdl3")
-    option(SWR_VULKAN "Build the Vulkan renderer in too (Vulkan 1.3, the default renderer when the GPU has it)" ON)
+    set(SWR_VULKAN ON)
 else()
     set(SWR_VULKAN OFF)
 endif()
 option(SWR_H264 "Decode NVDEC video with OpenH264" ON)
-option(SWR_LSFG "LSFG frame generation (OpenGL renderer, needs SPIRV-Cross)" ON)
 option(SWR_DEPLOY "Copy the runtime next to every recompiled game in SWR_GAMES_DIR after building" ON)
 set(SWR_GAMES_DIR "${CMAKE_SOURCE_DIR}/games" CACHE PATH "Folder holding the recompiled games")
-# LSFG is part of the OpenGL renderer, which the headless backend doesn't build
-if(SWR_LSFG AND SWR_BACKEND STREQUAL "sdl3")
-    set(SWR_LSFG_ENABLED ON)
-else()
-    set(SWR_LSFG_ENABLED OFF)
-endif()
 
 # Upstream builds with -O2. RelWithDebInfo keeps that and adds symbols for crash reports, without -DNDEBUG
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)

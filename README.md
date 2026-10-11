@@ -2,7 +2,7 @@
 
 A fork of **SwitchRecomp by MZ Labs**, a static recompiler for Nintendo Switch games, for Linux and Windows. The
 game's ARM64 code is translated to C once and compiled into a native program. The runtime stands in for the Switch's
-operating system, and its GPU emulation draws with OpenGL. The game's data is read as it is from the extracted dump.
+operating system, and its GPU emulation draws with Vulkan. The game's data is read as it is from the extracted dump.
 
 This fork adds a CMake build, source builds of every third-party library, scripts for the whole pipeline, CI on
 both systems, and fixes to the runtime. Catherine: Full Body is the game it is tested with. [ROADMAP.md](ROADMAP.md) has the plan and the
@@ -16,7 +16,7 @@ Use only games and keys dumped from your own console. None are included, and non
 ### Requirements
 
 - Clang 23 (FreeBSD's own Clang works too), CMake 3.25 or newer, Ninja, NASM, Python 3.12 or newer, Git
-- SDL3 and OpenGL 4.3 development files
+- SDL3 development files, and a GPU and driver with Vulkan 1.3
 - `uv`, only to run the formatter
 
 ### Setup
@@ -27,9 +27,9 @@ cd SwitchRecomp
 cmake --preset default && cmake --build --preset default
 ```
 
-The first configure downloads the third-party libraries (OpenH264, glslang, SPIRV-Cross, the Vulkan headers, volk,
-VMA and hactool) with [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake). Each is pinned to a release and its SHA-256
-in `cmake/dependencies.cmake`, and kept in `.cache/cpm` for every build folder after that. They are built with the
+The first configure downloads the third-party libraries (OpenH264, glslang, the Vulkan headers, volk, VMA and
+hactool) with [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake). Each is pinned to a release and its SHA-256 in
+`cmake/dependencies.cmake`, and kept in `.cache/cpm` for every build folder after that. They are built with the
 runtime. Only Clang is supported: a plain `cmake -B build` picks it too. `cmake --preset windows-cross` builds the
 Windows runtime with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw).
 
@@ -52,8 +52,7 @@ python3 scripts/recomp.py work/Catherine Catherine                      # -> gam
 cd games && ./Catherine
 ```
 
-The runtime has two renderers, Vulkan and OpenGL, and uses Vulkan
-when the GPU has Vulkan 1.3 (see `renderer` below). The first recompile of a big game takes several minutes. After that, a runtime
+The runtime draws with Vulkan, so the GPU needs Vulkan 1.3. The first recompile of a big game takes several minutes. After that, a runtime
 change only needs a runtime build, which copies the new runtime next to every game in `games/`:
 
 ```bash
@@ -67,7 +66,7 @@ are the same as on Windows (below).
 
 ### Requirements
 
-- Windows 10 or 11, 64-bit, and a GPU with Vulkan 1.3 or OpenGL 4.3 (keep the driver up to date)
+- Windows 10 or 11, 64-bit, and a GPU with Vulkan 1.3 (keep the driver up to date)
 - [Git for Windows](https://git-scm.com). Everything else is downloaded by the bootstrap.
 
 ### Setup
@@ -101,8 +100,8 @@ A runtime change only needs `cmake --build --preset default`.
 Controls: any controller SDL knows works like a Switch controller, by position. Keyboard: arrows for the D-pad,
 WASD for the left stick, IJKL for the right stick, X or Space for A, Z for B, C for X, V for Y, Q and E for L and R,
 1 and 3 for ZL and ZR, Enter for Plus and Backspace for Minus. F1 shows help, F3 takes a screenshot, F4 switches the
-FPS limit, F5 writes a diagnostic trace, F7 records an .mp4 (Windows only), F8 saves a full-resolution PNG, F11 or
-Alt+Enter toggles fullscreen, and Escape quits.
+FPS limit, F5 writes the state of every game thread to the log, F11 or Alt+Enter toggles fullscreen, and Escape
+quits.
 
 The window and input go through SDL3 on Windows too (the CMake build fetches SDL3 and links it statically), with the
 same two renderers as on Linux.
@@ -116,12 +115,10 @@ starts. The ones you are most likely to change:
 
 | Option | Effect |
 | --- | --- |
-| `renderer=auto` | Vulkan, or OpenGL when Vulkan can't start or LSFG frame generation is set up. `vulkan` or `opengl` picks one. Only OpenGL has LSFG, dynamic resolution, F7 recording and F8 screenshots |
 | `docked=1` | TV mode (1080p) instead of handheld (720p) |
 | `resolution=1` | Internal resolution scale, 0.25 to 4 |
 | `fps_limit=1` | 1 caps at 60 FPS like the console, 0 is unlimited |
 | `shadows=1` | 0 skips shadow maps, which is faster on weak GPUs |
-| `lsfg=1` | Frame generation with your own copy of Lossless Scaling, whose `Lossless.dll` is read at run time and never copied |
 | `language=1` | The system language the game sees |
 | `log=2` | Log everything, for bug reports |
 
@@ -129,6 +126,9 @@ When something goes wrong, `games/<Game>.log` has the details, `games/threads.tx
 (rewritten every 15 seconds), and `games/performance.txt` a summary of slow frames.
 
 ## Development
+
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) describes how the recompiler and the runtime fit together, and how a
+frame gets from the game to the screen.
 
 | Task | Command |
 | --- | --- |
@@ -147,9 +147,9 @@ The `upstream` branch holds the MZ Labs releases: each one as released (tagged `
 | `switchrecomp/` | The recompiler (`python3 -m switchrecomp`): loading, analysis, ARM64 to C, building the game module |
 | `runtime/` | The runtime: kernel, services, GPU, video, platform backends |
 | `scripts/` | The Windows toolchain download, extraction, recompiling, formatting, upstream imports |
+| `docs/` | How the parts fit together |
 | `tools/` | Debugging tools |
 | `cmake/` | The third-party libraries (`dependencies.cmake`, fetched with CPM.cmake) and the deploy step |
-| `third_party/` | Third-party code kept in the repository (`bcn`) |
 | `.github/workflows/` | CI: formatting, and Clang builds on Linux, FreeBSD and Windows, natively and cross-built from Linux |
 | `.cache/`, `deps/`, `build/`, `work/`, `games/` | Downloaded libraries, the Windows toolchain, build trees, extracted dumps and recompiled games, none of them in git |
 
@@ -165,13 +165,9 @@ package CPM.cmake downloads (`.cache/cpm/<name>/`, from the URLs in `cmake/depen
 | Component | Used for | License |
 | --- | --- | --- |
 | OpenH264 (Cisco) | Game videos | BSD 2-Clause |
-| SPIRV-Cross (Khronos) | LSFG shaders | Apache 2.0 |
 | hactool (SciresM) | Extracting dumps | ISC |
 | glslang (Khronos) | Vulkan shaders to SPIR-V | BSD 3-Clause, MIT and Apache 2.0, and a parser under GPL 3 with the Bison exception |
 | Vulkan-Headers (Khronos) | Vulkan definitions | Apache 2.0 |
 | volk (Arseny Kapoulkine) | Loading Vulkan | MIT |
 | Vulkan Memory Allocator (AMD) | GPU memory for the Vulkan renderer | MIT |
 | SDL3 | Window and input (the sdl3 backend): the system's on Linux and FreeBSD, built with the runtime on Windows | zlib |
-| texture2ddecoder | BCn textures on GPUs without them | MIT, `third_party/bcn/LICENSE_texture2ddecoder.txt` |
-| lsfg-vk | LSFG pass layout, ported to GL in `runtime/gpu/gl/lsfg.c` | MIT |
-| DejaVu Sans Mono | The on-screen overlay font (`runtime/gpu/gl/overlay_font.h`) | Bitstream Vera / DejaVu license |

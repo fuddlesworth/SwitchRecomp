@@ -38,7 +38,6 @@ void backend_ini(const char* k, const char* v) {
     else if (!strcmp(k, "press_at"))
         g_buttons_at = strtoull(v, NULL, 10);
 }
-int video_has_gl(void) { return 0; }
 void video_init(const char* t) {
     (void)t;
     pm_init(&g_hl);

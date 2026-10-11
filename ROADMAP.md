@@ -1,21 +1,21 @@
 # Roadmap
 
 This fork takes SwitchRecomp v142 (MZ Labs) and makes it a Linux-first project, with Catherine: Full Body
-(Asian release, TID 0100BC4010896000) as the game everything is checked against. The phases are in the order they
-should land. A phase can start before the previous one is finished where it says so.
+(USA release, TID 0100BF00112C0000 with its v2.0 update) as the game everything is checked against. Until 2026-10-11
+that was the Asian release (TID 0100BC4010896000): game addresses quoted below before that date, like the
+title-screen crash's, are in its code. The phases are in the order they should land. A phase can start before the previous one is finished where it says so.
 
 Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 
 Current order (2026-10-11): Phases 4, 5 and 6 are done, apart from trying a real controller (Phase 4), which needs
-someone with a pad. Now Phase 8 (code layout), then Phase 2's remaining items and sound (Phase 3).
+someone with a pad. Phase 8 (code layout) is done. Next: Phase 2's remaining items and sound (Phase 3).
 
 ## Where things stand (2026-10-11)
 
-Catherine boots through the logos, the intro movie, the terms screen, the main menu and the New Game cutscene at
+Catherine (the USA release since 2026-10-11, with its v2.0 update) boots through the logos, the intro movie, the terms screen, the main menu and the New Game cutscene at
 60 FPS. It took eight fixes to the v142 runtime to get there (see the history of `main`). There is no sound. The
-runtime has two renderers and uses Vulkan by default, with OpenGL as the fallback. On Vulkan the title-screen crash
-from Phase 2 hasn't happened in 13 runs. It still happens under OpenGL, in about half the runs past the title
-screen.
+runtime draws with Vulkan: the OpenGL renderer, where the title-screen crash from Phase 2 still happened in about
+half the runs, was removed on 2026-10-11.
 
 How the pieces fit:
 
@@ -23,10 +23,10 @@ How the pieces fit:
   `<Game>_code.so`. This part is a real recompilation.
 - **OS**: kernel, IPC and services are high-level emulation in `runtime/kernel/` and `runtime/hle/`.
 - **GPU**: emulated at the hardware level. The game's own NVN driver is recompiled with the game and writes Maxwell
-  command buffers. `runtime/gpu/` decodes them (`gpu.c`, `engines.c`, `maxwell3d.c`), `gpu/shader/` translates
-  Maxwell shader binaries to GLSL, and a renderer draws: `gpu/vk/` with Vulkan or `gpu/gl/` with OpenGL.
+  command buffers. `runtime/gpu/` decodes them (`gpu.c`, the engines, `maxwell3d.c`), `gpu/shader/` translates
+  Maxwell shader binaries to GLSL, and the Vulkan renderer (`gpu/vk/`) draws.
   The front end reaches the active one through `g_renderer`, a table of about 20 operations (`gpu/renderer.h`).
-- **Video**: `runtime/video/host1x.c` emulates NVDEC and VIC, with OpenH264 doing the H.264 decode.
+- **Video**: `runtime/video/` emulates NVDEC and VIC, with OpenH264 doing the H.264 decode.
 
 ## Phase 0: repository and build
 
@@ -67,8 +67,8 @@ How the pieces fit:
 
 ## Phase 2: stability
 
-This comes before sound: the title-screen crash now ends most runs, so nothing past it can be tested reliably, and
-a renderer rewrite on top of a memory-corruption bug would make every regression ambiguous.
+This came before sound: the title-screen crash ended most runs, so nothing past it could be tested reliably, and a
+renderer rewrite on top of a memory-corruption bug would have made every regression ambiguous.
 
 - [ ] Smoke test: a scripted run from boot to the New Game cutscene that checks for crashes, FPS and screenshots,
       runnable unattended (Xvfb or a headless Wayland compositor).
@@ -76,7 +76,7 @@ a renderer rewrite on top of a memory-corruption bug would make every regression
       from the GPU's allocator).
 - [x] Compute write-back wrote the whole SSBO range back late, reverting game writes made in the meantime. Only
       bytes the shader changed land now, and only where guest memory still holds what the shader started from.
-- [~] The title-screen crash (paused until Phase 6). A vertex-skinning compute shader writes position + normal
+- [x] The title-screen crash. A vertex-skinning compute shader writes position + normal
       records over the game's deferred-release list nodes (`{obj, arg1, arg2, fn1, fn2, next}`, walked at
       `0x82df5c0`), and the game later calls a float as a function pointer. Established by measurement:
       - The nodes are already inside the SSBO range when the GPU thread runs the dispatch, 1 to 8 ms after its
@@ -89,8 +89,8 @@ a renderer rewrite on top of a memory-corruption bug would make every regression
         (40 to 80 ms per release, stretches at 1 FPS), so it was not kept. A Vulkan backend with its own compute
         queue and explicit synchronization can order these without the stall.
       - Open question: what the game waited on before allocating those nodes (`sdk-scout` on the allocator).
-      - The Vulkan renderer orders it that way (Phase 6, step 4): 0 crashes in 7 runs. What remains here is
-        the same ordering for OpenGL, or Vulkan becoming the default.
+      - The Vulkan renderer orders it that way (Phase 6, step 4): 0 crashes in 7 runs, then 13. OpenGL, where it
+        still happened, was removed on 2026-10-11.
 - [~] Turn compiler warnings back on (upstream builds with `-w`) and fix them file by file, starting with the
       files we change. The default warnings are on since Phase 8 removed `-w`, and the build is clean.
       They found one real bug, still open: in the shader translator, `R(c, r + 2)` for a vector operand that
@@ -118,12 +118,12 @@ Catherine uses two audio paths, and both are silent today.
       (SDL's controller database, hotplug, buttons by position), fullscreen, and the Windows backend's keys and
       hotkeys.
 - [x] The GL context: SDL creates it (EGL under Wayland) on the GPU thread. The GL worker's shared context is current
-      on a hidden helper window, since EGL won't make one surface current on two threads.
+      on a hidden helper window, since EGL won't make one surface current on two threads. (Gone with the OpenGL
+      renderer on 2026-10-11.)
 - [x] The SDL3 backend on Windows too, for controllers other than XInput ones and for the Vulkan renderer. The
-      CMake build links SDL3 statically from source. It runs Catherine on Vulkan under Wine. Under Wine, SDL3 can't
-      open an OpenGL window at all, so OpenGL on Windows is only built.
+      CMake build links SDL3 statically from source. It runs Catherine on Vulkan under Wine.
 - [x] The x11, x11es and win32 backends were removed on 2026-10-11: SDL3 is the window backend on Linux and Windows,
-      with headless for tests and Android's own. SDL3 still hasn't run on real Windows, only under Wine.
+      with headless for tests. The android backend went with OpenGL the same day, since it drew with GLES. SDL3 still hasn't run on real Windows, only under Wine.
 - [ ] Try a real controller: the mapping follows SDL's positional buttons, but no pad was at hand to test it.
 
 ## Phase 5: shaders
@@ -197,8 +197,7 @@ underneath. What can change is how much of the hardware is emulated and how well
       (`plat_ww_scan`; Windows has `GetWriteWatch` with `SWR_WW`). The Vulkan caches scan a texture or buffer when they
       use it and re-read it only when it was written, instead of checking contents on a back-off that could miss a
       change for several frames: a movie's frames now reach their texture every frame. Results land in guest memory
-      with the rule from Phase 2, and render targets are written back before any CPU-side copy reads them. OpenGL
-      keeps its content checks.
+      with the rule from Phase 2, and render targets are written back before any CPU-side copy reads them.
 - [x] Research: NVN-level emulation, for Catherine. Findings (from the disassembly, nothing run):
       - The NVN driver is linked statically into the `sdk` module; `nvnBootstrapLoader` (0xcf8fd90) is exported
         there and imported by `main` through a PLT stub (GOT slot 0x8ae3d20), so the runtime could interpose it at
@@ -218,6 +217,12 @@ underneath. What can change is how much of the hardware is emulated and how well
         that keeps the real driver for most calls is hard, because both would have to agree on object state.
         With the register-level Vulkan renderer now matching OpenGL, this stays a possible later rewrite rather
         than a next step: the cost is large and it fixes nothing that is broken today.
+- [x] The OpenGL renderer removed (2026-10-11). Vulkan had drawn by default since step 4, matched OpenGL from boot to
+      the New Game cutscene, and doesn't have the title-screen crash. A GPU or driver without Vulkan 1.3 now stops
+      the runtime at startup with a message. Gone with OpenGL, and not on Vulkan yet: LSFG frame generation (and
+      SPIRV-Cross, which only it needed), the F7 recorder with its smooth recording clock, the F5 frame trace, F8
+      full-resolution screenshots, dynamic resolution, applying vi's crop and transform to a presented buffer (now
+      logged as "not applied"), and BCn decoding on the CPU for GPUs without BCn.
 
 ## Phase 7: polish and games
 
@@ -252,7 +257,7 @@ variant and run on Catherine with both renderers.
       null renderers each fill in completely, and `g_renderer` pointing at the active one. It replaces the
       `gpu_gl_*` names, `gpu/renderer.c`'s forwarding macros and `gpu/gl/names.h`, and each renderer's functions are
       now static to its own files.
-- [~] The big files split along their seams: `gpu/gl/renderer.c`, `shader.c`, `hle/services.c` (one file per service
+- [x] The big files split along their seams: `gpu/gl/renderer.c`, `shader.c`, `hle/services.c` (one file per service
       family), `main.c`, `kernel.c`, `cpu_helpers.c`, `plat.c`, `host1x.c`, `gpu/engines.c`. Done: the OpenGL
       renderer (7900 lines) is ten files by job, sharing `gpu/gl/gl.h`, and the shader translator
       is four (`shader.c`, `decode.c`, `translate.c`, `corpus.c`), sharing `gpu/shader/translator.h`.
@@ -261,6 +266,9 @@ variant and run on Catherine with both renderers.
       the audio renderer update and the shared fonts moved to `hle/audren.c` and `hle/pl.c`. The kernel
       is six files (`kernel.c`, `thread.c`, `sync.c`, `svc.c`, `svc_mem.c`, `debug.c`), sharing
       `kernel/kernel_int.h`. The platform layer is a file per OS (`plat_posix.c`, `plat_win32.c` with
-      `profiler_win32.c`), and `plat.c` keeps logging.
-- [ ] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.
+      `profiler_win32.c`), and `plat.c` keeps logging. The GPU engines are a file each (`mme.c`, `compute.c`,
+      `fermi2d.c`, `dma.c`, with the 3D engine's methods in `engines.c`), and host1x is `host1x.c`, `nvdec.c`
+      and `vic.c`. `abi/cpu_helpers.c` includes its helpers by topic from `abi/helpers/`, so the game module
+      still compiles them as one file.
+- [x] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.
 
