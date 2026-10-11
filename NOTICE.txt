@@ -1,0 +1,21 @@
+SwitchRecomp
+Copyright 2026 MZ Labs
+
+This product includes software developed by MZ Labs (SwitchRecomp).
+Discord: https://discord.gg/gdRaXmBTY
+
+SwitchRecomp is licensed under the Apache License, Version 2.0 (see
+LICENSE.txt). You can use, copy, modify and share it for free, including in
+commercial projects, as long as the credits stay.
+
+Credit is required. Anyone who redistributes SwitchRecomp, a fork of it, a
+modified version, a build made with it or any work that includes its code must
+keep this NOTICE file and the copyright line above, and must credit
+"SwitchRecomp by MZ Labs" in a place where users can see it (README, credits
+screen, about box, release page or video description).
+
+This license covers only the SwitchRecomp code (the recompiler, the runtime,
+the GUI and the scripts). It does not cover the bundled third-party
+components, which keep their own licenses (listed in README.txt), and it does
+not cover any game. Games, keys and firmware are not included and remain the
+property of their owners.
