@@ -41,9 +41,9 @@ python3 scripts/recomp.py work/Catherine Catherine                      # -> gam
 cd games && ./Catherine
 ```
 
-`--preset clang` builds with Clang instead of GCC. A Vulkan renderer is in progress (`-DSWR_GPU=vulkan`): it clears
-and presents the game's render targets, but doesn't draw yet, so OpenGL stays the default. The first recompile of a
-big game takes several minutes. After that, a runtime change only needs a runtime build, which copies the new
+`--preset clang` builds with Clang instead of GCC. A Vulkan renderer is in progress (`-DSWR_GPU=vulkan`): it draws
+menus, movies and static 3D, but not yet compute (which skinned models need), so OpenGL stays the default. The first
+recompile of a big game takes several minutes. After that, a runtime change only needs a runtime build, which copies the new
 runtime next to every game in `games/`:
 
 ```bash

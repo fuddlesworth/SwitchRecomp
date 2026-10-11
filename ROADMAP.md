@@ -146,12 +146,19 @@ underneath. What can change is how much of the hardware is emulated and how well
     - [x] Render targets and clears: targets by guest address (parked and reused when a size or format comes
           back), dynamic rendering passes kept open across clears and draws to the same set, write-back to guest
           memory and reload from it around CPU-side copies, frames in flight with a staging ring and deferred
-          destruction, memory through VMA. The game's frame is presented from its render target. Draws bind their
-          targets but record nothing yet, so Catherine shows black where GL shows the logos.
-    - [ ] Textured 2D draws: texture cache, samplers, pipelines, vertex, index and constant buffers (the logos and
-          menus).
-    - [ ] 3D scenes.
+          destruction, memory through VMA. The game's frame is presented from its render target.
+    - [x] Draws: shaders as SPIR-V modules, pipelines by state (shaders, vertex layout, attachment formats, blend)
+          with the rest dynamic, a descriptor set per stage from per-frame pools, textures from texture headers
+          (deswizzled on the CPU, BCn native, ASTC decoded, change checks backing off like GL's), samplers, and
+          vertex, index, constant and storage buffers (stable data in buffers of its own, changing data read from
+          the staging ring). Catherine's logos, menus and the opening movie match GL; the Atlus logo is
+          pixel-identical. The viewport maps the guest's transform directly (y down), so shaders don't flip y.
+    - [ ] 3D scenes. Static geometry draws; skinned models (the cutscene's characters and balloons) wait for
+          compute (step 4). Still to do: draws that sample their own render target (read as empty for now),
+          clears with a partial color mask, the 2D engine's blits on the GPU, a pipeline cache on disk.
   - [ ] Step 4, compute on its own queue, with completion signals held until results land (the Phase 2 crash).
+        Without compute the Vulkan build hasn't hit that crash yet (none in 3 runs past the title screen, against
+        2 of 5 GL runs the same day), which agrees with what Phase 2 found, though the sample is small.
   - [ ] Step 5, parity with OpenGL, screenshot by screenshot, then Vulkan becomes the default, also on Windows.
 - [ ] Texture and buffer cache tracking: invalidation on CPU writes and correct write-back, which is the same area
       as the Phase 2 crash.

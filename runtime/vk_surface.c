@@ -10,7 +10,7 @@ static u32 hkey(u64 a) { return (u32)((a >> 8) ^ (a >> 20)) & (SURFH - 1); }
 
 /* bytes of a block-linear surface of w_bytes x h, block height 2^bh GOBs (shrunk for small surfaces, as the
    hardware does) */
-static u64 bl_size(u32 w_bytes, u32 h, u32 bh) {
+u64 vk_bl_size(u32 w_bytes, u32 h, u32 bh) {
     u32 gx = (w_bytes + 63) / 64, gy = (h + 7) / 8;
     while (bh > 0 && gy <= (1u << (bh - 1))) bh--;
     u64 gys = ((u64)(gy + (1u << bh) - 1) >> bh) << bh;
@@ -21,7 +21,7 @@ static u32 bl_height(u32 h, u32 bh) {
     while (bh > 0 && gy <= (1u << (bh - 1))) bh--;
     return bh;
 }
-static VkImageAspectFlags aspect_of(const VkFmt* f) {
+VkImageAspectFlags vk_aspect(const VkFmt* f) {
     if (!f->depth) return VK_IMAGE_ASPECT_COLOR_BIT;
     return VK_IMAGE_ASPECT_DEPTH_BIT | (f->stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
 }
@@ -38,7 +38,8 @@ void vk_surf_use(VkCommandBuffer cb, Surf* s, VkImageLayout layout, VkPipelineSt
         s->access |= access;
         return;
     }
-    vk_barrier(cb, s->img, aspect_of(&s->f), s->stage ? s->stage : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, s->access,
+    vk_render_end(); /* no barriers on images inside a rendering pass */
+    vk_barrier(cb, s->img, vk_aspect(&s->f), s->stage ? s->stage : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, s->access,
                s->layout, stage, access, layout);
     s->layout = layout;
     s->stage = stage;
@@ -62,7 +63,9 @@ static Surf* surf_create(u64 gva, u32 w, u32 h, VkFmt f, u32 fkey, u32 bl, u32 b
     VkImageUsageFlags usage =
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (is_rt) usage |= f.depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    s->type = VK_IMAGE_VIEW_TYPE_2D;
     VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                            .flags = f.depth ? 0 : VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, /* sRGB and linear views */
                             .imageType = VK_IMAGE_TYPE_2D,
                             .format = f.vk,
                             .extent = {w, h, 1},
@@ -82,7 +85,7 @@ static Surf* surf_create(u64 gva, u32 w, u32 h, VkFmt f, u32 fkey, u32 bl, u32 b
                                 .image = s->img,
                                 .viewType = VK_IMAGE_VIEW_TYPE_2D,
                                 .format = f.vk,
-                                .subresourceRange = {aspect_of(&f), 0, 1, 0, 1}};
+                                .subresourceRange = {vk_aspect(&f), 0, 1, 0, 1}};
     VK_OK(vkCreateImageView(g_vk.dev, &vi, NULL, &s->att));
     if (f.depth) vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT; /* sampling reads depth */
     VK_OK(vkCreateImageView(g_vk.dev, &vi, NULL, &s->view));
@@ -92,6 +95,13 @@ static Surf* surf_create(u64 gva, u32 w, u32 h, VkFmt f, u32 fkey, u32 bl, u32 b
     return s;
 }
 
+Surf* vk_surf_first(u64 gva) { return g_surfh[hkey(gva)]; }
+void vk_surf_add(Surf* s) {
+    u32 k = hkey(s->gva);
+    s->next = g_surfh[k];
+    g_surfh[k] = s;
+}
+
 Surf* vk_rt_find(u64 gva) {
     for (Surf* s = g_surfh[hkey(gva)]; s; s = s->next)
         if (s->gva == gva && s->is_rt) return s;
@@ -99,7 +109,7 @@ Surf* vk_rt_find(u64 gva) {
 }
 
 /* the guest bytes of a render target: block linear or pitch linear, in guest memory */
-static u64 rt_bytes(const Surf* s) { return s->bl ? bl_size(s->w * s->f.bpp, s->h, s->bh) : (u64)s->pitch * s->h; }
+static u64 rt_bytes(const Surf* s) { return s->bl ? vk_bl_size(s->w * s->f.bpp, s->h, s->bh) : (u64)s->pitch * s->h; }
 
 void vk_rt_reload(u64 gva) {
     Surf* s = vk_rt_find(gva);
@@ -199,4 +209,19 @@ Surf* vk_rt_for_cpu(u64 cpu_addr, u32 w, u32 h) {
             if (s->is_rt && !s->f.depth && !(s->gva >> 63) && gmmu_translate(s->gva) == cpu_addr)
                 if (!best || (s->w == w && s->h == h) || s->last_used > best->last_used) best = s;
     return best;
+}
+
+void vk_surf_evict(u32 before) {
+    for (int k = 0; k < SURFH; k++)
+        for (Surf** pp = &g_surfh[k]; *pp;) {
+            Surf* s = *pp;
+            if (s->is_rt || (i32)(s->last_used - before) >= 0) {
+                pp = &s->next;
+                continue;
+            }
+            *pp = s->next;
+            for (int i = 0; i < s->nsv; i++) vk_defer_image(VK_NULL_HANDLE, VK_NULL_HANDLE, s->sv[i].v, VK_NULL_HANDLE);
+            vk_defer_image(s->img, s->mem, s->view, s->att);
+            free(s);
+        }
 }

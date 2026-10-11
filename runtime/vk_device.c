@@ -166,19 +166,102 @@ static int create_device(void) {
                                        .queueFamilyIndex = g_vk.compute_family,
                                        .queueCount = 1,
                                        .pQueuePriorities = &prio}};
-    VkPhysicalDeviceVulkan12Features f12 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-                                            .timelineSemaphore = VK_TRUE};
+    /* the features drawing uses, where the device has them */
+    VkPhysicalDeviceFeatures have;
+    vkGetPhysicalDeviceFeatures(g_vk.phys, &have);
+    VkPhysicalDeviceFeatures* want = &g_vk.feat;
+#define WANT(f) want->f = have.f
+    WANT(robustBufferAccess); /* constant buffers are bound with the bytes the shader reads, not the 64K it declares */
+    WANT(imageCubeArray);
+    WANT(independentBlend);
+    WANT(dualSrcBlend);
+    WANT(logicOp);
+    WANT(depthClamp);
+    WANT(depthBiasClamp);
+    WANT(fillModeNonSolid);
+    WANT(depthBounds);
+    WANT(wideLines);
+    WANT(largePoints);
+    WANT(samplerAnisotropy);
+    WANT(textureCompressionBC);
+    WANT(vertexPipelineStoresAndAtomics);
+    WANT(fragmentStoresAndAtomics);
+    WANT(shaderImageGatherExtended);
+    WANT(shaderStorageImageExtendedFormats);
+    WANT(shaderStorageImageWriteWithoutFormat);
+    WANT(shaderStorageImageReadWithoutFormat);
+    WANT(shaderClipDistance);
+    WANT(shaderCullDistance);
+    WANT(shaderFloat64);
+    WANT(shaderInt64);
+    WANT(shaderInt16);
+    WANT(geometryShader);
+    WANT(tessellationShader);
+#undef WANT
+    const char* ext[4] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    u32 next = 1;
+    {
+        u32 n = 0;
+        vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &n, NULL);
+        VkExtensionProperties* e = calloc(n ? n : 1, sizeof *e);
+        vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &n, e);
+        for (u32 i = 0; i < n; i++) {
+            if (!strcmp(e[i].extensionName, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME)) g_vk.has_divisor = 1;
+            if (!strcmp(e[i].extensionName, VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME)) g_vk.has_border_color = 1;
+        }
+        free(e);
+    }
+    VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT fdiv = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT};
+    VkPhysicalDeviceCustomBorderColorFeaturesEXT fbc = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT};
+    VkPhysicalDeviceVulkan11Features q11 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
+    VkPhysicalDeviceFeatures2 f2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &q11};
+    void** tail = &q11.pNext;
+    if (g_vk.has_divisor) {
+        *tail = &fdiv;
+        tail = &fdiv.pNext;
+    }
+    if (g_vk.has_border_color) {
+        *tail = &fbc;
+        tail = &fbc.pNext;
+    }
+    vkGetPhysicalDeviceFeatures2(g_vk.phys, &f2);
+    g_vk.has_divisor = g_vk.has_divisor && fdiv.vertexAttributeInstanceRateDivisor;
+    g_vk.has_border_color = g_vk.has_border_color && fbc.customBorderColors && fbc.customBorderColorWithoutFormat;
+    VkPhysicalDeviceVulkan11Features f11 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
+                                            .shaderDrawParameters = q11.shaderDrawParameters};
+    VkPhysicalDeviceVulkan12Features f12 = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, .pNext = &f11, .timelineSemaphore = VK_TRUE};
     VkPhysicalDeviceVulkan13Features f13 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
                                             .pNext = &f12,
                                             .synchronization2 = VK_TRUE,
                                             .dynamicRendering = VK_TRUE};
-    const char* ext[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    void* chain = &f13;
+    if (g_vk.has_divisor) {
+        fdiv = (VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT){
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT,
+            .pNext = chain,
+            .vertexAttributeInstanceRateDivisor = VK_TRUE};
+        chain = &fdiv;
+        ext[next++] = VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME;
+    }
+    if (g_vk.has_border_color) {
+        fbc = (VkPhysicalDeviceCustomBorderColorFeaturesEXT){
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT,
+            .pNext = chain,
+            .customBorderColors = VK_TRUE,
+            .customBorderColorWithoutFormat = VK_TRUE};
+        chain = &fbc;
+        ext[next++] = VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME;
+    }
     VkDeviceCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-                              .pNext = &f13,
+                              .pNext = chain,
                               .queueCreateInfoCount = g_vk.compute_family == g_vk.gfx_family ? 1 : 2,
                               .pQueueCreateInfos = qci,
-                              .enabledExtensionCount = 1,
-                              .ppEnabledExtensionNames = ext};
+                              .enabledExtensionCount = next,
+                              .ppEnabledExtensionNames = ext,
+                              .pEnabledFeatures = &g_vk.feat};
     if (!VK_OK(vkCreateDevice(g_vk.phys, &dci, NULL, &g_vk.dev))) return 0;
     volkLoadDevice(g_vk.dev);
     vkGetDeviceQueue(g_vk.dev, g_vk.gfx_family, 0, &g_vk.gfx);

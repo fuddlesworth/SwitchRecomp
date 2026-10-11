@@ -1009,8 +1009,9 @@ static const char* IW(Ctx* c, int s, const char* smp) {
     return T("uintBitsToFloat(uvec4(%s))", smp);
 }
 static const char* samp_type(int type, int array, int shadow) {
+    /* GLES has no 1D textures, and Vulkan can't view the 2D images they are stored in as 1D: both read them as 2D */
     static const char* n[4] = {"1D", "2D", "3D", "Cube"};
-    if (g_glsl_es && type == 0) type = 1;
+    if ((g_glsl_es || g_shader_vulkan) && type == 0) type = 1;
     return T("sampler%s%s%s", n[type & 3], array ? "Array" : "", shadow ? "Shadow" : "");
 }
 /* store masked components of vec4 v into d, d+1, ... */
@@ -2195,7 +2196,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                     break; /* cube + LL: z in rb, lod in rb+1 (matches what NVN's compiler emits) */
             }
             int s = tex_slot(c, off, type, array, shadow, 0);
-            if (g_glsl_es && type == 0) crd = T("vec2(%s, 0.5)", crd);
+            if ((g_glsl_es || g_shader_vulkan) && type == 0) crd = T("vec2(%s, 0.5)", crd);
             if (array) crd = T("vec3(%s, float(%s))", crd, arr);
             const char* smp;
             if (shadow) {
@@ -2366,7 +2367,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 default: crd = T("ivec2(%s,%s)", R(c, ra), R(c, rb)); break;
             }
             int s = tex_slot(c, off, type, array, 0, 1);
-            if (g_glsl_es && type == 0) crd = T("ivec2(%s, 0)", crd);
+            if ((g_glsl_es || g_shader_vulkan) && type == 0) crd = T("ivec2(%s, 0)", crd);
             const char* smp =
                 ofs ? T("texelFetch(tex%d, %s + ivec2(bitfieldExtract(int(%s),0,4),bitfieldExtract(int(%s),4,4)), %s)",
                         s, crd, ofs, ofs, lod)
@@ -2498,7 +2499,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 m++;
             }
             int s = tex_slot2(c, off, type, array, dc, eid == O_TLD, bl, blbank);
-            if (g_glsl_es && type == 0) {
+            if ((g_glsl_es || g_shader_vulkan) && type == 0) {
                 crd = eid == O_TLD ? T("ivec2(%s, 0)", crd) : T("vec2(%s, 0.5)", crd);
                 dim = 2;
             }
