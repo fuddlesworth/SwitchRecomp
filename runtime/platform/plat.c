@@ -90,7 +90,7 @@ void fatal(const char* fmt, ...) {
         overlay_message(m);
         static u32 black[64 * 36];
         for (int i = 0; i < 150; i++) {
-            gpu_gl_present_cpu(black, 64, 36, 64 * 4);
+            g_renderer->present_cpu(black, 64, 36, 64 * 4);
             plat_sleep_ns(200000000);
         }
     }

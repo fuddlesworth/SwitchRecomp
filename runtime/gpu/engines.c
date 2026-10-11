@@ -312,7 +312,7 @@ void maxwell3d_method(GpuChannel* ch, u32 m, u32 v, int last) {
         case 0x6C: i2m_launch(ch, ch->r3d, 0x60); break;
         case 0x6D: i2m_data(ch, v); break;
         case 0xB2:
-            if (v & (1u << 20)) { gpu_gl_stream_incr(v & 0xFFFF); }
+            if (v & (1u << 20)) { g_renderer->stream_incr(v & 0xFFFF); }
             break;                           /* SyncInfo */
         case 0x674: r3d_clear(ch, v); break; /* ClearBuffers */
         case 0x6C3: query_get(ch, ch->r3d, 0x6C0, v); break;
@@ -394,12 +394,12 @@ void compute_method(GpuChannel* ch, u32 m, u32 v, int last) {
         case 0x6D: i2m_data(ch, v); break;
         case 0xAF: /* launch; the first few programs get dumped for debugging */ {
             g_compute_launches++;
-            if (g_gl) gpu_gl_note_compute();
+            if (g_gl) g_renderer->note_compute();
             u64 qmd = (u64)ch->rcomp[0xAD] << 8;
             u64 code = ((u64)ch->rcomp[0x582] << 32) | ch->rcomp[0x583];
             u32 q[64];
             gmem_read(qmd, q, 256);
-            if (g_gl) { gpu_gl_dispatch(ch, q, code); }
+            if (g_gl) { g_renderer->dispatch(ch, q, code); }
             u64 prog = code + q[8];
             static u64 seen[32];
             static int ns;
@@ -531,8 +531,8 @@ void fermi2d_method(GpuChannel* ch, u32 m, u32 v) {
         }
         if (r3d_blit(&src, &dst, dx0, dy0, dw, dh, sx, sy, sdx, sdy)) return;
         if (g_gl) {
-            gpu_gl_rt_flush(src.addr);
-            gpu_gl_rt_flush(dst.addr);
+            g_renderer->rt_flush(src.addr);
+            g_renderer->rt_flush(dst.addr);
         }
         u32 bpp = fmt_bpp_2d(dst.format), sbpp = fmt_bpp_2d(src.format);
         if (bpp != sbpp) bpp = sbpp;
@@ -549,7 +549,7 @@ void fermi2d_method(GpuChannel* ch, u32 m, u32 v) {
                 gmem_write(dst.addr + dof, px, bpp);
             }
         }
-        if (g_gl) gpu_gl_rt_reload(dst.addr);
+        if (g_gl) g_renderer->rt_reload(dst.addr);
     }
 }
 
@@ -645,9 +645,9 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
         char tb[256];
         snprintf(tb, sizeof tb, "DMA %s %llx -> %s %llx len=%u lines=%u remap=%d\n", src_linear ? "lin" : "bl",
                  (unsigned long long)src, dst_linear ? "lin" : "bl", (unsigned long long)dst, line_len, lines, remap);
-        gpu_gl_trace(tb);
-        gpu_gl_rt_flush(src);
-        gpu_gl_rt_flush(dst);
+        g_renderer->trace(tb);
+        g_renderer->rt_flush(src);
+        g_renderer->rt_flush(dst);
     }
     u8* dpp = NULL;
     u8* spp = NULL;
@@ -753,7 +753,7 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
                 x += n;
             }
     }
-    if (g_gl) gpu_gl_rt_reload(dst);
+    if (g_gl) g_renderer->rt_reload(dst);
     /* completion semaphore */
     u32 sem = (v >> 3) & 3;
     if (sem) {

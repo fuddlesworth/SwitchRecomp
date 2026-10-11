@@ -42,11 +42,12 @@ static void cs_complete(int wait);
 static void cs_kick_async(void);
 static int cs_inflight(void);
 static void cs_submit_done(u32 id, u32 n);
+static void glr_cs_mem_need(u64 a, u64 n);
 static int g_diag_draws;
 static u32 g_submit_epoch; /* the buffer cache's entries are validated once per submit */
 static u64 g_gpu_busy;
 static u64 st_tex_ok, st_tex_null, st_tex_mismatch, st_tex_rt;
-u64 gpu_busy_ns(void) { return __atomic_load_n(&g_gpu_busy, __ATOMIC_RELAXED); }
+static u64 glr_busy_ns(void) { return __atomic_load_n(&g_gpu_busy, __ATOMIC_RELAXED); }
 static u64 st_compiling, st_cb_skip, st_cb_bytes, st_vb_hashed, st_vb_up, st_tex_up;
 static u64 st_noshader, st_shfail, st_noprog, st_nort, st_drawn, st_clears, st_pres_rt, st_pres_cpu, st_shaders;
 static float g_scale = 1.0f; /* internal res scale, 0.25..4 */
@@ -2892,7 +2893,7 @@ static int rt_flushable(Tex* t) {
     return t && !t->f.depth && !t->f.compressed && t->f.bpp > 0 && t->f.bpp <= 16 && t->target == GL_TEXTURE_2D &&
            !t->vol;
 }
-void gpu_gl_rt_flush(u64 gva) {
+static void glr_rt_flush(u64 gva) {
     Tex* t = tex_find_rt(gva);
     if (!rt_flushable(t) || (g_gles && !rt_plain(t))) return;
     {
@@ -2934,7 +2935,7 @@ void gpu_gl_rt_flush(u64 gva) {
     trace_note("  (rt %llx -> memory, %u bytes/px)\n", (unsigned long long)gva, bp);
 }
 /* CPU copy changed the memory, reload the RT */
-void gpu_gl_rt_reload(u64 gva) {
+static void glr_rt_reload(u64 gva) {
     Tex* t = tex_find_rt(gva);
     /* DMA over an RT we can't reload (R8 video luma etc): drop the RT and read memory instead */
     if (t && !rt_plain(t)) {
@@ -2969,8 +2970,8 @@ void gpu_gl_rt_reload(u64 gva) {
 }
 /* 2D blit from an RT, done on the GPU */
 static void state_dirty(void);
-int r3d_blit_gl(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
-                double sdy) {
+static int glr_blit(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
+                    double sdy) {
     state_dirty();
     Tex* st = tex_find_rt(s->addr);
     trace_note("BLIT2D %llx(%ux%u f%x%s) -> %llx(%ux%u f%x) dst(%d,%d %dx%d) src(%.1f,%.1f step %.3f,%.3f)\n",
@@ -3353,7 +3354,7 @@ static GLenum topo(u32 t) {
     return GL_TRIANGLES;
 }
 
-void r3d_cb_bind_gl(GpuChannel* ch, int stage, u32 v) {
+static void glr_cb_bind(GpuChannel* ch, int stage, u32 v) {
     u32* r = ch->r3d;
     u32 idx = (v >> 4) & 31;
     if (stage > 4 || idx >= 18) return;
@@ -4172,7 +4173,7 @@ static GLuint buf_cached(GLenum target, u64 start, u64 len) {
             glBindBuffer(target, e->id);
             return e->id;
         }
-        cs_mem_need(start, len);
+        glr_cs_mem_need(start, len);
     }
     u32 k = (u32)((start >> 6) ^ (start >> 20) ^ len) & 2047;
     VbC* e = vbc[k];
@@ -4286,8 +4287,8 @@ static void trace_note(const char* fmt, ...) {
     vfprintf(g_tr, fmt, ap);
     va_end(ap);
 }
-void gpu_gl_note_compute(void) {}
-void gpu_gl_trace(const char* s) { trace_note("%s", s); }
+static void glr_note_compute(void) {}
+static void glr_trace(const char* s) { trace_note("%s", s); }
 /* color | alpha side by side, row 0 at the top */
 static void tr_save(const char* path, const u8* rgba, u32 w, u32 h) {
     FILE* f = fopen(path, "wb");
@@ -4602,8 +4603,8 @@ static void trace_frame(void) {
 static void lsfg_pump(void);
 static int g_lfn;
 static void cs_flush_pending(void);
-void r3d_draw_gl(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 base_vertex, u32 base_instance,
-                 u32 instances) {
+static void glr_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 base_vertex,
+                     u32 base_instance, u32 instances) {
     u32* r = ch->r3d;
     g_draws++;
     if (g_lfn && !(g_draws & 15)) lsfg_pump(); /* push pending generated frames out on time even mid-frame */
@@ -5029,7 +5030,7 @@ void r3d_draw_gl(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count
             topology, count, instances);
 }
 
-void r3d_clear_gl(GpuChannel* ch, u32 v) {
+static void glr_clear(GpuChannel* ch, u32 v) {
     state_dirty();
     g_tmap_gen++;
     u32* r = ch->r3d;
@@ -5327,7 +5328,7 @@ static void rec_stop(void) {
     }
 }
 static volatile int g_rec_exit; /* at exit: 1 = finalize, 2 = done */
-void gpu_gl_rec_finish(void) {
+static void glr_rec_finish(void) {
     if (!g_rec_on) return;
     g_rec_exit = 1;
     u64 t0 = plat_ns();
@@ -5411,7 +5412,7 @@ static void rec_capture(GLuint tex, const float* xf, int tw, int th) {
     (void)tw;
     (void)th;
 }
-void gpu_gl_rec_finish(void) {}
+static void glr_rec_finish(void) {}
 #endif
 /* ============================================================ F8 full-res screenshot (png)
    GPU copies the frame into a PBO, we map it a frame or two later and a worker thread writes the png */
@@ -7139,15 +7140,16 @@ static void gpu_thread(void* arg) {
         g_gpu_busy += plat_ns() - t_busy0;
     }
 }
-void gpu_gl_start(void) {
+static int glr_start(void) {
     pm_init(&g_ql);
     pc_init(&g_qcv);
     pc_init(&g_qspace);
     if (plat_thread(gpu_thread, NULL, 64u << 20)) fatal("could not create the GPU thread");
     while (!g_gl_ready) plat_sleep_ns(1000000);
+    return 1;
 }
 /* requests from other threads */
-int gpu_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
+static int glr_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
     if (!g_gl) return 0;
     Work w;
     memset(&w, 0, sizeof w);
@@ -7161,7 +7163,7 @@ int gpu_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
     q_push(&w);
     return 1;
 }
-void gpu_gl_present_cpu(const u32* px, int w, int h, int stride) {
+static void glr_present_cpu(const u32* px, int w, int h, int stride) {
     if (!g_gl) return;
     Work k;
     memset(&k, 0, sizeof k);
@@ -7172,7 +7174,7 @@ void gpu_gl_present_cpu(const u32* px, int w, int h, int stride) {
     k.h = h;
     q_push(&k);
 }
-void gpu_gl_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
+static void glr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
     Work k;
     memset(&k, 0, sizeof k);
     k.kind = WK_PRESENT_ADDR;
@@ -7183,7 +7185,7 @@ void gpu_gl_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u3
     k.n = pitch;
     q_push(&k);
 }
-u64 gpu_gl_screenshot(const char* path) {
+static u64 glr_screenshot(const char* path) {
     if (!g_gl) return 0;
     volatile int done = 0;
     Work k;
@@ -7196,7 +7198,7 @@ u64 gpu_gl_screenshot(const char* path) {
     while (!done && plat_ns() - t0 < 30000000000ull) plat_sleep_ns(2000000);
     return g_last_shot_hash;
 }
-void gpu_gl_dump_rts(void) {
+static void glr_dump_rts(void) {
     if (!g_gl) return;
     Work k;
     memset(&k, 0, sizeof k);
@@ -7351,7 +7353,7 @@ static void cs_submit_done(u32 id, u32 n) {
     for (u32 k = 0; k < n; k++) syncpt_incr(id);
 }
 /* an incr inside the stream means everything before it is done, so it has to go after any pending compute results */
-void gpu_gl_stream_incr(u32 id) {
+static void glr_stream_incr(u32 id) {
     if (!t_gpu_thread) {
         syncpt_incr(id);
         return;
@@ -7360,7 +7362,7 @@ void gpu_gl_stream_incr(u32 id) {
     cs_submit_done(id, 1);
 }
 /* the stream is about to wait on a syncpoint: flush everything in flight */
-void gpu_gl_before_syncwait(void) {
+static void glr_before_syncwait(void) {
     if (t_gpu_thread && g_cs_fl.fence) cs_complete(1);
 }
 static int cs_inflight(void) { return g_cs_fl.fence != 0; }
@@ -7412,7 +7414,7 @@ static void cs_kick_async(void) {
     g_cs_any = 1;
 }
 /* gmem_ptr/gmem_read on the GPU thread hit memory a compute wrote that hasn't landed yet -> pull it now */
-void cs_mem_need(u64 a, u64 n) {
+static void glr_cs_mem_need(u64 a, u64 n) {
     if (a >= g_cs_hi || a + n <= g_cs_lo) return;
     if (g_cs_busy || !t_gpu_thread) return; /* GL from the GPU thread only */
     int hit = 0;
@@ -7544,7 +7546,7 @@ static int cs_cb_read(u32 idx, u32 off, u32* out) {
     }
     return 0;
 }
-void gpu_gl_dispatch(GpuChannel* ch, const u32* q, u64 code) {
+static void glr_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     if (getenv("SWR_NO_COMPUTE")) return;
     r3d_pending_flush();
     u32* rc = ch->rcomp;
@@ -7853,3 +7855,29 @@ void gpu_gl_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     glUseProgram(0);
     state_dirty();
 }
+
+const Renderer gl_renderer = {
+    .name = "OpenGL",
+    .start = glr_start,
+    .async_submit = glr_async_submit,
+    .clear = glr_clear,
+    .draw = glr_draw,
+    .cb_bind = glr_cb_bind,
+    .blit = glr_blit,
+    .rt_flush = glr_rt_flush,
+    .rt_reload = glr_rt_reload,
+    .dispatch = glr_dispatch,
+    .cs_mem_need = glr_cs_mem_need,
+    .before_syncwait = glr_before_syncwait,
+    .stream_incr = glr_stream_incr,
+    .present_buffer = glr_present_buffer,
+    .present_cpu = glr_present_cpu,
+    .screenshot = glr_screenshot,
+    .note_compute = glr_note_compute,
+    .dump_rts = glr_dump_rts,
+    .rec_finish = glr_rec_finish,
+    .trace = glr_trace,
+    .busy_ns = glr_busy_ns,
+};
+/* the renderer until a backend picks one (gpu/renderer.h) */
+const Renderer* g_renderer = &gl_renderer;

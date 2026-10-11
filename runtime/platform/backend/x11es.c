@@ -101,7 +101,7 @@ void video_init(const char* title) {
     XMapWindow(dpy, win);
     XFlush(dpy);
     g_start = plat_ns();
-    gpu_gl_start();
+    g_renderer->start();
 }
 int backend_gl_create(void) {
     eglBindAPI(EGL_OPENGL_ES_API);
@@ -124,7 +124,7 @@ void backend_window_size(int* w, int* h) {
     *h = g_wh;
 }
 
-void video_present_rgba(const u32* px, int w, int h, int stride) { gpu_gl_present_cpu(px, w, h, stride); }
+void video_present_rgba(const u32* px, int w, int h, int stride) { g_renderer->present_cpu(px, w, h, stride); }
 
 /* keys -> HidNpadButton bits */
 static u64 keymap(KeySym k) {
@@ -190,7 +190,7 @@ void video_poll(void) {
 void frontend_frame(void) {
     u64 el = plat_ns() - g_start;
     if ((g_maxframes >= 0 && g_frames >= g_maxframes) || (g_seconds && el >= (u64)g_seconds * 1000000000ull)) {
-        u64 h = gpu_gl_screenshot(g_shot[0] ? g_shot : NULL);
+        u64 h = g_renderer->screenshot(g_shot[0] ? g_shot : NULL);
         fprintf(stderr, "\nframes=%d hash=%016llx 1280x720\n", g_frames, (unsigned long long)h);
         save_hints();
         fflush(NULL);

@@ -22,7 +22,7 @@ static Surf* g_last;
 static u32 g_last_w, g_last_h;
 
 /* 0 when Vulkan can't run here: the caller falls back to OpenGL */
-int vkr_start(void) {
+static int vkr_start(void) {
     if (!vk_init()) return 0;
     g_vk_scale = g_opt_resf >= 0.25f && g_opt_resf <= 4 ? g_opt_resf : 1.0f;
     if (g_vk_scale != 1.0f) LOG("vulkan: render targets at %.2fx\n", g_vk_scale);
@@ -36,7 +36,7 @@ int vkr_start(void) {
 }
 
 /* ------------------------------------------------------------ the front end's calls */
-int vkr_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
+static int vkr_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
     (void)e;
     (void)n;
     (void)syncpt;
@@ -44,43 +44,43 @@ int vkr_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
     __atomic_add_fetch(&g_vk_epoch, 1, __ATOMIC_RELAXED); /* memory may have changed since the last submit */
     return 0;                                             /* processed now, on the submitting thread */
 }
-void vkr_clear(GpuChannel* ch, u32 v) {
+static void vkr_clear(GpuChannel* ch, u32 v) {
     vk_lock();
     vk_render_clear(ch, v);
     vk_unlock();
 }
-void vkr_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 bv, u32 bi, u32 instances) {
+static void vkr_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 bv, u32 bi, u32 instances) {
     g_draws++;
     vk_lock();
     vk_render_draw(ch, indexed, topology, first, count, bv, bi, instances);
     vk_unlock();
 }
 /* a constant buffer bound to a stage: v bit 0 valid, bits 4-8 the slot; address and size from 0x8E0-0x8E2 */
-void vkr_cb_bind(GpuChannel* ch, int stage, u32 v) {
+static void vkr_cb_bind(GpuChannel* ch, int stage, u32 v) {
     u32* r = ch->r3d;
     u32 idx = (v >> 4) & 31;
     if (stage > 4 || idx >= 18) return;
     g_vk_cb[stage][idx] = (v & 1) ? ((u64)r[0x8E1] << 32) | r[0x8E2] : 0;
     g_vk_cbsize[stage][idx] = (v & 1) ? r[0x8E0] : 0;
 }
-int vkr_blit(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
-             double sdy) {
+static int vkr_blit(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
+                    double sdy) {
     vk_lock();
     int r = vk_blit2d(s, d, dx, dy, dw, dh, sx, sy, sdx, sdy);
     vk_unlock();
-    return r; /* 0: the front end copies through memory, with gpu_gl_rt_flush/reload around it */
+    return r; /* 0: the front end copies through memory, with the renderer's rt_flush and rt_reload around it */
 }
-void vkr_rt_flush(u64 gva) {
+static void vkr_rt_flush(u64 gva) {
     vk_lock();
     vk_rt_flush(gva);
     vk_unlock();
 }
-void vkr_rt_reload(u64 gva) {
+static void vkr_rt_reload(u64 gva) {
     vk_lock();
     vk_rt_reload(gva);
     vk_unlock();
 }
-void vkr_dispatch(GpuChannel* ch, const u32* q, u64 code) {
+static void vkr_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     if (getenv("SWR_NO_COMPUTE")) return;
     r3d_pending_flush(); /* a merged draw the front end is holding comes first */
     vk_lock();
@@ -88,8 +88,8 @@ void vkr_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     vk_unlock();
 }
 /* compute results land before the stream signals or waits (gpu/vk/compute.c) */
-void vkr_before_syncwait(void) { vk_compute_land(); }
-void vkr_stream_incr(u32 id) {
+static void vkr_before_syncwait(void) { vk_compute_land(); }
+static void vkr_stream_incr(u32 id) {
     vk_compute_land();
     syncpt_incr(id);
 }
@@ -140,7 +140,7 @@ static Surf* cpu_frame(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bh
 }
 
 /* the game queued a buffer for display: show it, letterboxed to the window */
-void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
+static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
     vk_lock();
     vk_render_end();
     Surf* src = vk_rt_for_cpu(cpu_addr, w, h);
@@ -226,7 +226,7 @@ out:
 }
 
 /* the last presented frame as PPM (path.ppm), and a hash of its pixels */
-u64 vkr_screenshot(const char* path) {
+static u64 vkr_screenshot(const char* path) {
     vk_lock();
     u64 hash = 1469598103934665603ull;
     Surf* s = g_last;
@@ -291,3 +291,40 @@ out:
     vk_unlock();
     return hash;
 }
+
+/* OpenGL's diagnostics that the Vulkan renderer doesn't have */
+static void vkr_present_cpu(const u32* px, int w, int h, int stride) {
+    (void)px;
+    (void)w;
+    (void)h;
+    (void)stride;
+}
+static void vkr_note_compute(void) {}
+static void vkr_dump_rts(void) {}
+static void vkr_rec_finish(void) {}
+static void vkr_trace(const char* s) { (void)s; }
+static u64 vkr_busy_ns(void) { return 0; }
+
+const Renderer vk_renderer = {
+    .name = "Vulkan",
+    .start = vkr_start,
+    .async_submit = vkr_async_submit,
+    .clear = vkr_clear,
+    .draw = vkr_draw,
+    .cb_bind = vkr_cb_bind,
+    .blit = vkr_blit,
+    .rt_flush = vkr_rt_flush,
+    .rt_reload = vkr_rt_reload,
+    .dispatch = vkr_dispatch,
+    .cs_mem_need = vk_compute_mem_need,
+    .before_syncwait = vkr_before_syncwait,
+    .stream_incr = vkr_stream_incr,
+    .present_buffer = vkr_present_buffer,
+    .present_cpu = vkr_present_cpu,
+    .screenshot = vkr_screenshot,
+    .note_compute = vkr_note_compute,
+    .dump_rts = vkr_dump_rts,
+    .rec_finish = vkr_rec_finish,
+    .trace = vkr_trace,
+    .busy_ns = vkr_busy_ns,
+};

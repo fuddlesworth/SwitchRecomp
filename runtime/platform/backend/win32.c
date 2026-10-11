@@ -303,7 +303,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     fclose(f);
                 }
                 kernel_dump_threads();
-                gpu_gl_dump_rts();
+                g_renderer->dump_rts();
                 return 0;
             }
             if (w == VK_F4) {
@@ -402,7 +402,7 @@ void video_init(const char* title) {
         if (nt && GetProcAddress(nt, "wine_get_version"))
             LOG("Proton/Wine detected: for more FPS put   mesa_glthread=true %%command%%   in the game's Steam launch options (moves the OpenGL driver work to another core)\n");
     }
-    gpu_gl_start();
+    g_renderer->start();
 }
 
 /* ---------------------------------------------------------------- GL, GPU thread */
@@ -445,7 +445,7 @@ void backend_window_size(int* w, int* h) {
     *w = g_ww;
     *h = g_wh;
 }
-void video_present_rgba(const u32* px, int w, int h, int stride) { gpu_gl_present_cpu(px, w, h, stride); }
+void video_present_rgba(const u32* px, int w, int h, int stride) { g_renderer->present_cpu(px, w, h, stride); }
 
 static i32 axis(u64 b, int neg, int pos) { return ((b >> pos) & 1 ? 32767 : 0) - ((b >> neg) & 1 ? 32767 : 0); }
 static i32 dz(i32 v) { return (v > -7000 && v < 7000) ? 0 : v; }
@@ -511,13 +511,13 @@ void frontend_frame(void) {
         CreateDirectoryA("captures", NULL);
         snprintf(p, sizeof p, "captures/screenshot_%04d%02d%02d_%02d%02d%02d", t.wYear, t.wMonth, t.wDay, t.wHour,
                  t.wMinute, t.wSecond);
-        gpu_gl_screenshot(p);
+        g_renderer->screenshot(p);
     }
     if (g_seconds && plat_ns() - g_start >= (u64)g_seconds * 1000000000ull) {
-        u64 h = gpu_gl_screenshot(g_shot[0] ? g_shot : NULL);
+        u64 h = g_renderer->screenshot(g_shot[0] ? g_shot : NULL);
         fprintf(stderr, "\nframes=%d hash=%016llx\n", g_frames, (unsigned long long)h);
         save_hints();
-        { gpu_gl_rec_finish(); }
+        { g_renderer->rec_finish(); }
         fflush(NULL);
         ExitProcess(0);
     }
