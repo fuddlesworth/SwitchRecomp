@@ -58,6 +58,13 @@ scripts/recomp.py work/Catherine Catherine                  # runtime and game m
 scripts/recomp.py work/Catherine Catherine --preset clang   # both with Clang
 ```
 
+## Adding or moving a third-party submodule
+
+`git submodule add URL third_party/NAME`, `git -C third_party/NAME checkout TAG`, then `git add third_party/NAME`
+before anything runs `git submodule update` (the bootstrap does). Check the pin:
+`git ls-files -s third_party/NAME` must show `git -C third_party/NAME rev-parse TAG^{commit}`. Then a build step in
+`scripts/bootstrap.py`, the license in README.md's table, and the tag in the commit message.
+
 ## Formatting
 
 `scripts/format.sh` before committing, `--check` to see what is off. It needs clang-format 23 exactly (another

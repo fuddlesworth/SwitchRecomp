@@ -114,3 +114,7 @@ comments and developer docs under `.claude/` are out of scope.
   screen with every draw call succeeding.
 - `switchrecomp.py` builds without OpenH264 silently when the library is missing, and movies then stay black. The
   CMake build makes it an error.
+- `git submodule add` records the default branch's tip. Checking out a tag inside the submodule changes nothing until
+  `git add third_party/NAME`, and `scripts/bootstrap.py` (`git submodule update`) puts the submodule back on the
+  recorded commit. Stage the tag first, then check `git ls-files -s third_party/NAME` against
+  `git -C third_party/NAME rev-parse TAG^{commit}`. Three pins were wrong for a week of commits this way.
