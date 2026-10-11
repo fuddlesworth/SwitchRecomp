@@ -4,7 +4,8 @@ prebuilt binaries:
 
     deps/<target>/lib/libdecoder.a, libcommon.a   OpenH264 decoder (NVDEC video)
     deps/<target>/lib/libspvc.a                   SPIRV-Cross core + GLSL (LSFG shaders)
-    deps/<target>/include/{wels,spirv_cross}/     their headers
+    deps/<target>/lib/libglslang-all.a            glslang, GLSL to SPIR-V (the Vulkan renderer's shaders)
+    deps/<target>/include/{wels,spirv_cross,glslang}/  their headers
     deps/host/bin/hactool[.exe]                   extracts game dumps (scripts/extract.py)
 
     python3 scripts/bootstrap.py                  for this machine (linux, or win64 on Windows)
@@ -99,7 +100,15 @@ def main():
     for d in (os.path.join(out, 'lib'), os.path.join(out, 'include'), work):
         os.makedirs(d, exist_ok=True)
     log = os.path.join(work, 'bootstrap.log')
-    git('submodule', 'update', '--init', 'third_party/openh264', 'third_party/SPIRV-Cross', 'third_party/hactool')
+    git(
+        'submodule',
+        'update',
+        '--init',
+        'third_party/openh264',
+        'third_party/SPIRV-Cross',
+        'third_party/hactool',
+        'third_party/glslang',
+    )
 
     # OpenH264: only the decoder and the common code, the runtime never encodes
     stamp = Stamp(os.path.join(out, '.openh264'), 'openh264', cc)
@@ -183,6 +192,57 @@ def main():
         shutil.copytree(os.path.join(inst, 'include', 'spirv_cross'), os.path.join(out, 'include', 'spirv_cross'))
         shutil.copy(
             os.path.join(REPO, 'third_party', 'SPIRV-Cross', 'LICENSE'), os.path.join(out, 'LICENSE-SPIRV-Cross.txt')
+        )
+        stamp.write()
+
+    # glslang: the GLSL front end and SPIR-V back end, without the optimizer (SPIRV-Tools) or HLSL. Its static
+    # libraries are merged into one archive
+    stamp = Stamp(os.path.join(out, '.glslang'), 'glslang', cxx)
+    if stamp.current():
+        print('glslang is up to date')
+    else:
+        print('Building glslang (%s)' % a.target, flush=True)
+        bld, inst = os.path.join(work, 'glslang'), os.path.join(work, 'glslang-install')
+        shutil.rmtree(bld, ignore_errors=True)
+        shutil.rmtree(inst, ignore_errors=True)
+        run(
+            [
+                'cmake',
+                '-S',
+                os.path.join(REPO, 'third_party', 'glslang'),
+                '-B',
+                bld,
+                '-G',
+                'Ninja',
+                *cmake_cross,
+                '-DCMAKE_C_COMPILER=' + cc,
+                '-DCMAKE_CXX_COMPILER=' + cxx,
+                '-DCMAKE_AR=' + ar_path,
+                '-DCMAKE_BUILD_TYPE=Release',
+                '-DCMAKE_POSITION_INDEPENDENT_CODE=ON',
+                '-DCMAKE_INSTALL_PREFIX=' + inst,
+                '-DBUILD_SHARED_LIBS=OFF',
+                '-DENABLE_OPT=OFF',
+                '-DENABLE_HLSL=OFF',
+                '-DENABLE_GLSLANG_BINARIES=OFF',
+                '-DGLSLANG_TESTS=OFF',
+                '-DBUILD_EXTERNAL=OFF',
+                '-DENABLE_PCH=OFF',
+                '-DGLSLANG_ENABLE_INSTALL=ON',
+            ],
+            log,
+        )
+        run(['cmake', '--build', bld, '-j%d' % a.jobs], log)
+        run(['cmake', '--install', bld], log)
+        lib = os.path.join(inst, 'lib')
+        libs = sorted(f for f in os.listdir(lib) if f.endswith('.a'))
+        mri = 'create libglslang-all.a\n' + ''.join('addlib %s\n' % f for f in libs) + 'save\nend\n'
+        subprocess.run([ar_path, '-M'], input=mri, text=True, cwd=lib, check=True)
+        shutil.move(os.path.join(lib, 'libglslang-all.a'), os.path.join(out, 'lib', 'libglslang-all.a'))
+        shutil.rmtree(os.path.join(out, 'include', 'glslang'), ignore_errors=True)
+        shutil.copytree(os.path.join(inst, 'include', 'glslang'), os.path.join(out, 'include', 'glslang'))
+        shutil.copy(
+            os.path.join(REPO, 'third_party', 'glslang', 'LICENSE.txt'), os.path.join(out, 'LICENSE-glslang.txt')
         )
         stamp.write()
 

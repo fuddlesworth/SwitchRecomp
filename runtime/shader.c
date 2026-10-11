@@ -12,6 +12,7 @@ int g_glsl_version = 440;
 int g_vs_layer_ext = 1; /* 1 ARB_shader_viewport_layer_array, 2 AMD_vertex_shader_layer, 3 NV_viewport_array2, 0 none */
 int g_glsl_es = 0;
 int g_rs_binding = 83; /* binding of the res-scale UBO, set by gpu_gl */ /* GLSL ES 3.20 (Android) */
+int g_shader_vulkan; /* emit GLSL 4.50 for Vulkan (vk_shader.c compiles it to SPIR-V), with the bindings in shader.h */
 #define B(v, lo, n) ((u32)(((v) >> (lo)) & ((1ull << (n)) - 1)))
 
 /* ============================================================ text */
@@ -46,6 +47,11 @@ static char* T(const char* f, ...) {
     vsnprintf(r, 384, f, ap);
     va_end(ap);
     return r;
+}
+int shader_vk_set(int stage) { return stage == ST_FS ? 1 : (stage == ST_VS || stage == ST_CS) ? 0 : 2; }
+/* where a declaration binds: its set and binding in Vulkan mode, its GL binding otherwise */
+static const char* bind_at(int stage, int vk_binding, int gl_binding) {
+    return g_shader_vulkan ? T("set=%d, binding=%d", shader_vk_set(stage), vk_binding) : T("binding=%d", gl_binding);
 }
 
 /* ============================================================ opcode table */
@@ -617,6 +623,7 @@ typedef struct {
     int uses_cc;
     u8 in_used[32], out_used[32];
     int uses_local, uses_shared, uses_img_raw;
+    int uses_draw_params; /* Vulkan: gl_BaseInstanceARB */
     u8 leader[65536 / 8];
     int max_idx;
     int has_flow;
@@ -832,8 +839,13 @@ static char* attr_read(Ctx* c, u32 addr, int is_output) {
         return T("floatBitsToUint(gl_in[0].gl_Position.%c)", "xyzw"[comp]);
     }
     switch (addr) {
-        case 0x2FC: return c->stage == ST_VS ? "uint(gl_VertexID)" : "0u";
-        case 0x2F8: return c->stage == ST_VS ? "uint(gl_InstanceID)" : "0u";
+        /* Vulkan's instance index counts from the draw's first instance, GL's instance ID from 0 */
+        case 0x2FC: return c->stage != ST_VS ? "0u" : g_shader_vulkan ? "uint(gl_VertexIndex)" : "uint(gl_VertexID)";
+        case 0x2F8:
+            if (c->stage != ST_VS) return "0u";
+            if (!g_shader_vulkan) return "uint(gl_InstanceID)";
+            c->uses_draw_params = 1;
+            return "uint(gl_InstanceIndex - gl_BaseInstanceARB)";
         case 0x3FC: c->si->uses_front_face = 1; return c->stage == ST_FS ? "(gl_FrontFacing? 0xFFFFFFFFu : 0u)" : "0u";
         case 0x60: return c->stage == ST_FS ? "uint(gl_PrimitiveID)" : "0u";
         case 0x64: return c->stage == ST_FS ? "uint(gl_Layer)" : "0u";
@@ -3423,7 +3435,10 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     } /* dead if we already ended with EXIT */
     /* declarations */
     Sb* D = &c->decl;
-    if (g_glsl_es) {
+    if (g_shader_vulkan) {
+        sb_put(D, "#version 450\n");
+        if (c->uses_draw_params) sb_put(D, "#extension GL_ARB_shader_draw_parameters : require\n");
+    } else if (g_glsl_es) {
         sb_put(D, "#version 320 es\nprecision highp float;\nprecision highp int;\n");
         static const char* ps[] = {"sampler2D",
                                    "sampler3D",
@@ -3445,7 +3460,7 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
         sb_f(D, "#version %d core\n", g_glsl_version);
     /* gl_Layer from the VS needs an extension on desktop GL; without one we render to layer 0 */
     if (stage != ST_FS && si->writes_layer) {
-        if (g_vs_layer_ext == 1)
+        if (g_shader_vulkan || g_vs_layer_ext == 1)
             sb_put(D,
                    "#extension GL_ARB_shader_viewport_layer_array : require\n#define SWR_SET_LAYER(v) gl_Layer=(v)\n");
         else if (g_vs_layer_ext == 2)
@@ -3457,12 +3472,14 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     }
     if (stage == ST_FS && (si->sph[0] >> 15 & 1)) {}
     if (stage == ST_FS && si->uses_position_in)
-        sb_f(D, "layout(std140, binding=%d) uniform SWR_RS { vec4 swr_rs; };\n", g_rs_binding); /* 1/res scale */
+        sb_f(D, "layout(std140, %s) uniform SWR_RS { vec4 swr_rs; };\n",
+             bind_at(stage, SWR_VKB_RS, g_rs_binding)); /* 1/res scale */
     /* packed binding numbers, Intel's windows driver has very few: VS 0.., FS 1.., others 2.. */
     int slot = stage == ST_VS ? 0 : stage == ST_FS ? 1 : 2;
     int base_bind = slot * 18;
     for (int i = 0; i < si->ngbuf; i++)
-        sb_f(D, "layout(std430, binding=%d) %sbuffer S%d_G%d { uint d[]; } g%d;\n", stage == ST_CS ? i : slot * 8 + i,
+        sb_f(D, "layout(std430, %s) %sbuffer S%d_G%d { uint d[]; } g%d;\n",
+             bind_at(stage, SWR_VKB_SSBO + i, stage == ST_CS ? i : slot * 8 + i),
              ((si->gbuf_wmask >> i) & 1) ? "" : "readonly ", stage, i, i);
     if (stage == ST_CS)
         sb_f(D, "layout(local_size_x=%u, local_size_y=%u, local_size_z=%u) in;\n",
@@ -3470,11 +3487,12 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
              si->cs_local[2] ? si->cs_local[2] : 1);
     for (int i = 0; i < 18; i++)
         if (si->cbuf_mask & (1u << i))
-            sb_f(D, "layout(std140, binding=%d) uniform S%d_CB%d { vec4 d[4096]; } cb%d;\n", base_bind + i, stage, i,
-                 i);
+            sb_f(D, "layout(std140, %s) uniform S%d_CB%d { vec4 d[4096]; } cb%d;\n",
+                 bind_at(stage, SWR_VKB_CB + i, base_bind + i), stage, i, i);
     for (int i = 0; i < si->ntex; i++) {
         ShTex* t = &si->tex[i];
-        sb_f(D, "layout(binding=%d) uniform %s S%d_tex%d;\n#define tex%d S%d_tex%d\n", slot * (g_glsl_es ? 16 : 32) + i,
+        sb_f(D, "layout(%s) uniform %s S%d_tex%d;\n#define tex%d S%d_tex%d\n",
+             bind_at(stage, SWR_VKB_TEX + i, slot * (g_glsl_es ? 16 : 32) + i),
              T("%s%s",
                (!t->shadow && ((si->tex_int_mask >> i) & 1)) ? (((si->tex_sint_mask >> i) & 1) ? "i" : "u") : "",
                samp_type(t->type, t->array, t->shadow)),
@@ -3531,12 +3549,19 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     if (stage == ST_CS) {
         static const char* it[6] = {"image1D", "imageBuffer", "image1DArray", "image2D", "image2DArray", "image3D"};
         for (int k = 0; k < si->nimg; k++)
-            sb_f(D, "layout(binding=%d) writeonly uniform %s img%d;\n", k, it[si->img[k].type], k);
+            sb_f(D, "layout(%s) writeonly uniform %s img%d;\n", bind_at(stage, SWR_VKB_IMG + k, k), it[si->img[k].type],
+                 k);
         if (c->uses_img_raw) {
             /* format class: 0 f32, 1 f16, 2 unorm8, 3 unorm16 */
             sb_put(
                 D,
-                "uniform int swr_ic[8];\nuniform int swr_tc[32];\nuniform int swr_ib[8];\nuniform int swr_tb[32];\n"
+                g_shader_vulkan
+                    ? T("layout(std140, %s) uniform SWR_FMT { int swr_ic[8]; int swr_tc[32]; int swr_ib[8]; "
+                        "int swr_tb[32]; };\n",
+                        bind_at(stage, SWR_VKB_FMT, 0))
+                    : "uniform int swr_ic[8];\nuniform int swr_tc[32];\nuniform int swr_ib[8];\nuniform int swr_tb[32];\n");
+            sb_put(
+                D,
                 "vec4 swr_r2v(uvec4 r, uint n, uint sz, int cls){\n"
                 "  if(sz<4u){ uint v = sz<2u? (r.x&0xFFu) : (r.x&0xFFFFu); if(cls==1) return vec4(unpackHalf2x16(v).x,0.0,0.0,1.0); if(cls==2) return vec4(float(v&0xFFu)/255.0,0.0,0.0,1.0); if(cls==3) return vec4(float(v)/65535.0,0.0,0.0,1.0); return vec4(uintBitsToFloat(v),0.0,0.0,1.0); }\n"
                 "  if(cls==1) return n>=2u? vec4(unpackHalf2x16(r.x),unpackHalf2x16(r.y)) : vec4(unpackHalf2x16(r.x),0.0,1.0);\n"
@@ -3593,4 +3618,46 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     free(c->pop_tgt);
     free(c);
     return r;
+}
+
+/* ============================================================ shader corpus */
+typedef struct {
+    char magic[4]; /* SWRS */
+    u32 version, si_size, stage, len, max_bytes;
+} CorpusHeader;
+int shader_corpus_save(const char* dir, const u8* code, u32 len, u32 max_bytes, int stage, const ShaderInfo* si,
+                       u64 key) {
+    char path[1024];
+    snprintf(path, sizeof path, "%s/%016llx_%d.swrs", dir, (unsigned long long)key, stage);
+    FILE* f = fopen(path, "rb");
+    if (f) { /* already there */
+        fclose(f);
+        return 1;
+    }
+    f = fopen(path, "wb");
+    if (!f) return 0;
+    CorpusHeader h = {{'S', 'W', 'R', 'S'}, 1, (u32)sizeof(ShaderInfo), (u32)stage, len, max_bytes};
+    int ok = fwrite(&h, sizeof h, 1, f) == 1 && fwrite(si, sizeof *si, 1, f) == 1 && fwrite(code, 1, len, f) == len;
+    fclose(f);
+    return ok;
+}
+u8* shader_corpus_load(const char* path, u32* max_bytes, int* stage, ShaderInfo* si) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+    CorpusHeader h;
+    u8* code = NULL;
+    if (fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "SWRS", 4) && h.version == 1 &&
+        h.si_size == sizeof(ShaderInfo) && h.len <= h.max_bytes && h.max_bytes <= (1u << 20) &&
+        fread(si, sizeof *si, 1, f) == 1) {
+        code = calloc(1, h.max_bytes);
+        if (fread(code, 1, h.len, f) != h.len) {
+            free(code);
+            code = NULL;
+        } else {
+            *max_bytes = h.max_bytes;
+            *stage = (int)h.stage;
+        }
+    }
+    fclose(f);
+    return code;
 }

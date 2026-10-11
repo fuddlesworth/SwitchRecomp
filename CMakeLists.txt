@@ -42,6 +42,12 @@ set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g")
 
 set(RT "${CMAKE_SOURCE_DIR}/runtime")
 
+function(swr_require_dep file option)
+    if(NOT EXISTS "${DEPS}/${file}")
+        message(FATAL_ERROR "${DEPS}/${file} is missing. Run scripts/bootstrap.py (scripts\\bootstrap.ps1 on Windows), or configure with -D${option}=OFF.")
+    endif()
+endfunction()
+
 # The same source list as switchrecomp.py's build_runtime
 set(sources plat mem kernel ipc svc_core svc_hid svc_fs svc_vi nvdrv gpu gpu_engines gpu_3d loader main host1x entry)
 if(SWR_GPU STREQUAL "vulkan" AND NOT SWR_BACKEND STREQUAL "sdl3")
@@ -50,7 +56,7 @@ endif()
 if(SWR_BACKEND STREQUAL "headless")
     list(APPEND sources gpu_nogl)
 elseif(SWR_GPU STREQUAL "vulkan")
-    list(APPEND sources gpu_nogl gpu_vk vk_device)
+    list(APPEND sources gpu_nogl gpu_vk vk_device vk_shader)
 else()
     list(APPEND sources gpu_gl gl_load shader astc glq glq_gen)
     if(SWR_BACKEND STREQUAL "x11es")
@@ -91,6 +97,9 @@ if(SWR_GPU STREQUAL "vulkan")
     target_include_directories(swr-runtime PRIVATE "${CMAKE_SOURCE_DIR}/third_party/Vulkan-Headers/include"
                                                    "${CMAKE_SOURCE_DIR}/third_party/volk")
     target_compile_definitions(swr-runtime PRIVATE SWR_VULKAN VK_NO_PROTOTYPES)
+    swr_require_dep(lib/libglslang-all.a SWR_GPU)
+    target_include_directories(swr-runtime PRIVATE "${DEPS}/include")
+    target_link_libraries(swr-runtime PRIVATE "${DEPS}/lib/libglslang-all.a")
 elseif(NOT SWR_BACKEND STREQUAL "headless")
     target_sources(swr-runtime PRIVATE "${RT}/bcn/bcn.cpp" "${RT}/bcn/bcdec.cpp")
     target_include_directories(swr-runtime PRIVATE "${RT}/bcn")
@@ -105,11 +114,6 @@ elseif(SWR_BACKEND STREQUAL "x11es")
     target_link_libraries(swr-runtime PRIVATE X11 EGL)
 endif()
 
-function(swr_require_dep file option)
-    if(NOT EXISTS "${DEPS}/${file}")
-        message(FATAL_ERROR "${DEPS}/${file} is missing. Run scripts/bootstrap.py (scripts\\bootstrap.ps1 on Windows), or configure with -D${option}=OFF.")
-    endif()
-endfunction()
 
 if(SWR_H264)
     swr_require_dep(lib/libdecoder.a SWR_H264)
@@ -133,4 +137,13 @@ if(SWR_DEPLOY)
         COMMAND "${CMAKE_COMMAND}" "-DRUNTIME=$<TARGET_FILE:swr-runtime>" "-DGAMES=${SWR_GAMES_DIR}" "-DWINDOWS=${WIN32}"
                 -P "${CMAKE_SOURCE_DIR}/cmake/deploy.cmake"
         VERBATIM)
+endif()
+
+# swr-shaderc: translates a shader corpus (SWR_SHADER_CORPUS) offline and compiles it to SPIR-V
+if(SWR_GPU STREQUAL "vulkan")
+    add_executable(swr-shaderc "${CMAKE_SOURCE_DIR}/tools/swr_shaderc.c" "${RT}/shader.c" "${RT}/vk_shader.c")
+    target_include_directories(swr-shaderc PRIVATE "${RT}" "${DEPS}/include")
+    target_compile_options(swr-shaderc PRIVATE -w -fno-strict-aliasing)
+    target_link_libraries(swr-shaderc PRIVATE "${DEPS}/lib/libglslang-all.a" pthread m)
+    set_target_properties(swr-shaderc PROPERTIES LINKER_LANGUAGE CXX)
 endif()

@@ -28,7 +28,10 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
 
 ## The Vulkan renderer
 
-`cmake -B build/vk -G Ninja -DSWR_GPU=vulkan` builds it next to OpenGL (it needs the sdl3 backend). `SWR_VK_VALIDATION=1`
+`cmake -B build/vk -G Ninja -DSWR_GPU=vulkan` builds it next to OpenGL (it needs the sdl3 backend), with the
+`swr-shaderc` tool. A translator change is checked on a shader corpus before any rendering: record one with
+`SWR_SHADER_CORPUS=dir` (any renderer), then `build/vk/swr-shaderc dir --validate` for Vulkan, and `--gl --out` from
+two builds, diffed, to show the GL output didn't change. `SWR_VK_VALIDATION=1`
 turns on the Khronos validation layer when it is installed (Arch: `vulkan-validation-layers`, which the user
 installs). Until it draws, a screenshot (`--shot`) shows the CPU path's frame, not what Vulkan presented: check what
 reached the window with a desktop capture (`spectacle -b -n -f -o FILE`), and delete the capture afterwards, since it
@@ -54,6 +57,13 @@ minutes with GCC; the objects in `games/<Game>_build/` are reused when their C d
 scripts/recomp.py work/Catherine Catherine                  # runtime and game module with GCC
 scripts/recomp.py work/Catherine Catherine --preset clang   # both with Clang
 ```
+
+## Adding or moving a third-party submodule
+
+`git submodule add URL third_party/NAME`, `git -C third_party/NAME checkout TAG`, then `git add third_party/NAME`
+before anything runs `git submodule update` (the bootstrap does). Check the pin:
+`git ls-files -s third_party/NAME` must show `git -C third_party/NAME rev-parse TAG^{commit}`. Then a build step in
+`scripts/bootstrap.py`, the license in README.md's table, and the tag in the commit message.
 
 ## Formatting
 
