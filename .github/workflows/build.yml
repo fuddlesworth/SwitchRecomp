@@ -45,10 +45,10 @@ jobs:
         run: |
           cmake --preset ${{ matrix.preset }}
           cmake --build --preset ${{ matrix.preset }}
-      - name: Build the Vulkan renderer too
+      - name: Build without the Vulkan renderer too
         run: |
-          cmake -B build/vulkan -G Ninja -DSWR_GPU=vulkan -DCMAKE_C_COMPILER=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} -DCMAKE_CXX_COMPILER=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }}
-          cmake --build build/vulkan
+          cmake -B build/novulkan -G Ninja -DSWR_VULKAN=OFF -DCMAKE_C_COMPILER=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} -DCMAKE_CXX_COMPILER=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }}
+          cmake --build build/novulkan
       - name: Build the X11 backend too
         run: |
           cmake -B build/x11 -G Ninja -DSWR_BACKEND=x11 -DCMAKE_C_COMPILER=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} -DCMAKE_CXX_COMPILER=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }}
@@ -82,12 +82,10 @@ jobs:
         run: |
           cmake --preset mingw-cross
           cmake --build --preset mingw-cross
-      - name: Build the SDL3 backend and the Vulkan renderer too
+      - name: Build the SDL3 backend too (with both renderers)
         run: |
           cmake --preset mingw-cross -B build/mingw-sdl3 -DSWR_BACKEND=sdl3
           cmake --build build/mingw-sdl3
-          cmake --preset mingw-cross -B build/mingw-vulkan -DSWR_BACKEND=sdl3 -DSWR_GPU=vulkan
-          cmake --build build/mingw-vulkan
 
   windows:
     name: Windows (${{ matrix.compiler }})
@@ -112,16 +110,12 @@ jobs:
           if ($LASTEXITCODE) { exit 1 }
           cmake --build --preset ${{ matrix.compiler }}
           if ($LASTEXITCODE) { exit 1 }
-      - name: Build the SDL3 backend and the Vulkan renderer too
+      - name: Build the SDL3 backend too (with both renderers)
         run: |
           . .\scripts\env.ps1 -Isolated
           cmake --preset ${{ matrix.compiler }} -B build/sdl3 -DSWR_BACKEND=sdl3
           if ($LASTEXITCODE) { exit 1 }
           cmake --build build/sdl3
-          if ($LASTEXITCODE) { exit 1 }
-          cmake --preset ${{ matrix.compiler }} -B build/vulkan -DSWR_BACKEND=sdl3 -DSWR_GPU=vulkan
-          if ($LASTEXITCODE) { exit 1 }
-          cmake --build build/vulkan
           if ($LASTEXITCODE) { exit 1 }
       - name: Check the Python scripts
         run: |

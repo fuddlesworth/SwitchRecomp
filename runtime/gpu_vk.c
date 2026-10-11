@@ -1,17 +1,11 @@
-/* Vulkan renderer: the interface the GPU front end calls when a renderer is active (g_gl, named after the GL
-   renderer it was written for), and presenting.
+/* Vulkan renderer: its side of the renderer interface (renderer.c calls these vkr_ functions when the Vulkan
+   renderer is the active one, the GL names otherwise), and presenting.
 
-   Done so far: render targets, clears, draws (vk_render.c), write-backs to and reloads from guest memory, and
-   presenting the game's framebuffer from its render target (or from memory, converted on the CPU, when no render
-   target holds it). Blits and compute aren't done yet (ROADMAP.md, Phase 6). Submits are processed on the thread
-   that makes them, like the no-GL build, under vk_lock(). */
+   Render targets, clears, draws (vk_render.c), compute (vk_compute.c), write-backs to and reloads from guest memory,
+   and presenting the game's framebuffer from its render target (or from memory, converted on the CPU, when no
+   render target holds it). Submits are processed on the thread that makes them, under vk_lock(). */
 #include "vk.h"
-
-int g_gl = 1;
-u64 g_draws;
-volatile i32 g_vi_crop[4];
-volatile u32 g_vi_transform;
-int g_texoff_emul;
+#include "renderer.h"
 
 static VkSemaphore g_acquired[VK_FRAMES];
 /* the CPU fallback's image, and the last presented frame for screenshots */
@@ -19,18 +13,24 @@ static Surf* g_cpu_img;
 static Surf* g_last;
 static u32 g_last_w, g_last_h;
 
-void gpu_vk_start(void) {
-    if (!vk_init()) fatal("Vulkan could not start (see the log). Build with -DSWR_GPU=gl to use OpenGL.");
+/* 0 when Vulkan can't run here: the caller falls back to OpenGL */
+int vkr_start(void) {
+    if (!vk_init()) return 0;
+    extern float g_opt_resf;
+    g_vk_scale = g_opt_resf >= 0.25f && g_opt_resf <= 4 ? g_opt_resf : 1.0f;
+    if (g_vk_scale != 1.0f) LOG("vulkan: render targets at %.2fx\n", g_vk_scale);
     vk_cmd_init();
     vk_pipeline_init();
     extern void (*g_gpu_before_write)(u64, u64);
     g_gpu_before_write = vk_compute_before_write;
     VkSemaphoreCreateInfo sci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (int i = 0; i < VK_FRAMES; i++) VK_OK(vkCreateSemaphore(g_vk.dev, &sci, NULL, &g_acquired[i]));
+    g_gl = 1; /* a renderer is active */
+    return 1;
 }
 
 /* ------------------------------------------------------------ the front end's calls */
-int gpu_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
+int vkr_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
     (void)e;
     (void)n;
     (void)syncpt;
@@ -38,66 +38,56 @@ int gpu_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
     __atomic_add_fetch(&g_vk_epoch, 1, __ATOMIC_RELAXED); /* memory may have changed since the last submit */
     return 0;                                             /* processed now, on the submitting thread */
 }
-void r3d_clear_gl(GpuChannel* ch, u32 v) {
+void vkr_clear(GpuChannel* ch, u32 v) {
     vk_lock();
     vk_render_clear(ch, v);
     vk_unlock();
 }
-void r3d_draw_gl(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 bv, u32 bi, u32 instances) {
+void vkr_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 bv, u32 bi, u32 instances) {
     g_draws++;
     vk_lock();
     vk_render_draw(ch, indexed, topology, first, count, bv, bi, instances);
     vk_unlock();
 }
 /* a constant buffer bound to a stage: v bit 0 valid, bits 4-8 the slot; address and size from 0x8E0-0x8E2 */
-void r3d_cb_bind_gl(GpuChannel* ch, int stage, u32 v) {
+void vkr_cb_bind(GpuChannel* ch, int stage, u32 v) {
     u32* r = ch->r3d;
     u32 idx = (v >> 4) & 31;
     if (stage > 4 || idx >= 18) return;
     g_vk_cb[stage][idx] = (v & 1) ? ((u64)r[0x8E1] << 32) | r[0x8E2] : 0;
     g_vk_cbsize[stage][idx] = (v & 1) ? r[0x8E0] : 0;
 }
-int r3d_blit_gl(void* s, void* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx, double sdy) {
+int vkr_blit(void* s, void* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx, double sdy) {
     vk_lock();
     int r = vk_blit2d(s, d, dx, dy, dw, dh, sx, sy, sdx, sdy);
     vk_unlock();
     return r; /* 0: the front end copies through memory, with gpu_gl_rt_flush/reload around it */
 }
-void gpu_gl_rt_flush(u64 gva) {
+void vkr_rt_flush(u64 gva) {
     vk_lock();
     vk_rt_flush(gva);
     vk_unlock();
 }
-void gpu_gl_rt_reload(u64 gva) {
+void vkr_rt_reload(u64 gva) {
     vk_lock();
     vk_rt_reload(gva);
     vk_unlock();
 }
-void gpu_gl_dispatch(void* ch, const void* q, unsigned long long code) {
+void vkr_dispatch(void* ch, const void* q, unsigned long long code) {
     extern void r3d_pending_flush(void);
-    extern void vk_dispatch(GpuChannel * ch, const u32* q, u64 code);
     if (getenv("SWR_NO_COMPUTE")) return;
     r3d_pending_flush(); /* a merged draw the front end is holding comes first */
     vk_lock();
     vk_dispatch(ch, q, code);
     vk_unlock();
 }
-void gpu_gl_note_compute(void) {}
 /* compute results land before the stream signals or waits (vk_compute.c) */
-void gpu_gl_before_syncwait(void) { vk_compute_land(); }
-void gpu_gl_stream_incr(u32 id) {
+void vkr_before_syncwait(void) { vk_compute_land(); }
+void vkr_stream_incr(u32 id) {
     extern void syncpt_incr(u32);
     vk_compute_land();
     syncpt_incr(id);
 }
-void gpu_gl_dump_rts(void) {}
-void gpu_gl_rec_finish(void) {}
-void gpu_gl_trace(const char* s) { (void)s; }
-void lsfg_ini(const char* k, const char* v) {
-    (void)k;
-    (void)v;
-}
-u64 gpu_busy_ns(void) { return 0; }
 
 /* ------------------------------------------------------------ presenting */
 /* the frame from memory when no render target holds it (the game drew it on the CPU, or a video frame) */
@@ -110,8 +100,8 @@ static Surf* cpu_frame(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bh
     }
     if (!g_cpu_img) {
         g_cpu_img = calloc(1, sizeof *g_cpu_img);
-        g_cpu_img->w = w;
-        g_cpu_img->h = h;
+        g_cpu_img->w = g_cpu_img->sw = w;
+        g_cpu_img->h = g_cpu_img->sh = h;
         g_cpu_img->f = vk_rt_format(0xD5); /* RGBA8 */
         g_cpu_img->layout = VK_IMAGE_LAYOUT_UNDEFINED;
         VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -146,7 +136,7 @@ static Surf* cpu_frame(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bh
 }
 
 /* the game queued a buffer for display: show it, letterboxed to the window */
-void gpu_gl_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
+void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
     vk_lock();
     vk_render_end();
     Surf* src = vk_rt_for_cpu(cpu_addr, w, h);
@@ -189,7 +179,9 @@ void gpu_gl_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u3
         dw = (u32)((u64)sh * w / h);
     }
     i32 dx = (i32)(sw - dw) / 2, dy = (i32)(sh - dh) / 2;
-    u32 bw = w < src->w ? w : src->w, bh = h < src->h ? h : src->h;
+    /* the frame's part of the source, in its pixels (render targets are scaled) */
+    u32 bw = (u32)((u64)src->sw * (w < src->w ? w : src->w) / src->w),
+        bh = (u32)((u64)src->sh * (h < src->h ? h : src->h) / src->h);
     VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                         .srcOffsets = {{0, 0, 0}, {(i32)bw, (i32)bh, 1}},
                         .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
@@ -231,7 +223,7 @@ out:
 }
 
 /* the last presented frame as PPM (path.ppm), and a hash of its pixels */
-u64 gpu_gl_screenshot(const char* path) {
+u64 vkr_screenshot(const char* path) {
     vk_lock();
     u64 hash = 1469598103934665603ull;
     Surf* s = g_last;

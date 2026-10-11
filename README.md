@@ -41,9 +41,8 @@ python3 scripts/recomp.py work/Catherine Catherine                      # -> gam
 cd games && ./Catherine
 ```
 
-`--preset clang` builds with Clang instead of GCC. A Vulkan renderer is in progress (`-DSWR_GPU=vulkan`): it draws
-Catherine's menus, movies and 3D scenes like OpenGL does, without the title-screen crash, and becomes the default
-once it matches OpenGL everywhere. The first recompile of a big game takes several minutes. After that, a runtime
+`--preset clang` builds with Clang instead of GCC. The runtime has two renderers, Vulkan and OpenGL, and uses Vulkan
+when the GPU has Vulkan 1.3 (see `renderer` below). The first recompile of a big game takes several minutes. After that, a runtime
 change only needs a runtime build, which copies the new runtime next to every game in `games/`:
 
 ```bash
@@ -102,11 +101,10 @@ FPS limit, F5 writes a diagnostic trace, F7 records an .mp4 (Windows only), F8 s
 Alt+Enter toggles fullscreen, and Escape quits.
 
 The SDL3 backend, the Linux default, also builds on Windows (the bootstrap builds SDL3 for it). It supports any
-controller SDL knows, not just XInput ones, and the Vulkan renderer needs it:
+controller SDL knows, not just XInput ones, and has the Vulkan renderer as well as OpenGL:
 
 ```powershell
-cmake --preset gcc -B build\sdl3 -DSWR_BACKEND=sdl3; cmake --build build\sdl3                    # OpenGL
-cmake --preset gcc -B build\vulkan -DSWR_BACKEND=sdl3 -DSWR_GPU=vulkan; cmake --build build\vulkan
+cmake --preset gcc -B build\sdl3 -DSWR_BACKEND=sdl3; cmake --build build\sdl3
 ```
 
 ## Settings and logs
@@ -118,6 +116,7 @@ starts. The ones you are most likely to change:
 
 | Option | Effect |
 | --- | --- |
+| `renderer=auto` | Vulkan, or OpenGL when Vulkan can't start or LSFG frame generation is set up. `vulkan` or `opengl` picks one. Only OpenGL has LSFG, dynamic resolution, F7 recording and F8 screenshots |
 | `docked=1` | TV mode (1080p) instead of handheld (720p) |
 | `resolution=1` | Internal resolution scale, 0.25 to 4 |
 | `fps_limit=1` | 1 caps at 60 FPS like the console, 0 is unlimited |

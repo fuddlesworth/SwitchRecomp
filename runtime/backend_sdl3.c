@@ -1,11 +1,12 @@
-/* SDL3 backend: window, OpenGL 4.3+ context or Vulkan surface (SWR_VULKAN), keyboard and gamepads. Runs natively
-   on Wayland and on X11 (SDL_VIDEO_DRIVER=x11 picks X11), and takes the same unattended-run options as the X11
-   backend (seconds, frames, shot, press, script). */
+/* SDL3 backend: window, OpenGL 4.3+ context or Vulkan surface, keyboard and gamepads. Runs natively on Wayland and
+   on X11 (SDL_VIDEO_DRIVER=x11 picks X11), and takes the same unattended-run options as the X11 backend (seconds,
+   frames, shot, press, script). With the Vulkan renderer built in (SWR_VULKAN), renderer= picks one at startup, and
+   OpenGL takes over when Vulkan can't start. */
+#include "rt.h"
 #ifdef SWR_VULKAN
 #include "vk.h"
+#include "renderer.h"
 #include <SDL3/SDL_vulkan.h>
-#else
-#include "rt.h"
 #endif
 #include <SDL3/SDL.h>
 #include <time.h>
@@ -14,9 +15,10 @@ static char g_title[256]; /* the window title without the status the Windows-onl
 #endif
 
 static SDL_Window* g_win;
-#ifndef SWR_VULKAN
 static SDL_Window* g_helper; /* hidden, for the GL worker's context: EGL won't make one surface current twice */
 static SDL_GLContext g_ctx, g_wctx;
+#ifndef SWR_VULKAN
+static const int g_vkr = 0; /* only OpenGL in this build */
 #endif
 static volatile int g_ww = 1280, g_wh = 720;
 static int g_seconds = 0, g_maxframes = -1;
@@ -44,12 +46,39 @@ void backend_ini(const char* k, const char* v) {
         g_press_len = strtoull(v, NULL, 10);
     else if (!strcmp(k, "script"))
         strncpy(g_script, v, 1023);
-}
 #ifdef SWR_VULKAN
-int video_has_gl(void) { return 0; }
-#else
-int video_has_gl(void) { return 1; }
+    else
+        renderer_ini(k, v);
 #endif
+}
+int video_has_gl(void) { return 1; }
+
+/* the window, for Vulkan or for OpenGL, and its size in pixels */
+static int open_window(const char* title, int vulkan) {
+    if (vulkan)
+        g_win = SDL_CreateWindow(title, g_ww, g_wh, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+    else {
+        SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
+        SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
+        SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
+        SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        g_win = SDL_CreateWindow(title, g_ww, g_wh, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+        if (g_win) g_helper = SDL_CreateWindow("SwitchRecomp GL worker", 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+    }
+    if (!g_win) {
+        LOG("video: SDL could not open a%s window: %s\n", vulkan ? " Vulkan" : "", SDL_GetError());
+        return 0;
+    }
+    int w = 0, h = 0;
+    SDL_GetWindowSizeInPixels(g_win, &w, &h);
+    if (w > 0 && h > 0) {
+        g_ww = w;
+        g_wh = h;
+    }
+    return 1;
+}
 
 void video_init(const char* title) {
 #ifdef _WIN32
@@ -60,38 +89,28 @@ void video_init(const char* title) {
     if (!getenv("SWR_NO_GLTHREAD")) setenv("mesa_glthread", "true", 0);
 #endif
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) fatal("SDL could not start its video: %s", SDL_GetError());
-#ifdef SWR_VULKAN
-    g_win = SDL_CreateWindow(title, g_ww, g_wh, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
-    if (!g_win) fatal("SDL could not open a Vulkan window: %s", SDL_GetError());
-#else
-    SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
-    SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
-    SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
-    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    g_win = SDL_CreateWindow(title, g_ww, g_wh, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
-    if (!g_win) fatal("SDL could not open a window: %s", SDL_GetError());
-    g_helper = SDL_CreateWindow("SwitchRecomp GL worker", 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
-#endif
-    {
-        int w = 0, h = 0;
-        SDL_GetWindowSizeInPixels(g_win, &w, &h);
-        if (w > 0 && h > 0) {
-            g_ww = w;
-            g_wh = h;
-        }
-    }
     LOG("video: SDL %d.%d.%d on %s\n", SDL_VERSIONNUM_MAJOR(SDL_GetVersion()), SDL_VERSIONNUM_MINOR(SDL_GetVersion()),
         SDL_VERSIONNUM_MICRO(SDL_GetVersion()), SDL_GetCurrentVideoDriver());
     g_start = plat_ns();
 #ifdef SWR_VULKAN
-    extern void gpu_vk_start(void);
-    gpu_vk_start();
-#else
+    if (renderer_wants_vulkan()) {
+        if (open_window(title, 1)) {
+            g_vkr = 1;
+            if (vkr_start()) {
+                LOG("renderer: Vulkan (renderer=opengl in the .ini for OpenGL)\n");
+                return;
+            }
+            g_vkr = 0;
+            SDL_DestroyWindow(g_win);
+            g_win = NULL;
+        }
+        LOG("renderer: Vulkan can't start here (see above), using OpenGL\n");
+    }
+#endif
+    if (!open_window(title, 0)) fatal("SDL could not open a window: %s", SDL_GetError());
+    LOG("renderer: OpenGL\n");
     extern void gpu_gl_start(void);
     gpu_gl_start();
-#endif
 }
 
 #ifdef SWR_VULKAN
@@ -107,7 +126,7 @@ int backend_vk_surface(VkInstance instance, VkSurfaceKHR* surface) {
     LOG("video: no Vulkan surface: %s\n", SDL_GetError());
     return 0;
 }
-#else
+#endif
 /* GPU thread: the window's context, and a second one sharing it for the GL worker */
 int backend_gl_create(void) {
     static const int vers[4][2] = {{4, 6}, {4, 5}, {4, 4}, {4, 3}};
@@ -133,21 +152,14 @@ int backend_gl_worker_current(void) {
     if (!g_wctx) return 0;
     return SDL_GL_MakeCurrent(g_helper ? g_helper : g_win, g_wctx) ? 1 : 0;
 }
-#endif
 void backend_window_size(int* w, int* h) {
     *w = g_ww;
     *h = g_wh;
 }
 void video_present_rgba(const u32* px, int w, int h, int stride) {
-#ifdef SWR_VULKAN
-    (void)px; /* the Vulkan renderer presents from the game's buffer (gpu_gl_present_buffer) */
-    (void)w;
-    (void)h;
-    (void)stride;
-#else
+    /* the Vulkan renderer presents from the game's buffer (gpu_gl_present_buffer) */
     extern void gpu_gl_present_cpu(const u32*, int, int, int);
-    gpu_gl_present_cpu(px, w, h, stride);
-#endif
+    if (!g_vkr) gpu_gl_present_cpu(px, w, h, stride);
 }
 
 static const char* HELP = "Controller: like a Switch controller, buttons by position.\n\n"
@@ -241,16 +253,16 @@ static void hotkey(SDL_Keycode k) {
             gpu_gl_dump_rts();
             break;
         }
-#if defined(_WIN32) && !defined(SWR_VULKAN)
-        case SDLK_F7: g_rec_toggle = 1; break;
+#ifdef _WIN32
+        case SDLK_F7: /* the recorder and the full-resolution screenshot are OpenGL's */
+            if (!g_vkr) g_rec_toggle = 1;
+            break;
 #endif
-#ifndef SWR_VULKAN
         case SDLK_F8: {
             extern volatile int g_shot8_req;
-            g_shot8_req = 1;
+            if (!g_vkr) g_shot8_req = 1;
             break;
         }
-#endif
         case SDLK_F11: set_fullscreen(!g_fullscreen); break;
     }
 }

@@ -67,8 +67,8 @@ static int render_begin(Surf** rt, Surf* zt, u32 n, int zt_ro) {
                     VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
         ca[i].imageView = rt[i]->att;
         ca[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        if (rt[i]->w < ext.width) ext.width = rt[i]->w;
-        if (rt[i]->h < ext.height) ext.height = rt[i]->h;
+        if (rt[i]->sw < ext.width) ext.width = rt[i]->sw;
+        if (rt[i]->sh < ext.height) ext.height = rt[i]->sh;
     }
     VkRenderingAttachmentInfo za = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
                                     .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
@@ -87,8 +87,8 @@ static int render_begin(Surf** rt, Surf* zt, u32 n, int zt_ro) {
                         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
         za.imageView = zt->att;
         za.imageLayout = zl;
-        if (zt->w < ext.width) ext.width = zt->w;
-        if (zt->h < ext.height) ext.height = zt->h;
+        if (zt->sw < ext.width) ext.width = zt->sw;
+        if (zt->sh < ext.height) ext.height = zt->sh;
     }
     VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
                           .renderArea = {{0, 0}, ext},
@@ -204,7 +204,8 @@ void vk_render_clear(GpuChannel* ch, u32 v) {
     VkClearRect rect = {{{0, 0}, g_rp.ext}, 0, 1};
     if ((r[0x43E] & 0x10) && (r[0x380] & 1)) { /* scissored clear */
         u32 xs = r[0x381], ys = r[0x382];
-        i32 x0 = (i32)(xs & 0xFFFF), x1 = (i32)(xs >> 16), y0 = (i32)(ys & 0xFFFF), y1 = (i32)(ys >> 16);
+        i32 x0 = (i32)vk_scf(xs & 0xFFFF), x1 = (i32)vk_scf(xs >> 16), y0 = (i32)vk_scf(ys & 0xFFFF),
+            y1 = (i32)vk_scf(ys >> 16);
         if (x1 > (i32)g_rp.ext.width) x1 = (i32)g_rp.ext.width;
         if (y1 > (i32)g_rp.ext.height) y1 = (i32)g_rp.ext.height;
         if (x1 <= x0 || y1 <= y0) return;
@@ -486,7 +487,7 @@ static int frame_consts(VkBuffer* buf, u64* off) {
     if (frame != vk_frame_number()) {
         u8* p = vk_stage(64, vk_stage_align(), &b, &o);
         if (!p) return 0;
-        float rs[4] = {1, 1, 1, 0}, fa[4] = {0, 0, 0, 1};
+        float rs[4] = {1 / g_vk_scale, 1 / g_vk_scale, g_vk_scale, 0}, fa[4] = {0, 0, 0, 1};
         u32 ia[4] = {0, 0, 0, 1};
         memcpy(p, rs, 16);
         memcpy(p + 16, fa, 16);
@@ -680,6 +681,31 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
     u32 n;
     read_targets(ch, rt, &zt, &n);
     if (!n && !zt) {
+        g_vk_skipped++;
+        return;
+    }
+    static u32 last_cw, last_ch; /* the size of the last color target drawn to */
+    if (n && rt[0]) {
+        last_cw = rt[0]->w;
+        last_ch = rt[0]->h;
+    }
+    extern int g_opt_shadows;
+    if (!g_opt_shadows && !n && zt && (zt->w != last_cw || zt->h != last_ch)) {
+        /* shadows=0: depth-only passes at another size (shadow maps) are skipped, and the map is cleared to far once
+           a frame so it reads as fully lit, as gpu_gl.c does */
+        static u32 cleared_frame = ~0u;
+        static Surf* cleared;
+        if (cleared_frame != g_vk_present || cleared != zt) {
+            cleared_frame = g_vk_present;
+            cleared = zt;
+            if (render_begin(rt, zt, 0, 0)) {
+                VkClearAttachment a = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT |
+                                                     (zt->f.stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0)};
+                a.clearValue.depthStencil = (VkClearDepthStencilValue){1.0f, 0};
+                VkClearRect cr = {{{0, 0}, g_rp.ext}, 0, 1};
+                vkCmdClearAttachments(vk_cmd(), 1, &a, 1, &cr);
+            }
+        }
         g_vk_skipped++;
         return;
     }
@@ -888,10 +914,10 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
     int yflip = sy < 0;
     if (2 * ax < 1 || 2 * ay < 1) {
         u32 vx = r[0x300], vy = r[0x301];
-        vp = (VkViewport){(float)(vx & 0xFFFF), (float)(vy & 0xFFFF), (float)(vx >> 16), (float)(vy >> 16), 0, 1};
+        vp = (VkViewport){vk_scf(vx & 0xFFFF), vk_scf(vy & 0xFFFF), vk_scf(vx >> 16), vk_scf(vy >> 16), 0, 1};
         yflip = 0;
     } else
-        vp = (VkViewport){tx - ax, ty - sy, 2 * ax, 2 * sy, 0, 1};
+        vp = (VkViewport){vk_scf(tx - ax), vk_scf(ty - sy), vk_scf(2 * ax), vk_scf(2 * sy), 0, 1};
     {
         float zn, zf;
         memcpy(&zn, &r[0x302], 4);
@@ -907,7 +933,8 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
     VkRect2D sc = {{0, 0}, g_rp.ext};
     if (r[0x380] & 1) {
         u32 xs = r[0x381], ys = r[0x382];
-        i32 x0 = (i32)(xs & 0xFFFF), x1 = (i32)(xs >> 16), y0 = (i32)(ys & 0xFFFF), y1 = (i32)(ys >> 16);
+        i32 x0 = (i32)vk_scf(xs & 0xFFFF), x1 = (i32)vk_scf(xs >> 16), y0 = (i32)vk_scf(ys & 0xFFFF),
+            y1 = (i32)vk_scf(ys >> 16);
         if (x1 > (i32)g_rp.ext.width) x1 = (i32)g_rp.ext.width;
         if (y1 > (i32)g_rp.ext.height) y1 = (i32)g_rp.ext.height;
         sc = x1 > x0 && y1 > y0 ? (VkRect2D){{x0, y0}, {(u32)(x1 - x0), (u32)(y1 - y0)}} : (VkRect2D){{0, 0}, {0, 0}};
