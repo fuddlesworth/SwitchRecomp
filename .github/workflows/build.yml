@@ -45,6 +45,10 @@ jobs:
         run: |
           cmake --preset ${{ matrix.preset }}
           cmake --build --preset ${{ matrix.preset }}
+      - name: Build the Vulkan renderer too
+        run: |
+          cmake -B build/vulkan -G Ninja -DSWR_GPU=vulkan -DCMAKE_C_COMPILER=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} -DCMAKE_CXX_COMPILER=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }}
+          cmake --build build/vulkan
       - name: Build the X11 backend too
         run: |
           cmake -B build/x11 -G Ninja -DSWR_BACKEND=x11 -DCMAKE_C_COMPILER=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} -DCMAKE_CXX_COMPILER=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }}
