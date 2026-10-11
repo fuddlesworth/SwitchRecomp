@@ -2,7 +2,7 @@
    guest submit (and again after the GPU front end wrote it). Data that changed is copied into the frame's staging
    ring, which draws read directly; data that stayed the same over a few checks gets a buffer of its own, written
    once and never changed (a change makes a new one), so nothing waits for the GPU. Big ranges that have been stable
-   for long are checked less often, like gpu/gl/renderer.c's buf_cached. */
+   for long are checked less often. */
 #include <stdlib.h>
 #include <string.h>
 #include "gpu/gpu.h"

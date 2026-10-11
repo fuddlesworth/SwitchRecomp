@@ -10,12 +10,6 @@
 #include <stdarg.h>
 #include "gpu/shader/translator.h"
 
-int g_glsl_version = 440;
-int g_vs_layer_ext = 1; /* 1 ARB_shader_viewport_layer_array, 2 AMD_vertex_shader_layer, 3 NV_viewport_array2, 0 none */
-int g_glsl_es = 0;
-int g_rs_binding = 83; /* binding of the res-scale UBO, set by gpu_gl */ /* GLSL ES 3.20 (Android) */
-int g_shader_vulkan; /* emit GLSL 4.50 for Vulkan (gpu/vk/spirv.c compiles it to SPIR-V), with the bindings in shader.h */
-
 void sb_put(Sb* s, const char* t) {
     size_t l = strlen(t);
     if (s->n + l + 1 > s->cap) {
@@ -45,10 +39,8 @@ char* T(const char* f, ...) {
     return r;
 }
 int shader_vk_set(int stage) { return stage == ST_FS ? 1 : (stage == ST_VS || stage == ST_CS) ? 0 : 2; }
-/* where a declaration binds: its set and binding in Vulkan mode, its GL binding otherwise */
-static const char* bind_at(int stage, int vk_binding, int gl_binding) {
-    return g_shader_vulkan ? T("set=%d, binding=%d", shader_vk_set(stage), vk_binding) : T("binding=%d", gl_binding);
-}
+/* where a declaration binds: its stage's set, and its binding in it (shader.h) */
+static const char* bind_at(int stage, int binding) { return T("set=%d, binding=%d", shader_vk_set(stage), binding); }
 
 char* R(Ctx* c, u32 r) {
     if (r == 255) return "0u";
@@ -759,51 +751,16 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     } /* dead if we already ended with EXIT */
     /* declarations */
     Sb* D = &c->decl;
-    if (g_shader_vulkan) {
-        sb_put(D, "#version 450\n");
-        if (c->uses_draw_params) sb_put(D, "#extension GL_ARB_shader_draw_parameters : require\n");
-    } else if (g_glsl_es) {
-        sb_put(D, "#version 320 es\nprecision highp float;\nprecision highp int;\n");
-        static const char* ps[] = {"sampler2D",
-                                   "sampler3D",
-                                   "samplerCube",
-                                   "sampler2DArray",
-                                   "samplerCubeArray",
-                                   "sampler2DShadow",
-                                   "sampler2DArrayShadow",
-                                   "samplerCubeShadow",
-                                   "samplerCubeArrayShadow",
-                                   "isampler2D",
-                                   "usampler2D",
-                                   "isampler3D",
-                                   "usampler3D",
-                                   "isampler2DArray",
-                                   "usampler2DArray"};
-        for (unsigned k = 0; k < sizeof ps / sizeof ps[0]; k++) sb_f(D, "precision highp %s;\n", ps[k]);
-    } else
-        sb_f(D, "#version %d core\n", g_glsl_version);
-    /* gl_Layer from the VS needs an extension on desktop GL; without one we render to layer 0 */
-    if (stage != ST_FS && si->writes_layer) {
-        if (g_shader_vulkan || g_vs_layer_ext == 1)
-            sb_put(D,
-                   "#extension GL_ARB_shader_viewport_layer_array : require\n#define SWR_SET_LAYER(v) gl_Layer=(v)\n");
-        else if (g_vs_layer_ext == 2)
-            sb_put(D, "#extension GL_AMD_vertex_shader_layer : require\n#define SWR_SET_LAYER(v) gl_Layer=(v)\n");
-        else if (g_vs_layer_ext == 3)
-            sb_put(D, "#extension GL_NV_viewport_array2 : require\n#define SWR_SET_LAYER(v) gl_Layer=(v)\n");
-        else
-            sb_put(D, "#define SWR_SET_LAYER(v)\n");
-    }
+    sb_put(D, "#version 450\n");
+    if (c->uses_draw_params) sb_put(D, "#extension GL_ARB_shader_draw_parameters : require\n");
+    /* gl_Layer from a stage before the fragment shader */
+    if (stage != ST_FS && si->writes_layer)
+        sb_put(D, "#extension GL_ARB_shader_viewport_layer_array : require\n#define SWR_SET_LAYER(v) gl_Layer=(v)\n");
     if (stage == ST_FS && (si->sph[0] >> 15 & 1)) {}
     if (stage == ST_FS && si->uses_position_in)
-        sb_f(D, "layout(std140, %s) uniform SWR_RS { vec4 swr_rs; };\n",
-             bind_at(stage, SWR_VKB_RS, g_rs_binding)); /* 1/res scale */
-    /* packed binding numbers, Intel's windows driver has very few: VS 0.., FS 1.., others 2.. */
-    int slot = stage == ST_VS ? 0 : stage == ST_FS ? 1 : 2;
-    int base_bind = slot * 18;
+        sb_f(D, "layout(std140, %s) uniform SWR_RS { vec4 swr_rs; };\n", bind_at(stage, SWR_VKB_RS)); /* 1/res scale */
     for (int i = 0; i < si->ngbuf; i++)
-        sb_f(D, "layout(std430, %s) %sbuffer S%d_G%d { uint d[]; } g%d;\n",
-             bind_at(stage, SWR_VKB_SSBO + i, stage == ST_CS ? i : slot * 8 + i),
+        sb_f(D, "layout(std430, %s) %sbuffer S%d_G%d { uint d[]; } g%d;\n", bind_at(stage, SWR_VKB_SSBO + i),
              ((si->gbuf_wmask >> i) & 1) ? "" : "readonly ", stage, i, i);
     if (stage == ST_CS)
         sb_f(D, "layout(local_size_x=%u, local_size_y=%u, local_size_z=%u) in;\n",
@@ -811,12 +768,11 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
              si->cs_local[2] ? si->cs_local[2] : 1);
     for (int i = 0; i < 18; i++)
         if (si->cbuf_mask & (1u << i))
-            sb_f(D, "layout(std140, %s) uniform S%d_CB%d { vec4 d[4096]; } cb%d;\n",
-                 bind_at(stage, SWR_VKB_CB + i, base_bind + i), stage, i, i);
+            sb_f(D, "layout(std140, %s) uniform S%d_CB%d { vec4 d[4096]; } cb%d;\n", bind_at(stage, SWR_VKB_CB + i),
+                 stage, i, i);
     for (int i = 0; i < si->ntex; i++) {
         ShTex* t = &si->tex[i];
-        sb_f(D, "layout(%s) uniform %s S%d_tex%d;\n#define tex%d S%d_tex%d\n",
-             bind_at(stage, SWR_VKB_TEX + i, slot * (g_glsl_es ? 16 : 32) + i),
+        sb_f(D, "layout(%s) uniform %s S%d_tex%d;\n#define tex%d S%d_tex%d\n", bind_at(stage, SWR_VKB_TEX + i),
              T("%s%s",
                (!t->shadow && ((si->tex_int_mask >> i) & 1)) ? (((si->tex_sint_mask >> i) & 1) ? "i" : "u") : "",
                samp_type(t->type, t->array, t->shadow)),
@@ -836,17 +792,13 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
                 sb_f(D, "layout(location=%d) out vec4 out_attr%d;\n", i, i);
             }
         /* invariant so depth matches across passes with different shaders */
-        if (!g_glsl_es) {
-            if (si->writes_layer)
-                sb_put(
-                    D,
-                    "invariant gl_Position;\nout float gl_ClipDistance[8];\n"); /* Mesa drops gl_Layer when the block is redeclared */
-            else
-                sb_put(
-                    D,
-                    "out gl_PerVertex { invariant vec4 gl_Position; float gl_PointSize; float gl_ClipDistance[8]; };\n");
-        } else
-            sb_put(D, "invariant gl_Position;\n");
+        if (si->writes_layer)
+            sb_put(
+                D,
+                "invariant gl_Position;\nout float gl_ClipDistance[8];\n"); /* Mesa drops gl_Layer when the block is redeclared */
+        else
+            sb_put(D,
+                   "out gl_PerVertex { invariant vec4 gl_Position; float gl_PointSize; float gl_ClipDistance[8]; };\n");
     } else if (stage == ST_FS) {
         const u8* imap = (const u8*)si->sph + 0x18;
         for (int i = 0; i < 32; i++)
@@ -855,11 +807,7 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
                 u8 m = imap[i];
                 int f = (m & 3) == 1 || ((m >> 2) & 3) == 1 || (flat >> i) & 1;
                 int lin = (m & 3) == 3;
-                sb_f(D, "layout(location=%d) %sin vec4 in_attr%d;\n", i,
-                     f                     ? "flat "
-                     : (lin && !g_glsl_es) ? "noperspective "
-                                           : "",
-                     i);
+                sb_f(D, "layout(location=%d) %sin vec4 in_attr%d;\n", i, f ? "flat " : lin ? "noperspective " : "", i);
             }
         u32 target = si->sph[18];
         for (int rt = 0; rt < 8; rt++)
@@ -873,17 +821,14 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     if (stage == ST_CS) {
         static const char* it[6] = {"image1D", "imageBuffer", "image1DArray", "image2D", "image2DArray", "image3D"};
         for (int k = 0; k < si->nimg; k++)
-            sb_f(D, "layout(%s) writeonly uniform %s img%d;\n", bind_at(stage, SWR_VKB_IMG + k, k), it[si->img[k].type],
+            sb_f(D, "layout(%s) writeonly uniform %s img%d;\n", bind_at(stage, SWR_VKB_IMG + k), it[si->img[k].type],
                  k);
         if (c->uses_img_raw) {
             /* format class: 0 f32, 1 f16, 2 unorm8, 3 unorm16 */
             sb_put(
                 D,
-                g_shader_vulkan
-                    ? T("layout(std140, %s) uniform SWR_FMT { int swr_ic[8]; int swr_tc[32]; int swr_ib[8]; "
-                        "int swr_tb[32]; };\n",
-                        bind_at(stage, SWR_VKB_FMT, 0))
-                    : "uniform int swr_ic[8];\nuniform int swr_tc[32];\nuniform int swr_ib[8];\nuniform int swr_tb[32];\n");
+                T("layout(std140, %s) uniform SWR_FMT { int swr_ic[8]; int swr_tc[32]; int swr_ib[8]; int swr_tb[32]; };\n",
+                  bind_at(stage, SWR_VKB_FMT)));
             sb_put(
                 D,
                 "vec4 swr_r2v(uvec4 r, uint n, uint sz, int cls){\n"
@@ -912,13 +857,13 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
         if (f2) sb_put(D, "float ffmz(float a, float b, float c){ return (a==0.0 || b==0.0) ? c : fma(a,b,c); }\n");
     }
     sb_put(D, "void main(){\n");
-    if (c->stage == ST_VS && !g_glsl_es && !c->si->writes_point_size) sb_put(D, "  gl_PointSize = 1.0;\n");
+    if (c->stage == ST_VS && !c->si->writes_point_size) sb_put(D, "  gl_PointSize = 1.0;\n");
     /* VS regs are precise. depth prepass and color pass use different shaders with the same position math;
      if the driver fuses an fma in only one of them, depths differ by an ulp and the EQUAL test fails */
     {
         static int nop = -1;
         if (nop < 0) nop = getenv("SWR_NO_PRECISE_VS") != NULL;
-        const char* rq = (c->stage == ST_VS && !g_glsl_es && !nop) ? "precise uint" : "uint";
+        const char* rq = (c->stage == ST_VS && !nop) ? "precise uint" : "uint";
         for (int i = 0; i < 255; i++)
             if (c->used_reg[i]) sb_f(D, "  %s r%d = 0u;\n", rq, i);
     }

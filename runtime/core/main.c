@@ -15,6 +15,7 @@
 #include "hle/hid.h"
 #include "hle/nvdrv.h"
 #include "hle/services.h"
+#include "hle/vi.h"
 #include "kernel/kernel.h"
 #include "kernel/mem.h"
 #include "platform/backend.h"
@@ -193,26 +194,9 @@ int swr_main(int argc, char** argv) {
     while (!g_quit) {
         video_poll();
         hid_update();
-        vsync_tick_vt();
+        vi_vsync_tick();
         if (tick % 60 == 0) ini_poll();
         { kernel_heal_mutexes(); }
-        /* bail out of the slow clock if nothing was presented for 3s */
-        {
-            static int lf = -1, still;
-            if (g_vt_on) {
-                if (g_frames != lf) {
-                    lf = g_frames;
-                    still = 0;
-                } else if (++still == 180) {
-                    vt_set(0);
-                    WARN(
-                        "smooth recording: the game stopped presenting images; back to the normal clock (recording continues)\n");
-                }
-            } else {
-                lf = -1;
-                still = 0;
-            }
-        }
         frontend_frame();
         if (++tick % 300 == 0) save_hints();
         /* dump thread states to threads.txt every 15s, useful when something hangs */
@@ -227,10 +211,6 @@ int swr_main(int argc, char** argv) {
                 g_log_redirect = NULL;
                 fclose(f);
             }
-        }
-        /* auto diag only with diag=1, F5 always works */
-        {
-            if (g_opt_diag && (tick == 60 * 20 || tick == 60 * 40)) { g_renderer->dump_rts(); }
         }
         {
             static int last_frames = -1, still = 0, dumps = 0;
@@ -253,7 +233,6 @@ int swr_main(int argc, char** argv) {
             next = now;
     }
     save_hints();
-    { g_renderer->rec_finish(); }
     LOG("Exit.\n");
     fflush(NULL);
 #if defined(_WIN32)

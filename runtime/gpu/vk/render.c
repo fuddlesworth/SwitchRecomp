@@ -3,7 +3,7 @@
    at 0x54E, address at 0x3F8, size at 0x48A, format and tiling at 0x3FA). A dynamic rendering pass stays open while
    draws and clears keep the same set, and ends before anything that copies or transitions images.
 
-   A draw reads the same registers gpu/gl/renderer.c's glr_draw and apply_state do. The viewport maps the guest's
+   A draw reads the 3D engine's registers for its state. The viewport maps the guest's
    transform as is (y down, like the hardware), so no shader flips y; facing follows from that (see the raster
    state below). */
 #include <string.h>
@@ -419,7 +419,7 @@ static u32 tex_handle(int stage, u32 tcb, const ShTex* st) {
     return h;
 }
 
-/* the fragment shader keyed on which of its textures and outputs are integer (gpu/gl/renderer.c's fs_get_keyed) */
+/* the fragment shader keyed on which of its textures and outputs are integer */
 static VkSh* fs_get_keyed(GpuChannel* ch, u64 addr) {
     u32* r = ch->r3d;
     u32 ctl = r[0x487], count = ctl & 15;
@@ -561,7 +561,7 @@ static VkDescriptorSet stage_set(GpuChannel* ch, int stage, VkSh* s, Surf** rt, 
         size = (size + 3) & ~3u;
         VkBuffer b;
         u64 o;
-        /* written ones get a copy of their own (the writes stay on the GPU, as in gpu/gl/renderer.c) */
+        /* written ones get a copy of their own (the writes stay on the GPU) */
         int ok =
             addr && !((s->si.gbuf_wmask >> i) & 1) ? vk_buf_get(addr, size, &b, &o) : vk_buf_copy(addr, size, &b, &o);
         if (!ok) return VK_NULL_HANDLE;
@@ -694,7 +694,7 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
     }
     if (!g_opt_shadows && !n && zt && (zt->w != last_cw || zt->h != last_ch)) {
         /* shadows=0: depth-only passes at another size (shadow maps) are skipped, and the map is cleared to far once
-           a frame so it reads as fully lit, as gpu/gl/renderer.c does */
+           a frame so it reads as fully lit */
         static u32 cleared_frame = ~0u;
         static Surf* cleared;
         if (cleared_frame != g_vk_present || cleared != zt) {
@@ -943,8 +943,7 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
     }
     vkCmdSetScissorWithCount(cb, 1, &sc);
     /* raster state. Vulkan decides facing in framebuffer space with y down, where GL's lower-left origin reverses
-       the winding, so the guest's front face holds as is when y is flipped and swaps when it isn't (gpu/gl/renderer.c
-       flips it the other way round, for the same result) */
+       the winding, so the guest's front face holds as is when y is flipped and swaps when it isn't */
     vkCmdSetCullMode(cb, !r[0x646]           ? VK_CULL_MODE_NONE
                          : r[0x648] == 0x404 ? VK_CULL_MODE_FRONT_BIT
                          : r[0x648] == 0x408 ? VK_CULL_MODE_FRONT_AND_BACK

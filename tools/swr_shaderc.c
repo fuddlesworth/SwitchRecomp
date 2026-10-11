@@ -1,12 +1,11 @@
-/* Translates a shader corpus (SWR_SHADER_CORPUS=dir in a game run) offline and checks the result:
-   Vulkan mode compiles every shader to SPIR-V with glslang and, with --validate, checks it with spirv-val.
+/* Translates a shader corpus (SWR_SHADER_CORPUS=dir in a game run) offline and checks the result: every shader is
+   compiled to SPIR-V with glslang and, with --validate, checked with spirv-val.
 
-     swr-shaderc CORPUS_DIR [--out DIR] [--validate] [--gl] [--cache DIR] [--verbose]
+     swr-shaderc CORPUS_DIR [--out DIR] [--validate] [--cache DIR] [--verbose]
      swr-shaderc --nvn DIR --cache DIR
 
-   --out writes each shader's GLSL (and .spv in Vulkan mode) to DIR. --cache goes through the runtime's SPIR-V cache in
-   DIR, as the renderer does. --gl translates for OpenGL instead and only
-   writes GLSL, to compare the translator's GL output between two builds. Exit status 1 when anything failed.
+   --out writes each shader's GLSL and .spv to DIR, to compare the translator's output between two builds. --cache goes
+   through the runtime's SPIR-V cache in DIR, as the renderer does. Exit status 1 when anything failed.
 
    --nvn fills the SPIR-V cache before the game first runs (scripts/recomp.py does it): DIR holds the game's own NVN
    shader files, as Catherine ships them in romfs. Their programs translate the way the renderer translates them on
@@ -19,7 +18,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-int g_texoff_emul; /* gpu/gl/renderer.c's, read by the translator */
 
 static int write_file(const char* path, const void* p, size_t n) {
     FILE* f = fopen(path, "wb");
@@ -112,7 +110,7 @@ static int nvn_dir(const char* dir, const char* cache, int verbose) {
 
 int main(int argc, char** argv) {
     const char *dir = NULL, *out = NULL, *cache = NULL, *nvn = NULL;
-    int validate = 0, gl = 0, verbose = 0;
+    int validate = 0, verbose = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--nvn") && i + 1 < argc)
             nvn = argv[++i];
@@ -122,14 +120,12 @@ int main(int argc, char** argv) {
             cache = argv[++i];
         else if (!strcmp(argv[i], "--validate"))
             validate = 1;
-        else if (!strcmp(argv[i], "--gl"))
-            gl = 1;
         else if (!strcmp(argv[i], "--verbose"))
             verbose = 1;
         else if (argv[i][0] != '-' && !dir)
             dir = argv[i];
         else {
-            fprintf(stderr, "usage: %s CORPUS_DIR [--out DIR] [--validate] [--gl] [--cache DIR] [--verbose]\n", argv[0]);
+            fprintf(stderr, "usage: %s CORPUS_DIR [--out DIR] [--validate] [--cache DIR] [--verbose]\n", argv[0]);
             return 2;
         }
     }
@@ -138,14 +134,12 @@ int main(int argc, char** argv) {
             fprintf(stderr, "--nvn needs --cache DIR\n");
             return 2;
         }
-        g_shader_vulkan = 1;
         return nvn_dir(nvn, cache, verbose);
     }
     if (!dir) {
-        fprintf(stderr, "usage: %s CORPUS_DIR [--out DIR] [--validate] [--gl] [--cache DIR] [--verbose]\n", argv[0]);
+        fprintf(stderr, "usage: %s CORPUS_DIR [--out DIR] [--validate] [--cache DIR] [--verbose]\n", argv[0]);
         return 2;
     }
-    g_shader_vulkan = !gl;
     DIR* d = opendir(dir);
     if (!d) {
         fprintf(stderr, "cannot open %s\n", dir);
@@ -170,7 +164,7 @@ int main(int argc, char** argv) {
             continue;
         }
         char* glsl = shader_to_glsl(code, max_bytes, stage, &si);
-        if (!gl) glsl = vk_glsl_post(glsl, stage); /* the GLSL the renderer compiles */
+        glsl = vk_glsl_post(glsl, stage); /* the GLSL the renderer compiles */
         free(code);
         if (!glsl || si.unsupported) {
             untranslated++;
@@ -182,11 +176,6 @@ int main(int argc, char** argv) {
             char p[2200];
             snprintf(p, sizeof p, "%s/%s.glsl", out, base);
             write_file(p, glsl, strlen(glsl));
-        }
-        if (gl) {
-            ok++;
-            free(glsl);
-            continue;
         }
         char err[4096];
         size_t nwords = 0;

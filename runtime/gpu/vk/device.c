@@ -324,7 +324,7 @@ int vk_swapchain_create(void) {
     VkSurfaceFormatKHR* fs = calloc(nf ? nf : 1, sizeof *fs);
     vkGetPhysicalDeviceSurfaceFormatsKHR(g_vk.phys, g_vk.surface, &nf, fs);
     VkSurfaceFormatKHR fmt = fs[0];
-    for (u32 i = 0; i < nf; i++) /* the game renders in linear 8-bit like the GL default framebuffer */
+    for (u32 i = 0; i < nf; i++) /* the game renders in linear 8-bit */
         if ((fs[i].format == VK_FORMAT_B8G8R8A8_UNORM || fs[i].format == VK_FORMAT_R8G8B8A8_UNORM) &&
             fs[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             fmt = fs[i];
@@ -332,7 +332,7 @@ int vk_swapchain_create(void) {
         }
     free(fs);
 
-    /* no vsync, like the GL renderer (swap interval 0): the runtime paces frames itself */
+    /* no vsync: the runtime paces frames itself (fps_limit) */
     u32 nm = 0;
     vkGetPhysicalDeviceSurfacePresentModesKHR(g_vk.phys, g_vk.surface, &nm, NULL);
     VkPresentModeKHR* ms = calloc(nm ? nm : 1, sizeof *ms);

@@ -293,7 +293,7 @@ void vk_surf_evict(u32 before) {
         }
 }
 
-/* the 2D engine's blit between render targets, on the GPU (gpu/gl/renderer.c's glr_blit). The surfaces are gpu/engines.c's
+/* the 2D engine's blit between render targets, on the GPU. The surfaces are gpu/gpu.h's
    Surf2D. 0 when it can't be done there: the front end then copies through guest memory */
 static int blit_ok(VkFormat f, VkFormatFeatureFlags need) {
     VkFormatProperties p;

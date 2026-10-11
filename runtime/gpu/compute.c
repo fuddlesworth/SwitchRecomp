@@ -14,12 +14,11 @@ void compute_method(GpuChannel* ch, u32 m, u32 v, int last) {
         case 0x6D: i2m_data(ch, v); break;
         case 0xAF: /* launch; the first few programs get dumped for debugging */ {
             g_compute_launches++;
-            if (g_gl) g_renderer->note_compute();
             u64 qmd = (u64)ch->rcomp[0xAD] << 8;
             u64 code = ((u64)ch->rcomp[0x582] << 32) | ch->rcomp[0x583];
             u32 q[64];
             gmem_read(qmd, q, 256);
-            if (g_gl) { g_renderer->dispatch(ch, q, code); }
+            if (g_renderer_up) { g_renderer->dispatch(ch, q, code); }
             u64 prog = code + q[8];
             static u64 seen[32];
             static int ns;

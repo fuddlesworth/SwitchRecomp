@@ -1,5 +1,5 @@
-/* Guest formats -> Vulkan formats: render targets (the 3D class's RT_FORMAT and ZETA_FORMAT values, as gpu/gl/renderer.c's
-   rt_format reads them) and textures (the texture header's format word, as gpu/gl/renderer.c's tic_format). raw marks
+/* Guest formats -> Vulkan formats: render targets (the 3D class's RT_FORMAT and ZETA_FORMAT values) and textures (the texture
+   header's format word). raw marks
    formats whose guest bytes are exactly the Vulkan format's, so the render target can be copied to and from guest
    memory as is. */
 #include "platform/log.h"

@@ -27,11 +27,10 @@ static char* attr_read(Ctx* c, u32 addr, int is_output) {
         return T("floatBitsToUint(gl_in[0].gl_Position.%c)", "xyzw"[comp]);
     }
     switch (addr) {
-        /* Vulkan's instance index counts from the draw's first instance, GL's instance ID from 0 */
-        case 0x2FC: return c->stage != ST_VS ? "0u" : g_shader_vulkan ? "uint(gl_VertexIndex)" : "uint(gl_VertexID)";
+        /* Vulkan's instance index counts from the draw's first instance, the guest's instance ID from 0 */
+        case 0x2FC: return c->stage != ST_VS ? "0u" : "uint(gl_VertexIndex)";
         case 0x2F8:
             if (c->stage != ST_VS) return "0u";
-            if (!g_shader_vulkan) return "uint(gl_InstanceID)";
             c->uses_draw_params = 1;
             return "uint(gl_InstanceIndex - gl_BaseInstanceARB)";
         case 0x3FC: c->si->uses_front_face = 1; return c->stage == ST_FS ? "(gl_FrontFacing? 0xFFFFFFFFu : 0u)" : "0u";
@@ -67,10 +66,6 @@ static void attr_write(Ctx* c, u32 addr, const char* val) {
             emitl(c, "SWR_SET_LAYER(int(%s));", val);
             return;
         case 0x68: emitl(c, "/* viewport index */"); return;
-    }
-    if (addr >= 0x2C0 && addr < 0x2E0 && g_glsl_es) {
-        emitl(c, "/* clip %u: %s */", (addr - 0x2C0) >> 2, val);
-        return;
     }
     if (addr >= 0x2C0 && addr < 0x2E0) {
         emitl(c, "gl_ClipDistance[%u] = uintBitsToFloat(%s);", (addr - 0x2C0) >> 2, val);
@@ -198,7 +193,7 @@ static const char* IW(Ctx* c, int s, const char* smp) {
 const char* samp_type(int type, int array, int shadow) {
     /* GLES has no 1D textures, and Vulkan can't view the 2D images they are stored in as 1D: both read them as 2D */
     static const char* n[4] = {"1D", "2D", "3D", "Cube"};
-    if ((g_glsl_es || g_shader_vulkan) && type == 0) type = 1;
+    if (type == 0) type = 1;
     return T("sampler%s%s%s", n[type & 3], array ? "Array" : "", shadow ? "Shadow" : "");
 }
 /* store masked components of vec4 v into d, d+1, ... */
@@ -1383,7 +1378,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                     break; /* cube + LL: z in rb, lod in rb+1 (matches what NVN's compiler emits) */
             }
             int s = tex_slot(c, off, type, array, shadow, 0);
-            if ((g_glsl_es || g_shader_vulkan) && type == 0) crd = T("vec2(%s, 0.5)", crd);
+            if (type == 0) crd = T("vec2(%s, 0.5)", crd);
             if (array) crd = T("vec3(%s, float(%s))", crd, arr);
             const char* smp;
             if (shadow) {
@@ -1554,7 +1549,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 default: crd = T("ivec2(%s,%s)", R(c, ra), R(c, rb)); break;
             }
             int s = tex_slot(c, off, type, array, 0, 1);
-            if ((g_glsl_es || g_shader_vulkan) && type == 0) crd = T("ivec2(%s, 0)", crd);
+            if (type == 0) crd = T("ivec2(%s, 0)", crd);
             const char* smp =
                 ofs ? T("texelFetch(tex%d, %s + ivec2(bitfieldExtract(int(%s),0,4),bitfieldExtract(int(%s),4,4)), %s)",
                         s, crd, ofs, ofs, lod)
@@ -1686,7 +1681,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 m++;
             }
             int s = tex_slot2(c, off, type, array, dc, eid == O_TLD, bl, blbank);
-            if ((g_glsl_es || g_shader_vulkan) && type == 0) {
+            if (type == 0) {
                 crd = eid == O_TLD ? T("ivec2(%s, 0)", crd) : T("vec2(%s, 0.5)", crd);
                 dim = 2;
             }
@@ -1694,7 +1689,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             if (array && eid == O_TLD) crd = T("ivec%d(%s, int(%s))", dim + 1, crd, arr);
             const char* smp;
             if (eid == O_TMML) {
-                smp = g_glsl_es ? "vec4(0.0)" : T("vec4(textureQueryLod(tex%d, %s), 0.0, 0.0)", s, crd);
+                smp = T("vec4(textureQueryLod(tex%d, %s), 0.0, 0.0)", s, crd);
             } else if (eid == O_TLD) {
                 smp = T("texelFetch(tex%d, %s, %s)", s, crd, lod ? lod : "0");
             } else if (eid == O_TLD4) {
@@ -1717,22 +1712,12 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                     smp = dc ? (dc_comb ? T("vec4(texture(tex%d, %s))", s, cc)
                                         : T("vec4(texture(tex%d, %s, %s))", s, cc, dref))
                              : T("texture(tex%d, %s)", s, cc);
-                /* offset from a register. GLSL requires a constant expression here; NVIDIA lets it slide, AMD/Mesa
-         reject the shader. when the driver refuses (g_texoff_emul, see gl_selftest) add it to the coord
-         in level 0 texels instead */
-                if (ofs && !dc && dim == 2 && !lod && !bias) {
-                    if (g_texoff_emul)
-                        smp =
-                            array
-                                ? T("texture(tex%d, %s + vec3(vec2(ivec2(bitfieldExtract(int(%s),0,4),bitfieldExtract(int(%s),4,4)))/vec2(textureSize(tex%d,0).xy), 0.0))",
-                                    s, cc, ofs, ofs, s)
-                                : T("texture(tex%d, %s + vec2(ivec2(bitfieldExtract(int(%s),0,4),bitfieldExtract(int(%s),4,4)))/vec2(textureSize(tex%d,0)))",
-                                    s, cc, ofs, ofs, s);
-                    else
-                        smp = T(
-                            "textureOffset(tex%d, %s, ivec2(bitfieldExtract(int(%s),0,4),bitfieldExtract(int(%s),4,4)))",
-                            s, cc, ofs, ofs);
-                }
+                /* offset from a register. GLSL asks for a constant expression here, and glslang takes this one for
+                   Vulkan */
+                if (ofs && !dc && dim == 2 && !lod && !bias)
+                    smp =
+                        T("textureOffset(tex%d, %s, ivec2(bitfieldExtract(int(%s),0,4),bitfieldExtract(int(%s),4,4)))",
+                          s, cc, ofs, ofs);
             }
             emitl(c, "{ vec4 t_ = %s;", IW(c, s, smp));
             c->indent++;
@@ -1758,7 +1743,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             if (q == 1) {
                 emitl(c,
                       "{ ivec2 sz_ = textureSize(tex%d, int(%s)); uvec4 t_ = uvec4(uint(sz_.x), uint(sz_.y), 1u, %s);",
-                      s, R(c, a), g_glsl_es ? "1u" : T("uint(textureQueryLevels(tex%d))", s));
+                      s, R(c, a), T("uint(textureQueryLevels(tex%d))", s));
                 c->indent++;
                 u32 r = d;
                 for (int k = 0; k < 4; k++)
