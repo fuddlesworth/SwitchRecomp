@@ -86,9 +86,10 @@ a renderer rewrite on top of a memory-corruption bug would make every regression
       - The Vulkan renderer orders it that way (Phase 6, step 4): 0 crashes in 7 runs. What remains here is
         the same ordering for OpenGL, or Vulkan becoming the default.
 - [~] Turn compiler warnings back on (upstream builds with `-w`) and fix them file by file, starting with the
-      files we change. The default warnings are on since Phase 8 removed `-w`, and both compilers build clean
-      except for one: GCC's `-Wstringop-overflow` in `shader.c`, where `R(c, r + 2)` for a vector operand that
-      starts near register 255 writes past `used_reg[256]`. Next: what the hardware does there, then `-Wall`.
+      files we change. The default warnings are on since Phase 8 removed `-w`, and both compilers build clean.
+      They found one real bug, still open: in the shader translator, `R(c, r + 2)` for a vector operand that
+      starts near register 255 writes past `used_reg[256]` (GCC's `-Wstringop-overflow` saw it while `R` was
+      inlined into the same file). Next: what the hardware does there, then `-Wall`.
 
 ## Phase 3: sound
 
@@ -248,6 +249,7 @@ variant and run on Catherine with both renderers.
       now static to its own files.
 - [~] The big files split along their seams: `gpu/gl/renderer.c`, `shader.c`, `hle/services.c` (one file per service
       family), `main.c`, `kernel.c`, `cpu_helpers.c`, `plat.c`, `host1x.c`, `gpu/engines.c`. Done: the OpenGL
-      renderer (7900 lines) is ten files by job, sharing `gpu/gl/gl.h`.
+      renderer (7900 lines) is ten files by job, sharing `gpu/gl/gl.h`, and the shader translator
+      is four (`shader.c`, `decode.c`, `translate.c`, `corpus.c`), sharing `gpu/shader/translator.h`.
 - [ ] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.
 

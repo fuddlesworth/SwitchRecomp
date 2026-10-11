@@ -50,7 +50,8 @@ if(SWR_BACKEND STREQUAL "headless")
     swr_component(null gpu/null/null.c)
     list(APPEND components null)
 else()
-    swr_component(shader gpu/shader/shader.c gpu/texture/astc.c)
+    swr_component(shader gpu/shader/shader.c gpu/shader/decode.c gpu/shader/translate.c gpu/shader/corpus.c
+                  gpu/texture/astc.c)
     set(gl gpu/gl/renderer.c gpu/gl/formats.c gpu/gl/texture.c gpu/gl/programs.c gpu/gl/framebuffer.c gpu/gl/draw.c
            gpu/gl/trace.c gpu/gl/capture.c gpu/gl/framegen.c gpu/gl/compute.c gpu/gl/load.c gpu/gl/glq.c gpu/gl/glq_gen.c
            "${CMAKE_SOURCE_DIR}/third_party/bcn/bcn.cpp" "${CMAKE_SOURCE_DIR}/third_party/bcn/bcdec.cpp")
