@@ -1,12 +1,20 @@
 # Builds the SwitchRecomp runtime for Linux. The game module (<Game>_code.so) comes from switchrecomp.py, see
 # scripts/recomp.sh. Run scripts/bootstrap.sh once first: it builds OpenH264 and SPIRV-Cross into deps/linux.
 #
-#   cmake -B build -G Ninja && cmake --build build
+#   cmake --preset gcc && cmake --build --preset gcc        (or clang; see CMakePresets.json)
 #
 # After each build the runtime is copied next to every recompiled game in games/ (SWR_DEPLOY), so a runtime fix
 # reaches the games without recompiling them.
 cmake_minimum_required(VERSION 3.20)
 project(SwitchRecomp LANGUAGES C CXX)
+
+# GNU dialects: the runtime uses GNU extensions (statement expressions, __atomic builtins)
+set(CMAKE_C_STANDARD 23)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS ON)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS ON)
 
 set(SWR_BACKEND x11 CACHE STRING "Window and input backend: x11, x11es or headless")
 set_property(CACHE SWR_BACKEND PROPERTY STRINGS x11 x11es headless)
