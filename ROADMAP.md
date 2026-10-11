@@ -1,17 +1,18 @@
 # Roadmap
 
 This fork takes SwitchRecomp v142 (MZ Labs) and makes it a Linux-first project, with Catherine: Full Body
-(Asian release, TID 0100BC4010896000) as the game everything is checked against. The phases are in the order they
-should land. A phase can start before the previous one is finished where it says so.
+(USA release, TID 0100BF00112C0000 with its v2.0 update) as the game everything is checked against. Until 2026-10-11
+that was the Asian release (TID 0100BC4010896000): game addresses quoted below before that date, like the
+title-screen crash's, are in its code. The phases are in the order they should land. A phase can start before the previous one is finished where it says so.
 
 Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 
 Current order (2026-10-11): Phases 4, 5 and 6 are done, apart from trying a real controller (Phase 4), which needs
-someone with a pad. Now Phase 8 (code layout), then Phase 2's remaining items and sound (Phase 3).
+someone with a pad. Phase 8 (code layout) is done. Next: Phase 2's remaining items and sound (Phase 3).
 
 ## Where things stand (2026-10-11)
 
-Catherine boots through the logos, the intro movie, the terms screen, the main menu and the New Game cutscene at
+Catherine (the USA release since 2026-10-11, with its v2.0 update) boots through the logos, the intro movie, the terms screen, the main menu and the New Game cutscene at
 60 FPS. It took eight fixes to the v142 runtime to get there (see the history of `main`). There is no sound. The
 runtime has two renderers and uses Vulkan by default, with OpenGL as the fallback. On Vulkan the title-screen crash
 from Phase 2 hasn't happened in 13 runs. It still happens under OpenGL, in about half the runs past the title
@@ -23,10 +24,10 @@ How the pieces fit:
   `<Game>_code.so`. This part is a real recompilation.
 - **OS**: kernel, IPC and services are high-level emulation in `runtime/kernel/` and `runtime/hle/`.
 - **GPU**: emulated at the hardware level. The game's own NVN driver is recompiled with the game and writes Maxwell
-  command buffers. `runtime/gpu/` decodes them (`gpu.c`, `engines.c`, `maxwell3d.c`), `gpu/shader/` translates
+  command buffers. `runtime/gpu/` decodes them (`gpu.c`, the engines, `maxwell3d.c`), `gpu/shader/` translates
   Maxwell shader binaries to GLSL, and a renderer draws: `gpu/vk/` with Vulkan or `gpu/gl/` with OpenGL.
   The front end reaches the active one through `g_renderer`, a table of about 20 operations (`gpu/renderer.h`).
-- **Video**: `runtime/video/host1x.c` emulates NVDEC and VIC, with OpenH264 doing the H.264 decode.
+- **Video**: `runtime/video/` emulates NVDEC and VIC, with OpenH264 doing the H.264 decode.
 
 ## Phase 0: repository and build
 
@@ -246,7 +247,7 @@ variant and run on Catherine with both renderers.
       null renderers each fill in completely, and `g_renderer` pointing at the active one. It replaces the
       `gpu_gl_*` names, `gpu/renderer.c`'s forwarding macros and `gpu/gl/names.h`, and each renderer's functions are
       now static to its own files.
-- [~] The big files split along their seams: `gpu/gl/renderer.c`, `shader.c`, `hle/services.c` (one file per service
+- [x] The big files split along their seams: `gpu/gl/renderer.c`, `shader.c`, `hle/services.c` (one file per service
       family), `main.c`, `kernel.c`, `cpu_helpers.c`, `plat.c`, `host1x.c`, `gpu/engines.c`. Done: the OpenGL
       renderer (7900 lines) is ten files by job, sharing `gpu/gl/gl.h`, and the shader translator
       is four (`shader.c`, `decode.c`, `translate.c`, `corpus.c`), sharing `gpu/shader/translator.h`.
@@ -255,6 +256,9 @@ variant and run on Catherine with both renderers.
       the audio renderer update and the shared fonts moved to `hle/audren.c` and `hle/pl.c`. The kernel
       is six files (`kernel.c`, `thread.c`, `sync.c`, `svc.c`, `svc_mem.c`, `debug.c`), sharing
       `kernel/kernel_int.h`. The platform layer is a file per OS (`plat_posix.c`, `plat_win32.c` with
-      `profiler_win32.c`), and `plat.c` keeps logging.
+      `profiler_win32.c`), and `plat.c` keeps logging. The GPU engines are a file each (`mme.c`, `compute.c`,
+      `fermi2d.c`, `dma.c`, with the 3D engine's methods in `engines.c`), and host1x is `host1x.c`, `nvdec.c`
+      and `vic.c`. `abi/cpu_helpers.c` includes its helpers by topic from `abi/helpers/`, so the game module
+      still compiles them as one file.
 - [x] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.
 

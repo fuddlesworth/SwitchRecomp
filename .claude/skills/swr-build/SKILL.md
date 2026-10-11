@@ -81,7 +81,8 @@ To run a Windows build, use Wine with a game module built for Windows, kept out 
 ## When the game module must be recompiled
 
 Only when the generated code or its contract changed: `switchrecomp/` (codegen, a64, nxloader), `runtime/abi/cpu.h`,
-`runtime/abi/cpu_helpers.c`. Everything else in `runtime/` is the runtime alone. A recompile of Catherine takes several
+`runtime/abi/cpu_helpers.c` and the files it includes from `runtime/abi/helpers/`. Everything else in `runtime/` is
+the runtime alone. A recompile of Catherine takes several
 minutes with GCC; the objects in `games/<Game>_build/` are reused when their C didn't change.
 
 ```bash

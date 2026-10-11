@@ -25,9 +25,9 @@ each one owns, and how a frame gets from the game to the screen. `CLAUDE.md` lis
 `runtime/abi/` is compiled into both sides. `cpu.h` defines the guest CPU state (`CPU`: registers, flags, vector
 registers, the thread pointer registers), the dispatch lookup for indirect branches (`swr_lookup`), and `RtAPI`, the table of
 runtime functions the module calls: supervisor calls, undefined instructions, BRK, the system counter, FPCR changes
-and wait-for-event. `cpu_helpers.c` holds the instructions too large to generate inline (SIMD, crypto, float
-conversions). `SWR_ABI` in `cpu.h` is the version of this contract: the runtime refuses a module built against
-another one, and changing either file means recompiling every game.
+and wait-for-event. `cpu_helpers.c`, with the topic files it includes from `helpers/`, holds the instructions too
+large to generate inline (SIMD, crypto, float conversions). `SWR_ABI` in `cpu.h` is the version of this contract: the
+runtime refuses a module built against another one, and changing any of these files means recompiling every game.
 
 The module imports nothing from the runtime by name. Everything goes through `RtAPI`, which the runtime passes to the
 module when it loads it.
@@ -71,7 +71,8 @@ the console would, since the game's SDK code checks the replies and asserts when
    to `gpu_submit` (`gpu/gpu.c`).
 3. The renderer decides where that runs. OpenGL queues it for its own GPU thread, and Vulkan runs it on the
    submitting thread. Either way, `gpu.c` reads the command stream and sends each method to its engine: the 3D engine
-   (`engines.c`, `maxwell3d.c`), compute, the 2D blitter, DMA copies.
+   (`engines.c`, `maxwell3d.c`), the macro engine (`mme.c`), compute (`compute.c`), the 2D blitter (`fermi2d.c`),
+   DMA copies (`dma.c`).
 4. When the 3D engine sees a draw, it calls the active renderer through `g_renderer` (`gpu/renderer.h`). The renderer
    reads the GPU's state registers, finds or translates the shaders (`gpu/shader/`, Maxwell SASS to GLSL, then SPIR-V
    for Vulkan), finds or uploads the textures and buffers from guest memory, and draws.
