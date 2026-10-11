@@ -44,6 +44,10 @@ typedef double f64;
 #define SWR_INLINE  static inline __attribute__((always_inline))
 #endif
 
+/* the version of the contract between a game module and the runtime (this header, cpu_helpers.c, RtAPI and the
+   module descriptor). The recompiler stamps it into each module, the runtime refuses a module with another one */
+#define SWR_ABI 1
+
 #if defined(_WIN32)
 #define SWR_EXPORT __declspec(dllexport)
 #else

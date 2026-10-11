@@ -9,7 +9,7 @@
     python3 scripts/recomp.py work/Catherine Catherine
     python3 scripts/recomp.py work/Catherine Catherine --preset clang -- --native
 
-Options after `--` go to switchrecomp.py. The first run of a big game takes several minutes; later runs only
+Options after `--` go to the recompiler (python3 -m switchrecomp). The first run of a big game takes several minutes; later runs only
 recompile what changed.
 """
 
@@ -28,7 +28,7 @@ def main():
     ap.add_argument('game', help='the extracted game folder (exefs/ + romfs/)')
     ap.add_argument('name', help='output name, e.g. Catherine')
     ap.add_argument('--preset', choices=sorted(COMPILERS), default='gcc', help='CMake preset and compiler')
-    ap.add_argument('extra', nargs='*', help='more switchrecomp.py options, after --')
+    ap.add_argument('extra', nargs='*', help='more recompiler options, after --')
     a = ap.parse_args()
 
     subprocess.run(['cmake', '--preset', a.preset], cwd=REPO, check=True, stdout=subprocess.DEVNULL)
@@ -39,20 +39,19 @@ def main():
         extra += ['--cc', COMPILERS[a.preset]]
     cmd = [
         sys.executable,
-        os.path.join(REPO, 'switchrecomp.py'),
-        a.game,
+        '-m',
+        'switchrecomp',
+        os.path.abspath(a.game),
         '-o',
         a.name,
         '--outdir',
         os.path.join(REPO, 'games'),
         '--target',
         'win64' if WINDOWS else 'linux',
-        '--backend',
-        'win32' if WINDOWS else 'x11',
         '--runtime',
         runtime,
     ] + extra
-    rc = subprocess.run(cmd).returncode
+    rc = subprocess.run(cmd, cwd=REPO).returncode
     if rc == 0:
         prebuild_shaders(a.preset, os.path.join(REPO, 'games', a.name + '_data', 'romfs'))
     return rc

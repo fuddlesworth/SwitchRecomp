@@ -1,5 +1,5 @@
 # Builds the SwitchRecomp runtime for Linux, or for Windows with MinGW-w64 (natively, or cross-built). The
-# game module (<Game>_code.so or .dll) comes from switchrecomp.py, see scripts/recomp.py. Run scripts/bootstrap.py
+# game module (<Game>_code.so or .dll) comes from the recompiler (python3 -m switchrecomp), see scripts/recomp.py. Run scripts/bootstrap.py
 # once first: it builds OpenH264 and SPIRV-Cross into deps/linux or deps/win64.
 #
 #   cmake --preset gcc && cmake --build --preset gcc        (or clang, or mingw-cross; see CMakePresets.json)
@@ -52,7 +52,6 @@ function(swr_require_dep file option)
     endif()
 endfunction()
 
-# The same source list as switchrecomp.py's build_runtime
 set(sources plat mem kernel ipc svc_core svc_hid svc_fs svc_vi nvdrv gpu gpu_engines gpu_3d loader main host1x entry)
 if(SWR_BACKEND STREQUAL "headless")
     list(APPEND sources gpu_nogl)

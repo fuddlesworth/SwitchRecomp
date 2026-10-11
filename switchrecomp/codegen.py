@@ -10,8 +10,8 @@ codegen: analysis -> C.
 """
 
 import os, sys, struct, itertools
-import a64
-from a64 import lit, G, TABLE, FIELDS
+from . import a64
+from .a64 import lit, G, TABLE, FIELDS
 
 UNCOND = ('b', 'br', 'ret', 'brk')
 

@@ -19,12 +19,12 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
 
 | What happens | Why | What to do |
 | --- | --- | --- |
-| Movies stay black, the log says no H.264 decoder | `switchrecomp.py`'s own runtime build drops OpenH264 without a word when `deps/linux/lib/libdecoder.a` is missing | Build the runtime with CMake (`scripts/recomp.py` does). It refuses to configure without the library. |
+| Movies stay black, the log says no H.264 decoder | A runtime built some other way than CMake (upstream's recompiler had its own build) drops OpenH264 without a word when `deps/linux/lib/libdecoder.a` is missing | Build the runtime with CMake (`scripts/recomp.py` does). It refuses to configure without the library. |
 | A fix has no effect | The game ran an old runtime: the build didn't deploy (no `_code.so` in `games/` yet), or the game was already running | Check the deploy lines. A running game keeps its old copy (the deploy renames over it). |
 | The two presets disagree on what is deployed | Both deploy to the same `games/` | The last build wins. Rebuild the one you mean to test. |
 | A test binary next to the game was overwritten | The deploy targets every `*_code.so` in `games/`, symlinks included | Keep A/B copies outside `games/`, or don't build while they exist. |
 | No warnings | Upstream builds with `-w` | Check a changed file with warnings on: `gcc -std=gnu23 -O2 -Wall -Wextra -fsyntax-only -Iruntime -Iruntime/bcn -Ideps/linux/include runtime/FILE.c`. Fix what comes from the change. |
-| Game crashes at startup with "recompiled code is from another SwitchRecomp version" | `ABI` in `switchrecomp.py` and the runtime's check disagree | Recompile the game. |
+| Game crashes at startup with "recompiled code is from another SwitchRecomp version" | The game module was built against another `SWR_ABI` (`runtime/cpu.h`) | Recompile the game. |
 
 ## The Vulkan renderer
 
@@ -63,7 +63,7 @@ The SDL3 backend, with both renderers, builds for Windows too: `cmake --preset m
 -DSWR_BACKEND=sdl3 -DSWR_DEPLOY=OFF` (the bootstrap builds a static SDL3 into `deps/win64/sdl3`).
 
 To run a Windows build, use Wine with a game module built for Windows, kept out of `games/`:
-- `switchrecomp.py work/Catherine -o Catherine --outdir build/wingame --target win64 --cc x86_64-w64-mingw32-gcc
+- `python3 -m switchrecomp work/Catherine -o Catherine --outdir build/wingame --target win64 --cc x86_64-w64-mingw32-gcc
   --runtime build/mingw-sdl3/swr-runtime.exe`. Make `build/wingame/Catherine_data/romfs` a symlink to the Linux copy
   first, or it copies 13 GB.
 - Use a prefix of its own, made without the Mono and Gecko installers, which otherwise wait for a click with nothing
@@ -75,7 +75,7 @@ To run a Windows build, use Wine with a game module built for Windows, kept out 
 
 ## When the game module must be recompiled
 
-Only when the generated code or its contract changed: `codegen.py`, `a64.py`, `nxloader.py`, `runtime/cpu.h`,
+Only when the generated code or its contract changed: `switchrecomp/` (codegen, a64, nxloader), `runtime/cpu.h`,
 `runtime/cpu_helpers.c`. Everything else in `runtime/` is the runtime alone. A recompile of Catherine takes several
 minutes with GCC; the objects in `games/<Game>_build/` are reused when their C didn't change.
 

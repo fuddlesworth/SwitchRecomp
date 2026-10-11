@@ -15,7 +15,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, '..')]
-import nxloader  # noqa: E402
+from switchrecomp import nxloader  # noqa: E402
 
 from symbols import Symbols  # noqa: E402
 

@@ -35,4 +35,4 @@ The orchestrator applies your fixes without re-deriving them. A confident causal
 
 ## Known past-bug shapes to check for
 - IAudioOut never released buffers, so CRI movies stopped after about ten frames; the released-buffer array was not cleared, so the SDK re-appended stale tags.
-- Without OpenH264 for the target, `switchrecomp.py` built the runtime with `-DSWR_NO_H264` silently and movies stayed black.
+- Without OpenH264 for the target, the recompiler's old runtime build used `-DSWR_NO_H264` silently and movies stayed black.

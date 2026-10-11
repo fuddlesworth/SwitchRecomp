@@ -769,7 +769,7 @@ int swr_main(int argc, char** argv) {
     g_t0 = plat_ns();
     LOG("SwitchRecomp - %s\n", g_exename);
     if (load_code()) fatal("Could not load the game's recompiled code.");
-    if (g_mod->abi != 1) fatal("The recompiled code is from another SwitchRecomp version.");
+    if (g_mod->abi != SWR_ABI) fatal("The recompiled code is from another SwitchRecomp version.");
     g_title_id = g_mod->title_id;
     mem_init();
     kernel_init();
