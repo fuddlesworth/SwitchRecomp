@@ -1218,9 +1218,24 @@ static int csrng_disp(SvcObj* o, IpcCtx* c) {
     return 0;
 }
 static SvcObj* new_csrng(void) { return svcobj_new("csrng", csrng_disp, 0); }
+/* mm:u (multimedia clock requests): 4 Initialize -> id, 6 SetAndWait(id,min,max), 7 Get(id) -> rate.
+   Get has to return what SetAndWait asked for: NvMM reads the decoder clock back */
+static u32 g_mm_rate[16];
 static int mm_disp(SvcObj* o, IpcCtx* c) {
     (void)o;
-    if (c->cmd == 4 || c->cmd == 6) out32(c, 1);
+    if (c->cmd == 4) {
+        out32(c, 1);
+        return 0;
+    }
+    if (c->cmd == 6) {
+        u32 id = in32(c, 0), mn = in32(c, 4);
+        g_mm_rate[id & 15] = mn;
+        return 0;
+    }
+    if (c->cmd == 7) {
+        out32(c, g_mm_rate[in32(c, 0) & 15]);
+        return 0;
+    }
     return 0;
 }
 static SvcObj* new_mm(void) { return svcobj_new("mm:u", mm_disp, 0); }
