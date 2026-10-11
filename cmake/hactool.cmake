@@ -4,7 +4,9 @@
 set(src "${hactool_SOURCE_DIR}")
 file(GLOB mbedtls_sources CONFIGURE_DEPENDS "${src}/mbedtls/library/*.c")
 add_library(hactool_mbedtls STATIC ${mbedtls_sources})
-target_include_directories(hactool_mbedtls SYSTEM PUBLIC "${src}/mbedtls/include")
+# A plain -I, not -isystem: the compiler searches every -I folder before any -isystem one, so with -isystem an
+# -I/usr/local/include in CFLAGS (usual on FreeBSD) put a system mbedtls 3 ahead of the bundled 2.x headers
+target_include_directories(hactool_mbedtls BEFORE PUBLIC "${src}/mbedtls/include")
 target_compile_options(hactool_mbedtls PRIVATE -w)
 set_target_properties(hactool_mbedtls PROPERTIES C_STANDARD 99 C_EXTENSIONS ON)
 

@@ -17,8 +17,8 @@ target_compile_options(swr_common INTERFACE -fno-strict-aliasing
 if(SWR_VULKAN)
     target_compile_definitions(swr_common INTERFACE SWR_VULKAN VK_NO_PROTOTYPES)
     target_link_libraries(swr_common INTERFACE Vulkan::Headers)
-    target_include_directories(swr_common SYSTEM INTERFACE "${volk_SOURCE_DIR}"
-                                                           "${VulkanMemoryAllocator_SOURCE_DIR}/include")
+    target_include_directories(swr_common BEFORE INTERFACE "${volk_SOURCE_DIR}"
+                                                    "${VulkanMemoryAllocator_SOURCE_DIR}/include")
 endif()
 if(NOT SWR_H264)
     target_compile_definitions(swr_common INTERFACE SWR_NO_H264)

@@ -21,7 +21,10 @@ if(NOT EXISTS "${cpm_file}")
 endif()
 include("${cpm_file}")
 
-# Third-party code builds with its own flags and stays out of the warning output
+# Packages whose headers a system may also have (Vulkan, glslang) are added without SYSTEM. The compiler searches every
+# -I folder before any -isystem one, so as -isystem they lost to an -I/usr/local/include in CFLAGS, usual on FreeBSD,
+# and the build mixed in the system's copies. Third-party code builds with its own flags and stays out of the warning
+# output
 function(swr_quiet)
     foreach(target IN LISTS ARGN)
         target_compile_options(${target} PRIVATE -w)
@@ -41,7 +44,7 @@ if(SWR_VULKAN)
     CPMAddPackage(NAME Vulkan-Headers VERSION 1.4.365
                   URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.365.tar.gz
                   URL_HASH SHA256=ed832b3292cce324ebba6522fd2d3004bf1b797fa49bfbcad0b302ff23d56abc
-                  EXCLUDE_FROM_ALL YES SYSTEM YES)
+                  EXCLUDE_FROM_ALL YES)
     # volk.c is compiled into the vk component, VMA is a header
     CPMAddPackage(NAME volk VERSION 1.4.363
                   URL https://github.com/zeux/volk/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz
@@ -55,7 +58,7 @@ if(SWR_VULKAN)
     CPMAddPackage(NAME glslang VERSION 16.6.0
                   URL https://github.com/KhronosGroup/glslang/archive/refs/tags/16.6.0.tar.gz
                   URL_HASH SHA256=9c09b901149c729df745057dafa815278aaa101b84d2b6e14f16a42de52f97f2
-                  EXCLUDE_FROM_ALL YES SYSTEM YES
+                  EXCLUDE_FROM_ALL YES
                   OPTIONS "BUILD_SHARED_LIBS OFF" "ENABLE_OPT OFF" "ENABLE_HLSL OFF" "ENABLE_GLSLANG_BINARIES OFF"
                           "GLSLANG_TESTS OFF" "BUILD_EXTERNAL OFF" "ENABLE_PCH OFF" "GLSLANG_ENABLE_INSTALL OFF"
                           "ENABLE_SPVREMAPPER OFF")
