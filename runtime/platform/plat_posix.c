@@ -23,8 +23,13 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <signal.h>
+#include <ucontext.h>
 #include <sched.h>
 #include <errno.h>
+/* FreeBSD has no MAP_NORESERVE: it never reserves swap for a mapping up front, so there is nothing to opt out of */
+#ifndef MAP_NORESERVE
+#define MAP_NORESERVE 0
+#endif
 void pm_init(PMutex* m) { pthread_mutex_init(&m->l, NULL); }
 void pm_lock(PMutex* m) { pthread_mutex_lock(&m->l); }
 void pm_unlock(PMutex* m) { pthread_mutex_unlock(&m->l); }
@@ -234,16 +239,17 @@ int plat_ncpu(void) {
 }
 static void sighandler(int sig, siginfo_t* si, void* uc_) {
     void* pc = NULL;
-#if defined(__x86_64__)
-#include <ucontext.h>
     ucontext_t* uc = (ucontext_t*)uc_;
+#if defined(__FreeBSD__) && defined(__x86_64__)
+    pc = (void*)uc->uc_mcontext.mc_rip;
+#elif defined(__FreeBSD__) && defined(__aarch64__)
+    pc = (void*)uc->uc_mcontext.mc_gpregs.gp_elr;
+#elif defined(__x86_64__)
     pc = (void*)uc->uc_mcontext.gregs[REG_RIP];
 #elif defined(__aarch64__)
-#include <ucontext.h>
-    ucontext_t* uc = (ucontext_t*)uc_;
     pc = (void*)uc->uc_mcontext.pc;
 #else
-    (void)uc_;
+    (void)uc;
 #endif
     crash_report(pc, si->si_addr, sig);
     _exit(1);
