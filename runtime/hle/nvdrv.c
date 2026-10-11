@@ -648,14 +648,14 @@ static u32 ioctl_gpu(NvFile* f, u32 cmd, u8* d, u32 n, u8* extra, u32 nextra) {
             u64* entries = (cmd & 0xFF) == 0x08 ? (u64*)(d + 24) : (u64*)extra;
             if ((cmd & 0xFF) == 0x1B && nextra < num * 8) num = nextra / 8;
             if (!f->syncpt) f->syncpt = syncpt_alloc();
-            if (flags & 1) { syncpt_wait(fid, fval, 2000000000); }
             u32 incs = ((flags & 2) ? 2 : 0) + ((flags & 0x100) ? fval : 0);
             pm_lock(&g_sync_lk);
             if ((i32)(syncpt_max[f->syncpt] - syncpt[f->syncpt]) < 0) syncpt_max[f->syncpt] = syncpt[f->syncpt];
             syncpt_max[f->syncpt] += incs;
             u32 promised = syncpt_max[f->syncpt];
             pm_unlock(&g_sync_lk);
-            gpu_submit(entries, num, f->syncpt, incs);
+            /* flags bit 0: the GPU waits for the fence passed in before running these */
+            gpu_submit(entries, num, f->syncpt, incs, (flags & 1) ? fid : ~0u, fval);
             fid = f->syncpt;
             fval = promised;
             memcpy(d + 16, &fid, 4);

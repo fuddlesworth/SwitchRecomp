@@ -369,16 +369,77 @@ void gpu_submit_now(u64* e, u32 n, u32 channel) {
     pm_unlock(&g_gpulock);
 }
 
+/* Submissions run in order on a thread of their own, as on the console: the ioctl only queues them, and the fence
+   it returns (the channel's syncpoint, incremented once the job is done) tells the game when the work is complete.
+   Processed inside the ioctl, the work held the game's submit lock for most of each frame: Tears of the Kingdom's
+   main thread waited on it nearly all the time and loading took minutes. */
+typedef struct {
+    u64* e;
+    u32 n, channel, incs;
+    u32 wait_id, wait_val; /* a fence to wait for first (wait_id ~0: none) */
+    void (*fn)(void*);     /* or a call made in order with the submissions (vi's presents) */
+    void* arg;
+} GpuJob;
+#define GPU_QUEUE 256
+static GpuJob g_q[GPU_QUEUE];
+static u32 g_qhead, g_qtail; /* jobs queued, jobs done */
+static PMutex g_qlock;
+static PCond g_qcv;
+static int g_qthread;
+
+static void gpu_run(GpuJob* j) {
+    if (j->fn) {
+        j->fn(j->arg);
+        return;
+    }
+    if (j->wait_id != ~0u) syncpt_wait(j->wait_id, j->wait_val, 2000000000);
+    gpu_submit_now(j->e, j->n, j->channel);
+    gpu_signal_point();
+    for (u32 i = 0; i < j->incs; i++) syncpt_incr(j->channel);
+}
+static void gpu_thread(void* p) {
+    (void)p;
+    for (;;) {
+        pm_lock(&g_qlock);
+        while (g_qtail == g_qhead) pc_wait(&g_qcv, &g_qlock, -1);
+        GpuJob j = g_q[g_qtail % GPU_QUEUE];
+        pm_unlock(&g_qlock);
+        gpu_run(&j);
+        free(j.e);
+        pm_lock(&g_qlock);
+        g_qtail++;
+        pc_broadcast(&g_qcv);
+        pm_unlock(&g_qlock);
+    }
+}
+
 void gpu_init(void) {
     pm_init(&g_gpulock);
+    pm_init(&g_qlock);
+    pc_init(&g_qcv);
     gpu3d_init();
 }
 
+static void gpu_queue(GpuJob j) {
+    pm_lock(&g_qlock);
+    if (!g_qthread) {
+        g_qthread = 1;
+        if (plat_thread(gpu_thread, NULL, (size_t)16 << 20)) fatal("could not start the GPU thread");
+    }
+    while (g_qhead - g_qtail >= GPU_QUEUE) pc_wait(&g_qcv, &g_qlock, -1);
+    g_q[g_qhead++ % GPU_QUEUE] = j;
+    pc_broadcast(&g_qcv);
+    pm_unlock(&g_qlock);
+}
 volatile u64 g_gpu_submits;
-void gpu_submit(u64* e, u32 n, u32 channel, u32 incs) {
+void gpu_submit(u64* e, u32 n, u32 channel, u32 incs, u32 wait_id, u32 wait_val) {
     g_gpu_submits++;
     if (g_renderer->async_submit(e, n, channel, incs)) return;
-    gpu_submit_now(e, n, channel);
-    gpu_signal_point();
-    for (u32 i = 0; i < incs; i++) syncpt_incr(channel);
+    GpuJob j = {malloc((u64)n * 8 + 8), n, channel, incs, wait_id, wait_val, NULL, NULL};
+    memcpy(j.e, e, (u64)n * 8);
+    gpu_queue(j);
+}
+void gpu_call(void (*fn)(void*), void* arg) {
+    GpuJob j = {NULL, 0, 0, 0, ~0u, 0, fn, arg};
+    gpu_queue(j);
 }

@@ -7,6 +7,7 @@
 #include "core/main.h"
 #include "core/options.h"
 #include "gpu/renderer.h"
+#include "gpu/gpu.h"
 #include "hle/nvdrv.h"
 #include "hle/services.h"
 #include "kernel/ipc.h"
@@ -86,6 +87,23 @@ static void present_slot(int i) {
     g_present_count++;
 }
 
+/* a queued frame, shown on the GPU thread after the work before it */
+typedef struct {
+    i32 slot;
+    u32 nf, id[4], val[4];
+} QueuedFrame;
+static void present_queued(void* p) {
+    QueuedFrame* q = p;
+    for (u32 i = 0; i < q->nf; i++)
+        if (q->id[i] != 0xFFFFFFFFu) syncpt_wait(q->id[i], q->val[i], 1000000000);
+    if (q->slot >= 0 && q->slot < 64) present_slot(q->slot);
+    pm_lock(&g_vilock);
+    if (q->slot >= 0 && q->slot < 64) slots[q->slot].queued = 0;
+    pc_broadcast(&g_free_cv);
+    pm_unlock(&g_vilock);
+    kevent_signal(g_bufavail_ev);
+    free(q);
+}
 static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
     (void)id;
     switch (code) {
@@ -167,8 +185,10 @@ static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
                         break;
                     }
                 if (k >= 0) break;
-                pc_wait(&g_free_cv, &g_vilock, 16000000); /* we release on present */
-                for (int i = 0; i < 64; i++) slots[i].queued = 0;
+                /* a slot comes free when the GPU thread shows its frame. If none does for a second, something
+                   went wrong: free them all rather than hang the game */
+                if (pc_wait(&g_free_cv, &g_vilock, 1000000000))
+                    for (int i = 0; i < 64; i++) slots[i].queued = 0;
             }
             slots[k].queued = 1;
             pm_unlock(&g_vilock);
@@ -184,19 +204,17 @@ static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
         }
         case 7: { /* QUEUE_BUFFER */
             i32 slot = (i32)pr_u32(in);
-            /* wait on the frame's fence if the GPU isn't done with it yet */
             u32 len = pr_u32(in);
             pr_u32(in);
             u8* qi = in->d + in->pos;
-            if (len >= 0x54) {
-                u32 nf;
-                memcpy(&nf, qi + 0x30, 4);
-                if (nf > 4) nf = 4;
-                for (u32 i = 0; i < nf; i++) {
-                    u32 id, val;
-                    memcpy(&id, qi + 0x34 + i * 8, 4);
-                    memcpy(&val, qi + 0x38 + i * 8, 4);
-                    if (id != 0xFFFFFFFFu) syncpt_wait(id, val, 100000000);
+            QueuedFrame* q = calloc(1, sizeof *q);
+            q->slot = slot;
+            if (len >= 0x54) { /* the frame's fences */
+                memcpy(&q->nf, qi + 0x30, 4);
+                if (q->nf > 4) q->nf = 4;
+                for (u32 i = 0; i < q->nf; i++) {
+                    memcpy(&q->id[i], qi + 0x34 + i * 8, 4);
+                    memcpy(&q->val[i], qi + 0x38 + i * 8, 4);
                 }
             }
             if (len >= 0x28) {
@@ -218,12 +236,9 @@ static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
                     }
                 }
             }
-            if (slot >= 0 && slot < 64) present_slot(slot);
-            pm_lock(&g_vilock);
-            if (slot >= 0 && slot < 64) slots[slot].queued = 0;
-            pc_broadcast(&g_free_cv);
-            pm_unlock(&g_vilock);
-            kevent_signal(g_bufavail_ev);
+            /* the compositor shows the frame once the GPU has drawn it, and QueueBuffer returns at once: shown here,
+               it held the game's queue lock while the GPU thread caught up, so its CPU and GPU work never overlapped */
+            gpu_call(present_queued, q);
             u32 qo[4] = {(u32)g_width, (u32)g_height, 0, 0};
             pw_bytes(out, qo, 16);
             pw_u32(out, 0);

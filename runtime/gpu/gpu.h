@@ -66,7 +66,11 @@ void gpu3d_init(void);
 
 /* gpu.c: GPFIFO submission */
 void gpu_init(void);
-void gpu_submit(u64* entries, u32 n, u32 channel, u32 incs);
+/* queues GPFIFO entries for the GPU thread, which waits for the fence (wait_id ~0: none), runs them, then
+   increments the channel's syncpoint incs times */
+void gpu_submit(u64* entries, u32 n, u32 channel, u32 incs, u32 wait_id, u32 wait_val);
+/* calls fn(arg) on the GPU thread once everything submitted before it has run */
+void gpu_call(void (*fn)(void*), void* arg);
 void gpu_submit_now(u64* e, u32 n, u32 channel);
 extern volatile u64 g_gpu_submits;
 extern void (*g_ww_touch)(u64 cpu); /* GPU wrote guest memory, record it for write tracking */
