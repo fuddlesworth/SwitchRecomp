@@ -713,9 +713,10 @@ def _(g):
             )
         return g.setW('rs', 'stxp(c,M,%s,%d,%s,%s)' % (A, size, g.X('rt'), g.X('rt2')))
     if o2 and not o1:
-        if L:
-            return g.setX('rt', '*(volatile %s*)MP(%s)' % (['u8', 'u16', 'u32', 'u64'][size], A))
-        return '{ %s(%s,%s); SWR_FENCE(); }' % (WR[size], A, g.X('rt'))
+        T = ['u8', 'u16', 'u32', 'u64'][size]
+        if L:  # LDAR
+            return g.setX('rt', 'LDACQ(%s,%s)' % (T, A))
+        return 'STREL(%s,%s,%s);' % (T, A, g.X('rt'))  # STLR
     return None
 
 

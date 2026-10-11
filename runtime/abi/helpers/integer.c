@@ -32,18 +32,21 @@ u32 swr_crc32(u32 acc, u64 val, int bytes, int castagnoli) {
     return acc;
 }
 
-u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
-#if defined(__x86_64__) && defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16)
-    unsigned __int128 o = ((unsigned __int128)o1 << 64) | o0, n = ((unsigned __int128)n1 << 64) | n0;
-    return __sync_bool_compare_and_swap((unsigned __int128*)p, o, n);
-#else
-    /* no cmpxchg16b: CAS the low half, compare the high half */
-    if (__atomic_load_n(&p[1], __ATOMIC_SEQ_CST) != o1) return 0;
-    if (!swr_cas64(&p[0], o0, n0)) return 0;
-    __atomic_store_n(&p[1], n1, __ATOMIC_SEQ_CST);
-    return 1;
+/* the 16-byte builtin compiles to lock cmpxchg16b only where cx16 is enabled, and the game module isn't built with
+   -mcx16, so STXP of a 64-bit pair used to take a fallback that swapped the two halves separately. That isn't atomic:
+   Tears of the Kingdom's lock-free lists (102 such pairs, a pointer and a counter) got a pointer from one thread and a
+   counter from another. Every x86-64 CPU that runs the game has cmpxchg16b, so this function enables it for itself.
+   Clang still warns that 16 bytes is past its lock-free size, though it emits the one instruction */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Watomic-alignment"
+#if defined(__x86_64__)
+__attribute__((target("cx16")))
 #endif
+u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
+    unsigned __int128 o = ((unsigned __int128)o1 << 64) | o0, n = ((unsigned __int128)n1 << 64) | n0;
+    return __atomic_compare_exchange_n((unsigned __int128*)p, &o, n, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 }
+#pragma clang diagnostic pop
 
 /* ================================================================ system */
 #define SYSREG(op0, op1, crn, crm, op2) ((((op0) & 1) << 14) | ((op1) << 11) | ((crn) << 7) | ((crm) << 3) | (op2))

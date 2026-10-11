@@ -402,14 +402,19 @@ SWR_INLINE u32 swr_cas8(u8* p, u8 o, u8 n) {
     return __atomic_compare_exchange_n(p, &o, n, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 }
 u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1);
-#define SWR_FENCE() __atomic_thread_fence(__ATOMIC_SEQ_CST)
+#define SWR_FENCE()    __atomic_thread_fence(__ATOMIC_SEQ_CST)
+/* LDAR/LDAXR/LDXR and STLR: guest accesses are plain C loads and stores, which the compiler may move across a volatile
+   access or past a fence that comes after the store. Seq_cst atomics keep the ordering ARM gives them (on x86 the load
+   is a mov, the store an xchg) */
+#define LDACQ(T, a)    __atomic_load_n((T*)MP(a), __ATOMIC_SEQ_CST)
+#define STREL(T, a, v) __atomic_store_n((T*)MP(a), (T)(v), __ATOMIC_SEQ_CST)
 SWR_INLINE u64 ldx(CPU* c, u8* M, u64 a, u32 sz) {
     u64 v;
     switch (sz) {
-        case 0: v = RD8(a); break;
-        case 1: v = RD16(a); break;
-        case 2: v = RD32(a); break;
-        default: v = RD64(a);
+        case 0: v = LDACQ(u8, a); break;
+        case 1: v = LDACQ(u16, a); break;
+        case 2: v = LDACQ(u32, a); break;
+        default: v = LDACQ(u64, a);
     }
     c->excl_addr = a;
     c->excl_val = v;
@@ -432,14 +437,14 @@ SWR_INLINE u32 stx(CPU* c, u8* M, u64 a, u32 sz, u64 v) {
 }
 SWR_INLINE void ldxp(CPU* c, u8* M, u64 a, u32 sz, u64* v1, u64* v2) {
     if (sz == 2) {
-        u64 t = RD64(a);
+        u64 t = LDACQ(u64, a);
         *v1 = (u32)t;
         *v2 = t >> 32;
         c->excl_val = t;
         c->excl_val2 = 0;
     } else {
-        *v1 = RD64(a);
-        *v2 = RD64(a + 8);
+        *v1 = LDACQ(u64, a);
+        *v2 = LDACQ(u64, a + 8);
         c->excl_val = *v1;
         c->excl_val2 = *v2;
     }
