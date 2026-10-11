@@ -17,16 +17,9 @@
 #include "core/options.h"
 #include "gpu/gl/lsfg.h"
 #include "gpu/renderer.h"
-#include "gpu/texture/astc.h"
-#include "gpu/texture/bcn.h"
-#include "hle/nvdrv.h"
-#include "kernel/mem.h"
 #include "platform/backend.h"
 #include "platform/log.h"
 #include "platform/plat.h"
-#ifdef _WIN32
-#include "platform/recorder.h"
-#endif
 #include "gpu/gpu.h"
 #include <time.h>
 #include <math.h>
@@ -37,6 +30,7 @@ int g_gl = 0; /* active renderer */
 static int g_gl_ready;
 #include "gpu/gl/glq.h"
 #include "gpu/gl/gl.h"
+#include "core/clock.h"
 u64 g_draws;
 __thread int t_gpu_thread; /* GL context owner */
 int g_diag_draws;
