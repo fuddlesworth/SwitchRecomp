@@ -14,7 +14,7 @@ extern int g_frames;
 void crash_report(void* host_pc, void* fault, int sig);
 /* vi's queued framebuffers (present.c): shown by the renderer, or converted to RGBA on the CPU when there is none */
 void present_init(void);
-void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt);
+void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, const i32 crop[4]);
 void vi_convert_cpu(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, u32* out);
 
 #endif

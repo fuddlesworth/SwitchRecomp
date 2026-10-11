@@ -30,7 +30,8 @@ typedef struct Renderer {
     void (*before_syncwait)(void); /* the stream is about to wait on a syncpoint: flush everything in flight */
     void (*stream_incr)(u32 id);   /* a syncpoint increment in the stream, after everything before it is done */
     /* presenting a guest framebuffer */
-    void (*present_buffer)(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt);
+    /* crop: the part shown (left, top, right, bottom), all 0 for the whole buffer */
+    void (*present_buffer)(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, const i32 crop[4]);
     u64 (*screenshot)(const char* path); /* the hash of the frame it saved */
 } Renderer;
 

@@ -59,7 +59,8 @@ static void null_cs_mem_need(u64 a, u64 n) {
     (void)n;
 }
 static void null_void(void) {}
-static void null_present_buffer(u64 a, u32 w, u32 h, u32 p, u32 l, u32 b, u32 f) {
+static void null_present_buffer(u64 a, u32 w, u32 h, u32 p, u32 l, u32 b, u32 f, const i32 crop[4]) {
+    (void)crop;
     (void)a;
     (void)w;
     (void)h;

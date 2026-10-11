@@ -65,7 +65,8 @@ void vi_convert_cpu(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt
     }
     free(lin);
 }
-void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
+void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt,
+                    const i32 crop[4]) {
     u64 a = nvmap_addr_by_id(nvmap_id);
     if (!a) {
         WARN("vi: buffer without memory (nvmap %u)\n", nvmap_id);
@@ -73,7 +74,7 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     }
     a += offset;
     if (g_renderer_up) {
-        g_renderer->present_buffer(a, w, h, pitch, layout, bhl, fmt);
+        g_renderer->present_buffer(a, w, h, pitch, layout, bhl, fmt, crop);
     } else {
         pm_lock(&g_flock);
         if (g_fw != (int)w || g_fh != (int)h) {

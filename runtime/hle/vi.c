@@ -26,6 +26,7 @@ typedef struct {
     u8 raw[0x16C];
     u32 rawsize;
     int queued;
+    i32 crop[4]; /* the part of the buffer shown (left, top, right, bottom); all 0 for the whole buffer */
 } Slot;
 static Slot slots[64];
 static KEvent* g_vsync_ev;
@@ -81,7 +82,7 @@ static void pw_out(PW* w, u64 addr, u64 size) {
 static void present_slot(int i) {
     Slot* s = &slots[i];
     if (!s->used) return;
-    vi_show_buffer(s->nvmap_id, s->offset, s->w, s->h, s->pitch, s->layout, s->bhl, s->afmt);
+    vi_show_buffer(s->nvmap_id, s->offset, s->w, s->h, s->pitch, s->layout, s->bhl, s->afmt, s->crop);
     g_present_count++;
 }
 
@@ -199,18 +200,21 @@ static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
                 }
             }
             if (len >= 0x28) {
-                /* the buffer's crop and transform. The renderer presents the whole buffer and ignores them */
+                /* the buffer's crop, which the renderer shows of it (Tears of the Kingdom renders 1280x720 into the
+                   corner of a 1920x1080 buffer in handheld mode), and its transform, which it ignores */
                 i32 cr[4];
                 u32 tr;
                 memcpy(cr, qi + 0x0C, 16);
                 memcpy(&tr, qi + 0x20, 4);
+                if (slot >= 0 && slot < 64) memcpy(slots[slot].crop, cr, 16);
                 {
                     static u32 lt = 0xFFFFFFFFu;
                     static i32 lc[4];
                     if (lt != tr || memcmp(lc, cr, 16)) {
                         lt = tr;
                         memcpy(lc, cr, 16);
-                        LOG("vi: crop (%d,%d)-(%d,%d) transform %x (not applied)\n", cr[0], cr[1], cr[2], cr[3], lt);
+                        LOG("vi: crop (%d,%d)-(%d,%d), transform %x%s\n", cr[0], cr[1], cr[2], cr[3], lt,
+                            lt ? " (not applied)" : "");
                     }
                 }
             }
