@@ -1,156 +1,174 @@
-/* Vulkan renderer, step 1: presents the frames the CPU path converts from the game's framebuffer (vi_show_buffer
-   with g_gl = 0). Each frame is copied into a staging buffer, uploaded to an image and scaled onto the swapchain
-   image, letterboxed to keep its aspect. GPU commands still go through gpu_nogl.c: nothing is drawn yet. */
+/* Vulkan renderer: the interface the GPU front end calls when a renderer is active (g_gl, named after the GL
+   renderer it was written for), and presenting.
+
+   Done so far: render targets, clears, write-backs to and reloads from guest memory, and presenting the game's
+   framebuffer from its render target (or from memory, converted on the CPU, when no render target holds it).
+   Draws, blits and compute are counted but not done yet (ROADMAP.md, Phase 6). Submits are processed on the
+   thread that makes them, like the no-GL build, under vk_lock(). */
 #include "vk.h"
 
-typedef struct {
-    VkCommandPool pool;
-    VkCommandBuffer cmd;
-    VkFence done;
-    VkSemaphore acquired;
-    VkBuffer staging;
-    VkDeviceMemory staging_mem;
-    u8* staging_ptr;
-    u64 staging_size;
-} VkFrame;
+int g_gl = 1;
+u64 g_draws;
+volatile i32 g_vi_crop[4];
+volatile u32 g_vi_transform;
+int g_texoff_emul;
+volatile int g_cs_any;
 
-static VkFrame g_fr[VK_FRAMES];
-static u32 g_fi;
-static VkImage g_upload;
-static VkDeviceMemory g_upload_mem;
-static int g_uw, g_uh;
-static int g_ok;
-static PMutex g_present_lock;
-/* the last frame, for screenshots */
-static u32* g_last;
-static int g_lw, g_lh;
+static VkSemaphore g_acquired[VK_FRAMES];
+/* the CPU fallback's image, and the last presented frame for screenshots */
+static Surf* g_cpu_img;
+static Surf* g_last;
+static u32 g_last_w, g_last_h;
 
 void gpu_vk_start(void) {
-    pm_init(&g_present_lock);
     if (!vk_init()) fatal("Vulkan could not start (see the log). Build with -DSWR_GPU=gl to use OpenGL.");
-    VkCommandPoolCreateInfo pci = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-                                   .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-                                   .queueFamilyIndex = g_vk.gfx_family};
+    vk_cmd_init();
     VkSemaphoreCreateInfo sci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    VkFenceCreateInfo fci = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .flags = VK_FENCE_CREATE_SIGNALED_BIT};
-    for (int i = 0; i < VK_FRAMES; i++) {
-        VkFrame* f = &g_fr[i];
-        VK_OK(vkCreateCommandPool(g_vk.dev, &pci, NULL, &f->pool));
-        VkCommandBufferAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-                                          .commandPool = f->pool,
-                                          .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                                          .commandBufferCount = 1};
-        VK_OK(vkAllocateCommandBuffers(g_vk.dev, &ai, &f->cmd));
-        VK_OK(vkCreateFence(g_vk.dev, &fci, NULL, &f->done));
-        VK_OK(vkCreateSemaphore(g_vk.dev, &sci, NULL, &f->acquired));
-    }
-    g_ok = 1;
+    for (int i = 0; i < VK_FRAMES; i++) VK_OK(vkCreateSemaphore(g_vk.dev, &sci, NULL, &g_acquired[i]));
 }
 
-/* a host-visible staging buffer of at least size bytes, kept mapped */
-static int staging_fit(VkFrame* f, u64 size) {
-    if (f->staging_size >= size) return 1;
-    if (f->staging) {
-        vkDestroyBuffer(g_vk.dev, f->staging, NULL);
-        vkFreeMemory(g_vk.dev, f->staging_mem, NULL);
-        f->staging = VK_NULL_HANDLE;
-        f->staging_size = 0;
+/* ------------------------------------------------------------ the front end's calls */
+int gpu_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
+    (void)e;
+    (void)n;
+    (void)syncpt;
+    (void)incs;
+    return 0; /* processed now, on the submitting thread */
+}
+void r3d_clear_gl(GpuChannel* ch, u32 v) {
+    vk_lock();
+    vk_render_clear(ch, v);
+    vk_unlock();
+}
+void r3d_draw_gl(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 bv, u32 bi, u32 instances) {
+    (void)indexed;
+    (void)topology;
+    (void)first;
+    (void)count;
+    (void)bv;
+    (void)bi;
+    (void)instances;
+    g_draws++;
+    vk_lock();
+    vk_render_draw(ch);
+    vk_unlock();
+}
+void r3d_cb_bind_gl(GpuChannel* ch, int stage, u32 v) {
+    (void)ch;
+    (void)stage;
+    (void)v;
+}
+int r3d_blit_gl(void* s, void* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx, double sdy) {
+    (void)s;
+    (void)d;
+    (void)dx;
+    (void)dy;
+    (void)dw;
+    (void)dh;
+    (void)sx;
+    (void)sy;
+    (void)sdx;
+    (void)sdy;
+    return 0; /* the front end copies through memory, with gpu_gl_rt_flush/reload around it */
+}
+void gpu_gl_rt_flush(u64 gva) {
+    vk_lock();
+    vk_rt_flush(gva);
+    vk_unlock();
+}
+void gpu_gl_rt_reload(u64 gva) {
+    vk_lock();
+    vk_rt_reload(gva);
+    vk_unlock();
+}
+void gpu_gl_dispatch(void* ch, const void* q, unsigned long long code) {
+    (void)ch;
+    (void)q;
+    (void)code;
+}
+void gpu_gl_note_compute(void) {}
+void cs_mem_need(u64 a, u64 n) {
+    (void)a;
+    (void)n;
+}
+void gpu_gl_before_syncwait(void) {}
+void gpu_gl_stream_incr(u32 id) {
+    extern void syncpt_incr(u32);
+    syncpt_incr(id);
+}
+void gpu_gl_dump_rts(void) {}
+void gpu_gl_rec_finish(void) {}
+void gpu_gl_trace(const char* s) { (void)s; }
+void lsfg_ini(const char* k, const char* v) {
+    (void)k;
+    (void)v;
+}
+u64 gpu_busy_ns(void) { return 0; }
+
+/* ------------------------------------------------------------ presenting */
+/* the frame from memory when no render target holds it (the game drew it on the CPU, or a video frame) */
+static Surf* cpu_frame(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
+    extern void vi_convert_cpu(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, u32 * out);
+    if (g_cpu_img && (g_cpu_img->w != w || g_cpu_img->h != h)) {
+        vk_defer_image(g_cpu_img->img, g_cpu_img->mem, g_cpu_img->view, g_cpu_img->att);
+        free(g_cpu_img);
+        g_cpu_img = NULL;
     }
-    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                             .size = size,
-                             .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                             .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
-    if (!VK_OK(vkCreateBuffer(g_vk.dev, &bi, NULL, &f->staging))) return 0;
-    VkMemoryRequirements mr;
-    vkGetBufferMemoryRequirements(g_vk.dev, f->staging, &mr);
-    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-                               .allocationSize = mr.size,
-                               .memoryTypeIndex =
-                                   vk_memory_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                                                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)};
-    if (ai.memoryTypeIndex == ~0u || !VK_OK(vkAllocateMemory(g_vk.dev, &ai, NULL, &f->staging_mem))) return 0;
-    vkBindBufferMemory(g_vk.dev, f->staging, f->staging_mem, 0);
-    if (!VK_OK(vkMapMemory(g_vk.dev, f->staging_mem, 0, size, 0, (void**)&f->staging_ptr))) return 0;
-    f->staging_size = size;
-    return 1;
+    if (!g_cpu_img) {
+        g_cpu_img = calloc(1, sizeof *g_cpu_img);
+        g_cpu_img->w = w;
+        g_cpu_img->h = h;
+        g_cpu_img->f = vk_rt_format(0xD5); /* RGBA8 */
+        g_cpu_img->layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                                .imageType = VK_IMAGE_TYPE_2D,
+                                .format = VK_FORMAT_R8G8B8A8_UNORM,
+                                .extent = {w, h, 1},
+                                .mipLevels = 1,
+                                .arrayLayers = 1,
+                                .samples = VK_SAMPLE_COUNT_1_BIT,
+                                .tiling = VK_IMAGE_TILING_OPTIMAL,
+                                .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+        VmaAllocationCreateInfo aci = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (!VK_OK(vmaCreateImage(g_vk.vma, &ii, &aci, &g_cpu_img->img, &g_cpu_img->mem, NULL))) {
+            free(g_cpu_img);
+            g_cpu_img = NULL;
+            return NULL;
+        }
+    }
+    VkBuffer buf;
+    u64 off;
+    u32* px = (u32*)vk_stage((u64)w * h * 4, 4, &buf, &off);
+    if (!px) return NULL;
+    vi_convert_cpu(cpu_addr, w, h, pitch, layout, bhl, fmt, px);
+    VkCommandBuffer cb = vk_cmd();
+    vk_surf_use(cb, g_cpu_img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    VkBufferImageCopy c = {
+        .bufferOffset = off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {w, h, 1}};
+    vkCmdCopyBufferToImage(cb, buf, g_cpu_img->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+    return g_cpu_img;
 }
 
-/* the device-local image a frame is uploaded to before it is scaled onto the swapchain */
-static int upload_fit(int w, int h) {
-    if (g_upload && g_uw == w && g_uh == h) return 1;
-    if (g_upload) {
-        vkDeviceWaitIdle(g_vk.dev);
-        vkDestroyImage(g_vk.dev, g_upload, NULL);
-        vkFreeMemory(g_vk.dev, g_upload_mem, NULL);
-        g_upload = VK_NULL_HANDLE;
-    }
-    VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-                            .imageType = VK_IMAGE_TYPE_2D,
-                            .format = VK_FORMAT_R8G8B8A8_UNORM,
-                            .extent = {(u32)w, (u32)h, 1},
-                            .mipLevels = 1,
-                            .arrayLayers = 1,
-                            .samples = VK_SAMPLE_COUNT_1_BIT,
-                            .tiling = VK_IMAGE_TILING_OPTIMAL,
-                            .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
-    if (!VK_OK(vkCreateImage(g_vk.dev, &ii, NULL, &g_upload))) return 0;
-    VkMemoryRequirements mr;
-    vkGetImageMemoryRequirements(g_vk.dev, g_upload, &mr);
-    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-                               .allocationSize = mr.size,
-                               .memoryTypeIndex =
-                                   vk_memory_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)};
-    if (ai.memoryTypeIndex == ~0u || !VK_OK(vkAllocateMemory(g_vk.dev, &ai, NULL, &g_upload_mem))) return 0;
-    vkBindImageMemory(g_vk.dev, g_upload, g_upload_mem, 0);
-    g_uw = w;
-    g_uh = h;
-    return 1;
-}
-
-static void barrier(VkCommandBuffer cb, VkImage img, VkPipelineStageFlags2 src_stage, VkAccessFlags2 src_access,
-                    VkImageLayout from, VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst_access, VkImageLayout to) {
-    VkImageMemoryBarrier2 b = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                               .srcStageMask = src_stage,
-                               .srcAccessMask = src_access,
-                               .dstStageMask = dst_stage,
-                               .dstAccessMask = dst_access,
-                               .oldLayout = from,
-                               .newLayout = to,
-                               .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                               .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                               .image = img,
-                               .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
-    VkDependencyInfo d = {
-        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b};
-    vkCmdPipelineBarrier2(cb, &d);
-}
-
-/* called from the game's present (vi QueueBuffer), with the frame in RGBA8 */
-void vk_present_rgba(const u32* px, int w, int h, int stride) {
-    if (!g_ok || w <= 0 || h <= 0) return;
-    pm_lock(&g_present_lock);
-    /* keep a copy for screenshots */
-    if (g_lw != w || g_lh != h) {
-        free(g_last);
-        g_last = malloc((size_t)w * h * 4);
-        g_lw = w;
-        g_lh = h;
-    }
-    for (int y = 0; y < h; y++) memcpy(g_last + (size_t)y * w, px + (size_t)y * stride, (size_t)w * 4);
-
+/* the game queued a buffer for display: show it, letterboxed to the window */
+void gpu_gl_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
+    vk_lock();
+    vk_render_end();
+    Surf* src = vk_rt_for_cpu(cpu_addr, w, h);
+    if (!src || src->f.is_int) src = cpu_frame(cpu_addr, w, h, pitch, layout, bhl, fmt);
     int ww, wh;
     backend_window_size(&ww, &wh);
-    if (ww > 0 && wh > 0 && ((u32)ww != g_vk.sc_extent.width || (u32)wh != g_vk.sc_extent.height))
+    if (ww > 0 && wh > 0 && ((u32)ww != g_vk.sc_extent.width || (u32)wh != g_vk.sc_extent.height)) {
+        vk_finish();
         vk_swapchain_create();
-    if (!g_vk.swapchain && !vk_swapchain_create()) goto out; /* minimized */
-
-    VkFrame* f = &g_fr[g_fi];
-    vkWaitForFences(g_vk.dev, 1, &f->done, VK_TRUE, UINT64_MAX);
-    u32 idx;
-    VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, 1000000000ull, f->acquired, VK_NULL_HANDLE, &idx);
+    }
+    if (!src || (!g_vk.swapchain && !vk_swapchain_create())) goto out; /* minimized */
+    VkCommandBuffer cb = vk_cmd(); /* waits for this frame slot, so its acquire semaphore is free */
+    u32 slot = (u32)(vk_frame_number() % VK_FRAMES), idx;
+    VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, 1000000000ull, g_acquired[slot], VK_NULL_HANDLE, &idx);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) {
+        vk_finish();
         vk_swapchain_create();
         goto out;
     }
@@ -158,32 +176,18 @@ void vk_present_rgba(const u32* px, int w, int h, int stride) {
         VK_OK(r);
         goto out;
     }
-    vkResetFences(g_vk.dev, 1, &f->done);
-    if (!staging_fit(f, (u64)w * h * 4) || !upload_fit(w, h)) goto out;
-    memcpy(f->staging_ptr, g_last, (size_t)w * h * 4);
-
-    VkCommandBuffer cb = f->cmd;
-    vkResetCommandBuffer(cb, 0);
-    VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                                   .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
-    vkBeginCommandBuffer(cb, &bi);
     VkImage sc = g_vk.sc_images[idx];
-    barrier(cb, g_upload, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    VkBufferImageCopy copy = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                              .imageExtent = {(u32)w, (u32)h, 1}};
-    vkCmdCopyBufferToImage(cb, f->staging, g_upload, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-    barrier(cb, g_upload, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    barrier(cb, sc, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vk_surf_use(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                VK_ACCESS_2_TRANSFER_READ_BIT);
+    vk_barrier(cb, sc, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+               VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkClearColorValue black = {{0, 0, 0, 1}};
     VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdClearColorImage(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
-    barrier(cb, sc, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vk_barrier(cb, sc, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     /* letterbox: the largest rectangle of the frame's aspect that fits the window, centered */
     u32 sw = g_vk.sc_extent.width, sh = g_vk.sc_extent.height, dw = sw, dh = (u32)((u64)sw * h / w);
     if (dh > sh) {
@@ -191,69 +195,99 @@ void vk_present_rgba(const u32* px, int w, int h, int stride) {
         dw = (u32)((u64)sh * w / h);
     }
     i32 dx = (i32)(sw - dw) / 2, dy = (i32)(sh - dh) / 2;
+    u32 bw = w < src->w ? w : src->w, bh = h < src->h ? h : src->h;
     VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                        .srcOffsets = {{0, 0, 0}, {w, h, 1}},
+                        .srcOffsets = {{0, 0, 0}, {(i32)bw, (i32)bh, 1}},
                         .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                         .dstOffsets = {{dx, dy, 0}, {dx + (i32)dw, dy + (i32)dh, 1}}};
-    vkCmdBlitImage(cb, g_upload, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+    vkCmdBlitImage(cb, src->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                    &blit, VK_FILTER_LINEAR);
-    barrier(cb, sc, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-    vkEndCommandBuffer(cb);
-
-    VkSemaphoreSubmitInfo wait = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                                  .semaphore = f->acquired,
-                                  .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
-    VkSemaphoreSubmitInfo signal = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                                    .semaphore = g_vk.sc_done[idx],
-                                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
-    VkCommandBufferSubmitInfo cbi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = cb};
-    VkSubmitInfo2 si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                        .waitSemaphoreInfoCount = 1,
-                        .pWaitSemaphoreInfos = &wait,
-                        .commandBufferInfoCount = 1,
-                        .pCommandBufferInfos = &cbi,
-                        .signalSemaphoreInfoCount = 1,
-                        .pSignalSemaphoreInfos = &signal};
+    vk_barrier(cb, sc, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0,
+               VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    g_last = src;
+    g_last_w = bw;
+    g_last_h = bh;
+    vk_submit(g_acquired[slot], VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, g_vk.sc_done[idx]);
     VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                            .waitSemaphoreCount = 1,
                            .pWaitSemaphores = &g_vk.sc_done[idx],
                            .swapchainCount = 1,
                            .pSwapchains = &g_vk.swapchain,
                            .pImageIndices = &idx};
-    pm_lock(&g_vk.gfx_lock);
-    VK_OK(vkQueueSubmit2(g_vk.gfx, 1, &si, f->done));
     r = vkQueuePresentKHR(g_vk.gfx, &pi);
-    pm_unlock(&g_vk.gfx_lock);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR)
+    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) {
+        vk_finish();
         vk_swapchain_create();
-    else
+    } else
         VK_OK(r);
-    g_fi = (g_fi + 1) % VK_FRAMES;
 out:
-    pm_unlock(&g_present_lock);
+    vk_unlock();
 }
 
-/* screenshots of the last presented frame, as PPM (the backends' unattended runs call this) */
+/* the last presented frame as PPM (path.ppm), and a hash of its pixels */
 u64 gpu_gl_screenshot(const char* path) {
-    pm_lock(&g_present_lock);
-    u64 h = 1469598103934665603ull;
-    if (g_last) {
-        for (size_t i = 0; i < (size_t)g_lw * g_lh; i++) h = (h ^ g_last[i]) * 1099511628211ull;
-        if (path) {
-            char p[1100];
-            snprintf(p, sizeof p, "%s.ppm", path);
-            FILE* f = fopen(p, "wb");
-            if (f) {
-                fprintf(f, "P6\n%d %d\n255\n", g_lw, g_lh);
-                for (size_t i = 0; i < (size_t)g_lw * g_lh; i++) {
-                    u8 rgb[3] = {(u8)g_last[i], (u8)(g_last[i] >> 8), (u8)(g_last[i] >> 16)};
-                    fwrite(rgb, 1, 3, f);
-                }
-                fclose(f);
+    vk_lock();
+    u64 hash = 1469598103934665603ull;
+    Surf* s = g_last;
+    if (!s) goto out;
+    u32 w = g_last_w, h = g_last_h;
+    /* blit to an RGBA8 image, whatever the target's format, then read that back */
+    VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                            .imageType = VK_IMAGE_TYPE_2D,
+                            .format = VK_FORMAT_R8G8B8A8_UNORM,
+                            .extent = {w, h, 1},
+                            .mipLevels = 1,
+                            .arrayLayers = 1,
+                            .samples = VK_SAMPLE_COUNT_1_BIT,
+                            .tiling = VK_IMAGE_TILING_OPTIMAL,
+                            .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                            .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+    VmaAllocationCreateInfo aci = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    VkImage tmp;
+    VmaAllocation tmem;
+    if (!VK_OK(vmaCreateImage(g_vk.vma, &ii, &aci, &tmp, &tmem, NULL))) goto out;
+    VkBuffer buf;
+    u8* p = vk_readback_buffer((u64)w * h * 4, &buf);
+    if (!p) {
+        vmaDestroyImage(g_vk.vma, tmp, tmem);
+        goto out;
+    }
+    VkCommandBuffer cb = vk_cmd();
+    vk_surf_use(cb, s, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                VK_ACCESS_2_TRANSFER_READ_BIT);
+    vk_barrier(cb, tmp, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
+               VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                        .srcOffsets = {{0, 0, 0}, {(i32)w, (i32)h, 1}},
+                        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                        .dstOffsets = {{0, 0, 0}, {(i32)w, (i32)h, 1}}};
+    vkCmdBlitImage(cb, s->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tmp, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                   &blit, VK_FILTER_NEAREST);
+    vk_barrier(cb, tmp, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    VkBufferImageCopy c = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {w, h, 1}};
+    vkCmdCopyImageToBuffer(cb, tmp, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &c);
+    vk_finish();
+    vk_readback_ready();
+    vmaDestroyImage(g_vk.vma, tmp, tmem);
+    const u32* px = (const u32*)p;
+    for (u64 i = 0; i < (u64)w * h; i++) hash = (hash ^ px[i]) * 1099511628211ull;
+    if (path) {
+        char fn[1100];
+        snprintf(fn, sizeof fn, "%s.ppm", path);
+        FILE* f = fopen(fn, "wb");
+        if (f) {
+            fprintf(f, "P6\n%u %u\n255\n", w, h);
+            for (u64 i = 0; i < (u64)w * h; i++) {
+                u8 rgb[3] = {(u8)px[i], (u8)(px[i] >> 8), (u8)(px[i] >> 16)};
+                fwrite(rgb, 1, 3, f);
             }
+            fclose(f);
         }
     }
-    pm_unlock(&g_present_lock);
-    return h;
+out:
+    vk_unlock();
+    return hash;
 }
