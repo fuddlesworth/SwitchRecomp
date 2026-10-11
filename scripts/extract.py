@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Extracts a game dump into the exefs/ + romfs/ folder that switchrecomp.py reads, with hactool from
-scripts/bootstrap.sh.
+scripts/bootstrap.py.
 
     scripts/extract.py "Game.xci"                                   # -> work/Game/{exefs,romfs}
     scripts/extract.py game.nsp --update update.nsp --name Game     # base and update combined
@@ -22,7 +22,7 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HACTOOL = os.path.join(REPO, 'deps', 'host', 'bin', 'hactool')
+HACTOOL = os.path.join(REPO, 'deps', 'host', 'bin', 'hactool' + ('.exe' if sys.platform == 'win32' else ''))
 KEY_LINE = re.compile(r'^\s*([0-9A-Za-z_]+)\s*=\s*([0-9A-Fa-f]+)\s*$')
 
 
@@ -97,7 +97,7 @@ def main():
     a = ap.parse_args()
 
     if not os.path.isfile(HACTOOL):
-        raise SystemExit('hactool is missing: run scripts/bootstrap.sh')
+        raise SystemExit('hactool is missing: run scripts/bootstrap.py (scripts\\bootstrap.ps1 on Windows)')
     if not os.path.isfile(a.keys):
         raise SystemExit('no keys at %s (use --keys)' % a.keys)
     name = a.name or os.path.splitext(os.path.basename(a.base))[0]

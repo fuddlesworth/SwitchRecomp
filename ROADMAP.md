@@ -30,7 +30,7 @@ How the pieces fit:
 - [x] Git history: an `upstream` branch holding each MZ Labs release as released and then formatted, and `main`
       with our work on top, one commit per fix. `scripts/import-upstream.sh` imports new releases.
 - [x] `.gitignore` that keeps game data, keys, dumps and build output out of git.
-- [x] No prebuilt binaries: OpenH264, SPIRV-Cross and hactool are submodules that `scripts/bootstrap.sh` builds,
+- [x] No prebuilt binaries: OpenH264, SPIRV-Cross and hactool are submodules that `scripts/bootstrap.py` builds,
       for Linux or cross-built for Windows.
 - [x] CMake build for the Linux runtime, with presets for GCC 16 and Clang 23, C23 and C++23.
 - [x] Scripts for the whole pipeline: extract a dump, recompile, deploy the runtime into `games/`.

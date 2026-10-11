@@ -305,7 +305,7 @@ def build_runtime(cc, out, target_win, backend, say, opt='2'):
     ]
     if gles or gl:
         srcs += [os.path.join(RT, 'bcn', 'bcn.cpp'), os.path.join(RT, 'bcn', 'bcdec.cpp')]
-    # third-party libraries built by scripts/bootstrap.sh
+    # third-party libraries built by scripts/bootstrap.py
     deps = os.path.join(HERE, 'deps', 'win64' if target_win else 'linux')
     # LSFG (uses the user's Lossless.dll), desktop GL only
     spvc = None

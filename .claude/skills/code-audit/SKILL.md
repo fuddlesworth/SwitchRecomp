@@ -303,7 +303,7 @@ tools/run_game.py Catherine --runs 3 --dump work/Catherine
 - Upstream builds with `-w`, so a clean build says nothing about warnings. Build a changed file once with warnings on (`gcc -O2 -Wall -Wextra -fsyntax-only -Iruntime -Ideps/linux/include FILE`) and check none come from the change.
 - A fix for a crash or a race is run until the evidence is statistical: the crash rate before and after, with the run counts, goes in the commit message.
 - Memory-safety fixes also get an AddressSanitizer build (`-DCMAKE_C_FLAGS=-fsanitize=address` in a separate build dir) and a run.
-- The game module only needs recompiling (`scripts/recomp.sh`) when `codegen.py`, `a64.py`, `cpu.h` or `cpu_helpers.c` changed.
+- The game module only needs recompiling (`scripts/recomp.py`) when `codegen.py`, `a64.py`, `cpu.h` or `cpu_helpers.c` changed.
 
 ### 7. Diff Review Before Commit
 
