@@ -38,8 +38,8 @@ The build also makes `swr-shaderc`. `swr-shaderc --nvn DIR --cache games/shader_
 NVN shader files into the SPIR-V cache (`scripts/recomp.py` runs it on any romfs folder holding them); to measure what
 it covers, record a corpus of a run and replay it with `--cache` against a copy of the pre-filled folder, counting the
 files it adds. A translator change is checked on a shader corpus before any rendering: record one
-with `SWR_SHADER_CORPUS=dir` (any renderer), then `build/gcc/swr-shaderc dir --validate` for Vulkan, and `--gl --out` from
-two builds, diffed, to show the GL output didn't change. `SWR_VK_VALIDATION=1`
+with `SWR_SHADER_CORPUS=dir`, then `build/clang/swr-shaderc dir --validate`, and `--out` from two builds, diffed, to
+show what the change did to the GLSL and SPIR-V. `SWR_VK_VALIDATION=1`
 turns on the Khronos validation layer when it is installed (Arch: `vulkan-validation-layers`, which the user
 installs). A screenshot (`--shot`, or run_game.py's) reads back the frame Vulkan presented, and its hash is in the
 log: compare a change against the build before it at the same frame (Catherine's Atlus logo, `--seconds 4 --script

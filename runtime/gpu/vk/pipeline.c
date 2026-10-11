@@ -82,7 +82,6 @@ void vk_pipeline_init(void) {
     }
     if (ci.initialDataSize) LOG("vulkan: pipeline cache loaded (%zu KB)\n", ci.initialDataSize >> 10);
     free(data);
-    g_shader_vulkan = 1;
 }
 
 /* ------------------------------------------------------------ shaders */

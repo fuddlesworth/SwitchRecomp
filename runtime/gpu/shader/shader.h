@@ -1,7 +1,7 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
-/* Maxwell (GM20B) shader -> GLSL 4.30 translator */
+/* Maxwell (GM20B) shader -> GLSL 4.50 translator, for Vulkan (gpu/vk/spirv.c compiles the result to SPIR-V) */
 #ifndef SWR_SHADER_H
 #define SWR_SHADER_H
 #include "abi/cpu.h"
@@ -47,20 +47,13 @@ typedef struct {
     u32 sutex_mask; /* SULD.D reads, these need their format class in swr_tc */
     u32 tex_int_mask, tex_sint_mask, rt_int_mask, rt_sint_mask; /* FS key: integer textures / outputs */
 } ShaderInfo;
-/* Vulkan mode (g_shader_vulkan): one descriptor set per stage (shader_vk_set), bindings in it by kind */
+/* the GLSL is for Vulkan: one descriptor set per stage (shader_vk_set), bindings in it by kind */
 #define SWR_VKB_CB   0  /* 18 constant buffers */
 #define SWR_VKB_SSBO 18 /* 16 global memory buffers */
 #define SWR_VKB_TEX  34 /* 32 combined image samplers */
 #define SWR_VKB_IMG  66 /* 8 storage images (compute) */
 #define SWR_VKB_RS   74 /* fragment: 1/resolution scale (SWR_RS) */
 #define SWR_VKB_FMT  75 /* compute: image format classes (SWR_FMT) */
-extern int g_shader_vulkan;
-/* what the host GLSL supports, set by the renderer before translating */
-extern int g_glsl_version, g_glsl_es;
-extern int
-    g_vs_layer_ext; /* 1 ARB_shader_viewport_layer_array, 2 AMD_vertex_shader_layer, 3 NV_viewport_array2, 0 none */
-extern int g_rs_binding;  /* binding of the resolution-scale UBO */
-extern int g_texoff_emul; /* texture offsets emulated in GL mode, for drivers that refused them */
 int shader_vk_set(int stage);
 /* malloc'd GLSL, or NULL */
 char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si);
