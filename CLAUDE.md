@@ -34,7 +34,9 @@ state. This file holds the rules sessions get wrong and points to the skills tha
 
 - The Bash tool runs **zsh**: `$t:s` is a zsh modifier, so write `"${t}:s"`. Scripts in the repo use bash shebangs.
 - Temporary files go in the session scratchpad, never in the repo root. Long runs use `run_in_background`.
-- Never `pkill`/`killall` (they match the shell running them): `pgrep -a Catherine`, then `kill PID`.
+- Never `pkill`/`killall`, or a `kill $(pgrep -f PATTERN)` loop: they match the shell running the command, whose
+  command line contains the pattern (twice that killed the session's own shell). List with `pgrep -a NAME` (or
+  `pgrep -x cc1`, by process name), then `kill PID` with the numbers in a separate command.
 - Don't build while a timing-sensitive test runs: the build deploys a new runtime into `games/` and loads the CPU.
 - No `sudo` and no system packages: the user installs those. `uvx` fetches ruff on its own.
 - Context is scarce. Never print a whole log (`games/Catherine.log` grows to megabytes), a whole disassembly or a
