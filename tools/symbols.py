@@ -3,7 +3,7 @@
 # Copyright 2026 the SwitchRecomp fork contributors
 """Names game addresses from the modules' symbol tables (demangled).
 
-    tools/symbols.py work/Catherine cf34380 82f161c ...
+    tools/symbols.py work/Game cf34380 82f161c ...
 
 Crash reports and thread dumps print runtime addresses: the modules are laid out at the same bases here.
 """

@@ -12,10 +12,10 @@ A fork of **SwitchRecomp by MZ Labs**, a static recompiler for Nintendo Switch g
 game's ARM64 code is translated to C once and compiled into a native program. The runtime stands in for the Switch's
 operating system, and its GPU emulation draws with Vulkan. The game's data is read as it is from the extracted dump.
 
-This fork adds a CMake build, source builds of every third-party library, scripts for the whole pipeline, CI on
-both systems, and fixes to the runtime. Catherine: Full Body is the game it is tested with. [ROADMAP.md](ROADMAP.md) has the plan and the
-current state, and the history of `main` has every fix with the reason for it. The MZ Labs release this fork started
-from (v142) is the tag `upstream-v142`.
+This fork adds a CMake build, source builds of every third-party library, scripts for the whole pipeline, CI on both
+systems, and fixes to the runtime. [ROADMAP.md](ROADMAP.md) has the plan and the current state, and the history of
+`main` has every fix with the reason for it. The MZ Labs release this fork started from (v142) is the tag
+`upstream-v142`.
 
 Use only games and keys dumped from your own console. None are included, and none may be committed here.
 
@@ -47,10 +47,11 @@ Windows runtime with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw).
 Every commit on `main` that builds everywhere is released as `SwitchRecomp-x86_64.AppImage` under the
 [nightly](https://github.com/fuddlesworth/SwitchRecomp/releases/tag/nightly) prerelease. It is the runtime with every
 library it needs, made with [pkgforge's tools](https://github.com/pkgforge-dev/Anylinux-AppImages), and runs on any
-Linux. Point it at a game with `--game`, as in `./SwitchRecomp-x86_64.AppImage --game=games/Catherine`, which runs
-`games/Catherine_code.so` with `games/Catherine_data/`. Or copy it next to the game's code as
-`games/Catherine.AppImage` (or just `games/Catherine`): like the runtime the build makes, it then runs the game it is
-named after. Recompiling the game still takes a clone of this repository and Clang. `scripts/make-appimage.sh` is what
+Linux. Point it at a game with `--game`, as in `./SwitchRecomp-x86_64.AppImage --game=games/Game`, which runs
+`games/Game_code.so` with `games/Game_data/`. Or copy it next to the game's code as
+`games/Game.AppImage` (or just `games/Game`): like the runtime the build makes, it then runs the game it is
+named after. It runs games that are already recompiled, not dumps: `--game` takes the recompiled game, never an XCI or
+NSP, and recompiling one still takes a clone of this repository and Clang. `scripts/make-appimage.sh` is what
 makes it.
 
 ### Recompiling a game
@@ -59,9 +60,9 @@ Put `prod.keys` (and `title.keys`, for NSPs) in the repository root or in `~/.sw
 `--title-keys`.
 
 ```bash
-python3 scripts/extract.py "Catherine Full Body.xci" --name Catherine   # -> work/Catherine/{exefs,romfs}
-python3 scripts/recomp.py work/Catherine Catherine                      # -> games/Catherine
-cd games && ./Catherine
+python3 scripts/extract.py "Game.xci" --name Game   # -> work/Game/{exefs,romfs}
+python3 scripts/recomp.py work/Game Game            # -> games/Game
+cd games && ./Game
 ```
 
 The runtime draws with Vulkan, so the GPU needs Vulkan 1.3. The first recompile of a big game takes several minutes. After that, a runtime
@@ -104,9 +105,9 @@ Put `prod.keys` (and `title.keys`, for NSPs) in the repository folder or in `%US
 with `--keys` and `--title-keys`.
 
 ```powershell
-python scripts\extract.py "Catherine Full Body.xci" --name Catherine   # -> work\Catherine
-python scripts\recomp.py work\Catherine Catherine                      # -> games\Catherine.exe
-cd games; .\Catherine.exe
+python scripts\extract.py "Game.xci" --name Game   # -> work\Game
+python scripts\recomp.py work\Game Game            # -> games\Game.exe
+cd games; .\Game.exe
 ```
 
 A runtime change only needs `cmake --build --preset default`.
@@ -147,11 +148,11 @@ frame gets from the game to the screen.
 | Task | Command |
 | --- | --- |
 | Format C, C++ and Python | `scripts/format.sh` (`--check` to only report) |
-| Name game addresses from a crash report | `tools/symbols.py work/Catherine cf34380 ...` |
-| Disassemble game code | `tools/disasm.py work/Catherine NvRmStreamFlushSync` |
-| Run the game for a set time with scripted input and a screenshot | `./Catherine --seconds=60 --script=15000:400,16000:1 --shot=out` |
+| Name game addresses from a crash report | `tools/symbols.py work/Game cf34380 ...` |
+| Disassemble game code | `tools/disasm.py work/Game NvRmStreamFlushSync` |
+| Run the game for a set time with scripted input and a screenshot | `./Game --seconds=60 --script=15000:400,16000:1 --shot=out` |
 | Import a new MZ Labs release | `scripts/import-upstream.sh SwitchRecomp_v143.zip v143`, then `git merge upstream` |
-| Record the shaders a run translates, then check them for Vulkan | `SWR_SHADER_CORPUS=dir ./Catherine`, then `build/default/swr-shaderc dir --validate` |
+| Record the shaders a run translates, then check them for Vulkan | `SWR_SHADER_CORPUS=dir ./Game`, then `build/default/swr-shaderc dir --validate` |
 
 The `upstream` branch holds the MZ Labs releases: each one as released (tagged `upstream-vN`) and then formatted like
 `main`, so merging a release into `main` only shows what it changed.

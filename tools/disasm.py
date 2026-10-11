@@ -3,8 +3,8 @@
 # Copyright 2026 the SwitchRecomp fork contributors
 """Disassembles game code at its runtime addresses, with symbol names.
 
-    tools/disasm.py work/Catherine cf34240 cf343c0     # an address range (hex, as crash reports print them)
-    tools/disasm.py work/Catherine NvDdkVicExecuteSync  # a whole function, by symbol name (substring match)
+    tools/disasm.py work/Game cf34240 cf343c0     # an address range (hex, as crash reports print them)
+    tools/disasm.py work/Game NvDdkVicExecuteSync  # a whole function, by symbol name (substring match)
 
 The game folder is the extracted dump (exefs/ + romfs/), laid out at the same bases the runtime uses. Needs
 llvm-objcopy and llvm-objdump.

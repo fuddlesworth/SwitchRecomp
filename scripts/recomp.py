@@ -8,8 +8,8 @@
     games/NAME_data/               exefs, romfs and saves
     games/shader_cache/spirv/      SPIR-V for the game's own shader files, when it ships them (Vulkan renderer)
 
-    python3 scripts/recomp.py work/Catherine Catherine
-    python3 scripts/recomp.py work/Catherine Catherine -- --native
+    python3 scripts/recomp.py work/Game Game
+    python3 scripts/recomp.py work/Game Game -- --native
 
 Options after `--` go to the recompiler (python3 -m switchrecomp). The first run of a big game takes several minutes; later runs only
 recompile what changed.
@@ -28,7 +28,7 @@ PRESET = 'default'
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('game', help='the extracted game folder (exefs/ + romfs/)')
-    ap.add_argument('name', help='output name, e.g. Catherine')
+    ap.add_argument('name', help='output name, e.g. Game')
     ap.add_argument('extra', nargs='*', help='more recompiler options, after --')
     a = ap.parse_args()
 
