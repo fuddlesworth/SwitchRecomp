@@ -12,12 +12,12 @@ on:
 jobs:
   format:
     name: Formatting
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     container: archlinux:latest
     steps:
       - name: Install tools
         run: pacman -Syu --noconfirm --needed clang git uv bash
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check formatting
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -25,13 +25,13 @@ jobs:
 
   linux:
     name: Linux
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     container: archlinux:latest
     steps:
       - name: Install tools
         run: pacman -Syu --noconfirm --needed cmake ninja nasm python git clang sdl3
-      - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v5
         with:
           path: .cache/cpm
           key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
@@ -50,21 +50,21 @@ jobs:
           python scripts/extract.py --help > /dev/null
           python scripts/recomp.py --help > /dev/null
           python tools/run_game.py --help > /dev/null
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: swr-runtime-linux
           path: build/default/swr-runtime
 
   appimage:
     name: Linux AppImage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # pkgforge's Arch image and tools (https://github.com/pkgforge-dev/Anylinux-AppImages), see scripts/make-appimage.sh
     container: ghcr.io/pkgforge-dev/archlinux:latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: .cache/cpm
           key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
@@ -83,22 +83,22 @@ jobs:
       - name: Make the AppImage
         run: |
           VERSION=$(git describe --always) scripts/make-appimage.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: AppImage-x86_64
           path: dist
 
   freebsd:
     name: FreeBSD
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v5
         with:
           path: .cache/cpm
           key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
       - name: Build the runtime
-        uses: vmactions/freebsd-vm@v1.5.8
+        uses: vmactions/freebsd-vm@v1.5.9
         with:
           release: '15.1'
           usesh: true
@@ -109,13 +109,13 @@ jobs:
 
   windows-cross:
     name: Windows, cross-built on Linux
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     container: archlinux:latest
     steps:
       - name: Install tools
         run: pacman -Syu --noconfirm --needed cmake ninja nasm python git
-      - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v5
         with:
           path: .cache/cpm
           key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
@@ -133,13 +133,13 @@ jobs:
 
   windows:
     name: Windows
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     defaults:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v5
         with:
           path: .cache/cpm
           key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
@@ -159,7 +159,7 @@ jobs:
           if ($LASTEXITCODE) { exit 1 }
           python scripts\recomp.py --help > $null
           if ($LASTEXITCODE) { exit 1 }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: swr-runtime-windows
           path: build/default/swr-runtime.exe
@@ -169,11 +169,11 @@ jobs:
     name: Nightly release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [format, linux, appimage, freebsd, windows-cross, windows]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: AppImage-x86_64
       - name: Release the AppImage
