@@ -47,10 +47,25 @@ typedef struct {
     u32 sutex_mask; /* SULD.D reads, these need their format class in swr_tc */
     u32 tex_int_mask, tex_sint_mask, rt_int_mask, rt_sint_mask; /* FS key: integer textures / outputs */
 } ShaderInfo;
+/* Vulkan mode (g_shader_vulkan): one descriptor set per stage (shader_vk_set), bindings in it by kind */
+#define SWR_VKB_CB   0  /* 18 constant buffers */
+#define SWR_VKB_SSBO 18 /* 16 global memory buffers */
+#define SWR_VKB_TEX  34 /* 32 combined image samplers */
+#define SWR_VKB_IMG  66 /* 8 storage images (compute) */
+#define SWR_VKB_RS   74 /* fragment: 1/resolution scale (SWR_RS) */
+#define SWR_VKB_FMT  75 /* compute: image format classes (SWR_FMT) */
+extern int g_shader_vulkan;
+int shader_vk_set(int stage);
 /* malloc'd GLSL, or NULL */
 char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si);
 extern int (*g_shader_cb_read)(u32 idx, u32 off, u32* out);
 u64 shader_hash(const u8* code, u32 max_bytes, u32* out_len);
+/* shader corpus (SWR_SHADER_CORPUS=dir): each translated shader's code and its ShaderInfo inputs, so
+   tools/swr_shaderc.c can translate them again offline. The files only load into a build with the same ShaderInfo */
+int shader_corpus_save(const char* dir, const u8* code, u32 len, u32 max_bytes, int stage, const ShaderInfo* si,
+                       u64 key);
+/* malloc'd code (max_bytes long, zero past len), or NULL */
+u8* shader_corpus_load(const char* path, u32* max_bytes, int* stage, ShaderInfo* si);
 /* VertexA+VertexB -> one program (A then B) */
 int shader_merge_dual(const u8* a, const u8* b, u8* out, u32 max_bytes);
 #endif

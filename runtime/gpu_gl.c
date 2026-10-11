@@ -1831,6 +1831,11 @@ static Sh* shader_get(u64 gva_code, u64 gva_a, int stage, u32 attr_int, u32 attr
         s->si.attr_int_mask = attr_int;
         s->si.attr_sint_mask = attr_sint;
     }
+    {
+        static const char* corpus = (const char*)-1;
+        if (corpus == (const char*)-1) corpus = getenv("SWR_SHADER_CORPUS");
+        if (corpus) shader_corpus_save(corpus, code, mlen, 0x10000, stage, &s->si, h ^ key2);
+    }
     char* src = shader_to_glsl(code, 0x10000, stage, &s->si);
     /* dump shaders with indirect branches (code + cbufs) for offline analysis */
     {
@@ -7635,6 +7640,11 @@ void gpu_gl_dispatch(GpuChannel* ch, const u32* q, u64 code) {
         p->si.shared_size = (int)shm;
         int (*old)(u32, u32, u32*) = g_shader_cb_read;
         g_shader_cb_read = cs_cb_read;
+        if (getenv("SWR_SHADER_CORPUS")) {
+            u32 blen;
+            shader_hash(buf, sizeof buf, &blen);
+            shader_corpus_save(getenv("SWR_SHADER_CORPUS"), buf, blen, sizeof buf, ST_CS, &p->si, key);
+        }
         char* src = shader_to_glsl(buf, sizeof buf, ST_CS, &p->si);
         g_shader_cb_read = old;
         if (!src || p->si.unsupported) {
