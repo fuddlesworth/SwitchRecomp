@@ -23,8 +23,8 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
 | A fix has no effect | The game ran an old runtime: the build didn't deploy (no `_code.so` in `games/` yet), or the game was already running | Check the deploy lines. A running game keeps its old copy (the deploy renames over it). |
 | The two presets disagree on what is deployed | Both deploy to the same `games/` | The last build wins. Rebuild the one you mean to test. |
 | A test binary next to the game was overwritten | The deploy targets every `*_code.so` in `games/`, symlinks included | Keep A/B copies outside `games/`, or don't build while they exist. |
-| No warnings | Upstream builds with `-w` | Check a changed file with warnings on: `gcc -std=gnu23 -O2 -Wall -Wextra -fsyntax-only -Iruntime -Iruntime/bcn -Ideps/linux/include runtime/FILE.c`. Fix what comes from the change. |
-| Game crashes at startup with "recompiled code is from another SwitchRecomp version" | The game module was built against another `SWR_ABI` (`runtime/cpu.h`) | Recompile the game. |
+| No warnings | Upstream builds with `-w` | Check a changed file with warnings on: `gcc -std=gnu23 -O2 -Wall -Wextra -fsyntax-only -Iruntime -Ithird_party/bcn -Ideps/linux/include runtime/FILE.c`. Fix what comes from the change. |
+| Game crashes at startup with "recompiled code is from another SwitchRecomp version" | The game module was built against another `SWR_ABI` (`runtime/abi/cpu.h`) | Recompile the game. |
 
 ## The Vulkan renderer
 
@@ -32,9 +32,9 @@ The sdl3 backend builds both renderers into one runtime (`SWR_VULKAN`, on by def
 headless have only OpenGL). `renderer=auto|vulkan|opengl` in the game's .ini, or `--renderer=opengl` on the command
 line (`run_game.py Catherine -- --renderer=opengl`), picks one at startup, and the log says which ran
 (`renderer: ...`). auto means Vulkan, falling back to OpenGL when Vulkan can't start (no driver, no Vulkan 1.3) or
-when LSFG frame generation is set up. `renderer.c` holds the interface names and calls the active renderer:
-`gpu_gl.c`'s side gets `glr_` names from `gl_names.h` (force-included by CMake, so upstream's file is unchanged),
-`gpu_vk.c`'s side is `vkr_`.
+when LSFG frame generation is set up. `gpu/renderer.c` holds the interface names and calls the active renderer:
+`gpu/gl/renderer.c`'s side gets `glr_` names from `gpu/gl/names.h` (force-included by CMake, so upstream's file is unchanged),
+`gpu/vk/renderer.c`'s side is `vkr_`.
 
 The build also makes `swr-shaderc`. `swr-shaderc --nvn DIR --cache games/shader_cache/spirv` pre-translates a game's
 NVN shader files into the SPIR-V cache (`scripts/recomp.py` runs it on any romfs folder holding them); to measure what
@@ -55,8 +55,8 @@ CI (`.github/workflows/build.yml`) builds Windows natively with GCC and Clang fr
 cross-builds it on Linux. To check Windows code before pushing, cross-build it here: with a MinGW-w64 toolchain on
 PATH (Arch's `mingw-w64-gcc`, or the Linux build of llvm-mingw, which provides the `x86_64-w64-mingw32-*` names),
 run `python3 scripts/bootstrap.py --target win64`, then `cmake --preset mingw-cross && cmake --build --preset
-mingw-cross`. Upstream code that only Windows compiles (`backend_win32.c`, `rec_win32.c`, the `_WIN32` parts of
-`plat.c`) has relied on implicit declarations that `-w` hid and that GCC 14+ and Clang reject: a missing header shows
+mingw-cross`. Upstream code that only Windows compiles (`platform/backend/win32.c`, `platform/recorder_win32.c`, the `_WIN32` parts of
+`platform/plat.c`) has relied on implicit declarations that `-w` hid and that GCC 14+ and Clang reject: a missing header shows
 up only there.
 
 The SDL3 backend, with both renderers, builds for Windows too: `cmake --preset mingw-cross -B build/mingw-sdl3
@@ -75,8 +75,8 @@ To run a Windows build, use Wine with a game module built for Windows, kept out 
 
 ## When the game module must be recompiled
 
-Only when the generated code or its contract changed: `switchrecomp/` (codegen, a64, nxloader), `runtime/cpu.h`,
-`runtime/cpu_helpers.c`. Everything else in `runtime/` is the runtime alone. A recompile of Catherine takes several
+Only when the generated code or its contract changed: `switchrecomp/` (codegen, a64, nxloader), `runtime/abi/cpu.h`,
+`runtime/abi/cpu_helpers.c`. Everything else in `runtime/` is the runtime alone. A recompile of Catherine takes several
 minutes with GCC; the objects in `games/<Game>_build/` are reused when their C didn't change.
 
 ```bash

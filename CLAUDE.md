@@ -27,7 +27,7 @@ state. This file holds the rules sessions get wrong and points to the skills tha
   from the disassembly, are the primary references.
 - **Formatting:** `scripts/format.sh` before committing (clang-format 23, ruff). It only changes whitespace, and
   the whole history is formatted, so an unformatted file shows up as noise in every diff. Third-party code
-  (`runtime/bcn`, `third_party/`) is never formatted.
+  (`third_party/bcn`, `third_party/`) is never formatted.
 - Ask only real decisions. When the next step is obvious, take it.
 
 ## Environment
@@ -53,22 +53,27 @@ state. This file holds the rules sessions get wrong and points to the skills tha
 | Format / check | `scripts/format.sh` / `scripts/format.sh --check` |
 
 The runtime finds its game module by its own file name, so each game has a copy of the runtime named after it, made
-by the build's deploy step. Game code (`_code.so`) only needs recompiling when `switchrecomp/codegen.py`, `a64.py`, `cpu.h` or
-`cpu_helpers.c` change (the ABI between generated code and runtime).
+by the build's deploy step. Game code (`_code.so`) only needs recompiling when `switchrecomp/codegen.py`, `a64.py`, `abi/cpu.h` or
+`abi/cpu_helpers.c` change (the ABI between generated code and runtime).
 
 ## Where things are
 
 | Area | Files |
 | --- | --- |
 | Recompiler (`switchrecomp/`, run as `python3 -m switchrecomp`) | `cli.py` (command line), `nxloader.py` (NSO/NRO, symbols), `codegen.py` + `a64.py` (ARM64 to C), `module.py` (the module's C files), `toolchain.py` (compiling the module, the runtime through CMake), `data.py` |
-| Generated-code ABI | `runtime/cpu.h`, `runtime/cpu_helpers.c` |
-| Kernel and memory | `runtime/kernel.c` (threads, sync, SVCs), `runtime/mem.c`, `runtime/loader.c`, `runtime/main.c` (startup, ini, audren update) |
-| IPC and services | `runtime/ipc.c` (helpers `in32`, `out32`, `buf_in`, `buf_out`, `out_obj`...), `runtime/svc_core.c` (most services, audio), `svc_hid.c`, `svc_fs.c`, `svc_vi.c` |
-| GPU | `runtime/nvdrv.c` (nvhost devices, syncpoints), `gpu.c` (GPFIFO), `gpu_engines.c`, `gpu_3d.c`, `gpu_gl.c` (OpenGL backend, caches), `shader.c` (Maxwell to GLSL), `glq*.c` (the GL thread), `astc.c`, `runtime/bcn/` |
-| Vulkan renderer (sdl3 backend, `renderer=` picks it or OpenGL at startup) | `runtime/renderer.c` and `gl_names.h` (both renderers in one runtime), `vk.h` (lists the parts), `vk_device.c` (instance, device, queues, swapchain, VMA), `vk_cmd.c` (frames in flight, staging), `vk_surface.c` and `vk_format.c` (render targets, formats), `vk_texture.c` (textures, samplers), `vk_buffer.c` (guest memory as buffers), `vk_pipeline.c` (shader modules, pipelines), `vk_render.c` (rendering passes, clears, draws), `vk_compute.c` (compute on the compute queue, results landing in guest memory), `gpu_vk.c` (its side of the renderer interface, presenting), `vk_shader.c` (GLSL to SPIR-V with glslang, SPIR-V cache); `third_party/Vulkan-Headers`, `third_party/volk`, `third_party/glslang`, `third_party/VulkanMemoryAllocator` |
+| Generated-code ABI | `runtime/abi/`: `cpu.h` (with `SWR_ABI`), `cpu_helpers.c` |
+| Startup | `runtime/core/`: `main.c` (startup, ini, audren update), `loader.c`, `entry.c`, `rt.h` |
+| Kernel and memory | `runtime/kernel/`: `kernel.c` (threads, sync, SVCs), `mem.c`, `ipc.c` (helpers `in32`, `out32`, `buf_in`, `buf_out`, `out_obj`...) |
+| Services | `runtime/hle/`: `services.c` (most services, audio), `hid.c`, `fs.c`, `vi.c`, `nvdrv.c` (nvhost devices, syncpoints) |
+| GPU | `runtime/gpu/`: `gpu.c` (GPFIFO), `engines.c`, `maxwell3d.c`, `renderer.c` (picks a renderer at startup and forwards to it), `shader/shader.c` (Maxwell to GLSL), `texture/astc.c`, `null/` (headless); `third_party/bcn/` |
+| OpenGL renderer | `runtime/gpu/gl/`: `renderer.c` (draws, caches), `names.h` (its `glr_` names), `glq*.c` (the GL thread), `load.c`, `lsfg*.c`, `overlay.c` |
+| Vulkan renderer | `runtime/gpu/vk/`: `vk.h` (lists the parts), `device.c` (instance, device, queues, swapchain, VMA), `cmd.c` (frames in flight, staging), `surface.c` and `format.c` (render targets, formats), `texture.c` (textures, samplers), `buffer.c` (guest memory as buffers), `pipeline.c` (shader modules, pipelines), `render.c` (rendering passes, clears, draws), `compute.c` (compute on the compute queue, results landing in guest memory), `renderer.c` (its side of the renderer interface, presenting), `spirv.c` (GLSL to SPIR-V with glslang, SPIR-V cache); `third_party/Vulkan-Headers`, `third_party/volk`, `third_party/glslang`, `third_party/VulkanMemoryAllocator` |
 | Shader corpus | `SWR_SHADER_CORPUS=dir` records each translated shader; `build/<dir>/swr-shaderc dir --validate` translates it for Vulkan, compiles and validates it (`--gl` for GL output, to diff two builds) |
-| Video | `runtime/host1x.c` (NVDEC with OpenH264, VIC) |
-| Platform | `runtime/backend_*.c` (sdl3 is the Linux default, x11 the fallback, win32 Windows), `runtime/plat.c` |
+| Video | `runtime/video/host1x.c` (NVDEC with OpenH264, VIC) |
+| Platform | `runtime/platform/`: `plat.c` (threads, memory, files per OS), `backend/` (sdl3 is the Linux default, x11 the fallback, win32 Windows), `recorder_win32.c` |
+
+Each folder under `runtime/` is one CMake object library (`runtime/CMakeLists.txt`), and includes are written from `runtime/`
+(`#include "gpu/vk/vk.h"`).
 
 ## Skills and agents
 
@@ -103,10 +108,10 @@ comments and developer docs under `.claude/` are out of scope.
 
 ## Lessons that cost a session
 
-- GL calls go through the glq thread (`glq_gen.c`). A function missing there is called without a context and
+- GL calls go through the glq thread (`gpu/gl/glq_gen.c`). A function missing there is called without a context and
   crashes in libGLdispatch.
 - NVIDIA's stream library sizes its per-syncpoint tables at 128 (`NvRmChannelNumSyncPoints` is a stub that fails).
-  Every syncpoint comes from `syncpt_alloc()` in `nvdrv.c`.
+  Every syncpoint comes from `syncpt_alloc()` in `hle/nvdrv.c`.
 - The SDK asserts (`svcBreak`) when a service answers in a way real hardware never does, like an npad reporting two
   styles. Look for the assert's condition in the caller before changing anything else.
 - Services that "do nothing" can still stall a game: CRI's movie player waits for released audio buffers.

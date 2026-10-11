@@ -5,8 +5,8 @@
 #   scripts/format.sh --check    list what is not formatted, exit 1 if anything is
 #   scripts/format.sh DIR        format another tree with this repository's settings (import-upstream.sh does this)
 #
-# Left alone: third-party code (runtime/bcn, third_party/), the font bitmap in runtime/overlay_font.h, and the GL
-# function list in runtime/glfn.h, an X-macro list clang-format can't lay out stably.
+# Left alone: third-party code (third_party/), the font bitmap in runtime/gpu/gl/overlay_font.h, and the GL function
+# list in runtime/gpu/gl/glfn.h, an X-macro list clang-format can't lay out stably.
 set -euo pipefail
 
 CLANG_FORMAT_MAJOR=23
@@ -31,7 +31,7 @@ fi
 
 cd "$root"
 mapfile -t c_files < <(find runtime -type f \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.hpp' \) \
-    -not -path 'runtime/bcn/*' -not -name 'overlay_font.h' -not -name 'glfn.h' | sort)
+    -not -name 'overlay_font.h' -not -name 'glfn.h' | sort)
 mapfile -t py_files < <(find . -maxdepth 2 -name '*.py' -not -path './third_party/*' -not -path './build*' \
     -not -path './python/*' | sort)
 

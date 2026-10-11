@@ -44,7 +44,7 @@ The loop terminates in exactly one way: you reach step 11, its predicate says st
 - `/code-audit branch` — audit current branch vs main
 - `/code-audit staged` — audit staged changes only
 - `/code-audit PR` or `/code-audit PR #123` — audit a pull request
-- `/code-audit runtime/host1x.c runtime/nvdrv.c` — audit specific files
+- `/code-audit runtime/video/host1x.c runtime/hle/nvdrv.c` — audit specific files
 
 If `<scope>` is provided, use it directly — do not ask the user to clarify. If omitted, default to uncommitted changes.
 
@@ -97,7 +97,7 @@ Write `.claude/audit-state.json` (relative to the repo root / cwd — this exact
   "inventory_files": 57,
   "complete": false,
   "findings": [
-    {"id": "F1", "sev": "HIGH", "file": "runtime/nvdrv.c:42", "status": "open", "raised_pass": 1}
+    {"id": "F1", "sev": "HIGH", "file": "runtime/hle/nvdrv.c:42", "status": "open", "raised_pass": 1}
   ]
 }
 ```
@@ -140,9 +140,9 @@ Common audit-time patterns in this repo (C runtime, Python recompiler):
 | Find every use of a struct field | `ast-grep --pattern '$X.field' --lang c runtime` and `ast-grep --pattern '$X->field' --lang c runtime` |
 | Find every guard that only logs | `grep -rn -A2 'WARN(\|LOG(' runtime` and check each is followed by a `return` or other exit |
 | Find a guest address squeezed into 32 bits | `ast-grep --pattern '(u32)$X' --lang c runtime`, then check whether `$X` is a guest address or pointer |
-| Find a direct GL call that bypasses the GL thread | `grep -rn 'r_gl[A-Z]' runtime --include='*.c' \| grep -v glq_gen.c`, and check that every `gl*` name `gpu_gl.c` uses is in `glfn.h` and `glq_gen.c` |
-| Find every syncpoint id not from `syncpt_alloc()` | `grep -rn 'syncpt' runtime/host1x.c runtime/nvdrv.c runtime/gpu*.c` |
-| Find every service command a file answers | `grep -n 'case [0-9]*:' runtime/svc_core.c` (each answer must match what the SDK caller reads, see the `swr-service` skill) |
+| Find a direct GL call that bypasses the GL thread | `grep -rn 'r_gl[A-Z]' runtime --include='*.c' \| grep -v glq_gen.c`, and check that every `gl*` name `gpu/gl/renderer.c` uses is in `gpu/gl/glfn.h` and `gpu/gl/glq_gen.c` |
+| Find every syncpoint id not from `syncpt_alloc()` | `grep -rn 'syncpt' runtime/video/host1x.c runtime/hle/nvdrv.c runtime/gpu*.c` |
+| Find every service command a file answers | `grep -n 'case [0-9]*:' runtime/hle/services.c` (each answer must match what the SDK caller reads, see the `swr-service` skill) |
 | Find every TODO/FIXME/HACK marker | `grep -rn 'TODO\|FIXME\|HACK\|XXX' runtime *.py tools scripts` |
 | Find a stale comment claim (e.g. "below 192") | `grep -rn "below 192" runtime` |
 | Find AI-ism punctuation in user-facing text | `grep -rn '—' README.md ROADMAP.md <changed user-facing files>`; then check for clause-joining `;` and stand-in ` - ` (exclude code comments and backticked code) |
@@ -196,7 +196,7 @@ Examine every changed line and surrounding context against all dimensions. Omit 
 - **Security**: Injection, auth/authz gaps, secrets in code, unsafe deserialization, SSRF, insufficient input validation
 - **Performance**: Hot-path allocations, O(n^2) when O(n) possible, N+1 queries, blocking on async, unbounded growth
 - **Project Rules**: Deviations from CLAUDE.md conventions — quote the specific rule violated
-- **Runtime invariants (this repo)**: The game's own code (and the NVIDIA, CRI and Nintendo SDK code inside it) is the specification: a service or device answers the way the console does, which the SDK caller's disassembly shows (`tools/disasm.py`). GL calls go through the glq thread (`glq_gen.c`) and never run on a thread without the context. Syncpoint ids come from `syncpt_alloc()` and stay below 128. Guest addresses are `u64`, and guest memory is reached through `GP()`/`gmem_ptr()`/`gmem_read()`, never a host pointer kept across a remap. Anything shared between game threads (which run truly parallel on the host) is locked or atomic. Changes to upstream code stay small, in the file's style, with a comment saying why. Nothing from a dump goes into git. Quote the rule for each violation.
+- **Runtime invariants (this repo)**: The game's own code (and the NVIDIA, CRI and Nintendo SDK code inside it) is the specification: a service or device answers the way the console does, which the SDK caller's disassembly shows (`tools/disasm.py`). GL calls go through the glq thread (`gpu/gl/glq_gen.c`) and never run on a thread without the context. Syncpoint ids come from `syncpt_alloc()` and stay below 128. Guest addresses are `u64`, and guest memory is reached through `GP()`/`gmem_ptr()`/`gmem_read()`, never a host pointer kept across a remap. Anything shared between game threads (which run truly parallel on the host) is locked or atomic. Changes to upstream code stay small, in the file's style, with a comment saying why. Nothing from a dump goes into git. Quote the rule for each violation.
 - **User-facing prose (AI-isms)**: Text a user reads — `README.md`, `ROADMAP.md`, commit messages, messages the runtime prints for players, and the comments it writes into the game's `.ini` — must read as plain, human-written prose. Flag and rewrite: em-dash (`—`, or its escaped form) used to splice clauses or tack on an appositive; semicolons joining two independent clauses; a spaced hyphen (` - `) standing in for a dash; dramatic "Label: payload" colons used for effect; rule-of-three triads and "not just X, but Y" flourishes. Rewrite as two sentences or a plain connector (and / with / where / so / because). Do NOT flag: code comments, debug logs (`DBGPRINTF`), semicolons inside backticked code or genuine comma-bearing lists, real field-label colons (incl. Keep-a-Changelog `**Term**:` lead-ins), or a literal typographic separator between two nouns (e.g. `%1 — %2`, `Settings → X` breadcrumbs). Severity LOW (NIT for a lone separator). If the project CLAUDE.md has a "user-facing text" / plain-prose rule, treat a violation as a Project Rules finding and quote it.
 - **Refactor completeness**: For any finding of the shape "X should now use Y" (an accessor was introduced, an API was renamed, a helper was extracted), grep the WHOLE repo (not just the partition) for every remaining use of the old pattern. List every site found and either fix it or mark it out-of-scope with a reason. A refactor finding that doesn't enumerate every old-pattern site is incomplete. Use `ast-grep` for code patterns (e.g. `ast-grep --pattern 'g_ch_syncpt_next' --lang c` after syncpoints moved to `syncpt_alloc()`) and plain `grep` for substrings — the AST search avoids matching in unrelated tokens or comments.
 - **Comment-code synchronization**: For every comment that names a quantity ("192 syncpoints", "stage slots: 0 VertexA, 1 VertexB"), a function (`see shader_merge_dual`), or a list ("4 Initialize, 6 SetAndWait, 7 Get"), verify the claim against current code. Numeric counts: literally count the items the comment describes. Named functions: `grep -rnw 'FunctionName' runtime` or `ast-grep --pattern 'FunctionName($$$)' --lang c` to confirm the name exists. Stale counts and dangling method references are real LOW findings — they accumulate silently and mislead future readers.
@@ -204,7 +204,7 @@ Examine every changed line and surrounding context against all dimensions. Omit 
   - Every runtime guard that only LOGS (`LOG`, `WARN`, `fprintf(stderr, ...)`) must also `return` or otherwise stop the downstream code from running with the bad state. A guard that only logs is a guard that doesn't guard.
   - A service answer that reports failure (a nonzero result) must leave the out-parameters the way the console does: the SDK often reads them anyway. Check the caller.
   - Every lock taken on a path (`pm_lock`) is released on every exit of that path, including early returns inside `switch` cases.
-- **Side-effect completeness**: When code changes state that another stage consumes, verify the hand-off happens. A syncpoint increment reaches waiters through `syncpt_incr` (which wakes `syncpt_wait` and the nvhost events), a kernel event through `kevent_signal`, GPU writes to guest memory through the write-back paths in `gpu_gl.c` (render targets, compute, DMA copies), and released audio buffers through the release event the game waits on. A change that lands in a buffer but never reaches its consumer is invisible until something else happens to flush it — a real correctness bug.
+- **Side-effect completeness**: When code changes state that another stage consumes, verify the hand-off happens. A syncpoint increment reaches waiters through `syncpt_incr` (which wakes `syncpt_wait` and the nvhost events), a kernel event through `kevent_signal`, GPU writes to guest memory through the write-back paths in `gpu/gl/renderer.c` (render targets, compute, DMA copies), and released audio buffers through the release event the game waits on. A change that lands in a buffer but never reaches its consumer is invisible until something else happens to flush it — a real correctness bug.
 
 ### 4. Report Findings
 
@@ -257,7 +257,7 @@ Before an edit that calls a function, method, constant, enumerator, logging cate
 
 ```
 grep -rnw 'syncpt_alloc' runtime                       # does this function exist?
-grep -nE '^[A-Za-z_].*\(' runtime/rt.h                  # what IS the API surface?
+grep -nE '^[A-Za-z_].*\(' runtime/core/rt.h                  # what IS the API surface?
 ```
 
 Then check the SEMANTICS, not just the spelling: `buf_in` and `buf_a` both return an input buffer, but `buf_in` also takes the pointer (X) buffer the SDK uses for small inputs. Picking the wrong one compiles and reads nothing.
@@ -303,7 +303,7 @@ tools/run_game.py Catherine --runs 3 --dump work/Catherine
 - Upstream builds with `-w`, so a clean build says nothing about warnings. Build a changed file once with warnings on (`gcc -O2 -Wall -Wextra -fsyntax-only -Iruntime -Ideps/linux/include FILE`) and check none come from the change.
 - A fix for a crash or a race is run until the evidence is statistical: the crash rate before and after, with the run counts, goes in the commit message.
 - Memory-safety fixes also get an AddressSanitizer build (`-DCMAKE_C_FLAGS=-fsanitize=address` in a separate build dir) and a run.
-- The game module only needs recompiling (`scripts/recomp.py`) when `switchrecomp/codegen.py`, `a64.py`, `cpu.h` or `cpu_helpers.c` changed.
+- The game module only needs recompiling (`scripts/recomp.py`) when `switchrecomp/codegen.py`, `a64.py`, `abi/cpu.h` or `abi/cpu_helpers.c` changed.
 
 ### 7. Diff Review Before Commit
 
@@ -457,7 +457,7 @@ ast-grep --pattern 'FunctionName($$$)' --lang c runtime
 grep -rnw 'FunctionName' runtime *.py tools scripts
 ```
 
-- **Zero callers** → either remove the function, or document the call path preserving it (e.g., reached through a dispatch table like `svc_register`, the `SWR_GL_FUNCS` X-macro, or the generated code's calls into `cpu_helpers.c`). A function that this audit is the first to grep for callers is a function nobody else verified is used.
+- **Zero callers** → either remove the function, or document the call path preserving it (e.g., reached through a dispatch table like `svc_register`, the `SWR_GL_FUNCS` X-macro, or the generated code's calls into `abi/cpu_helpers.c`). A function that this audit is the first to grep for callers is a function nobody else verified is used.
 - **Only self-callers (tests + the definition site)** → flag for likely-dead status; verify the test isn't the sole reason the function exists.
 
 This step is mandatory on every pass — dead code accumulates between passes when fixes remove the last caller of a helper without removing the helper.

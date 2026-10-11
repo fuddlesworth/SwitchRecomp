@@ -12,14 +12,14 @@
    shader files, as Catherine ships them in romfs. Their programs translate the way the renderer translates them on
    first use (fragment programs alone, a vertex shader's VertexA and VertexB merged), for draws without integer
    attributes, textures or outputs, so those shaders skip glslang then. */
-#include "shader.h"
-#include "vk_shader.h"
+#include "gpu/shader/shader.h"
+#include "gpu/vk/spirv.h"
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-int g_texoff_emul; /* gpu_gl.c's, read by the translator */
+int g_texoff_emul; /* gpu/gl/renderer.c's, read by the translator */
 
 static int write_file(const char* path, const void* p, size_t n) {
     FILE* f = fopen(path, "wb");

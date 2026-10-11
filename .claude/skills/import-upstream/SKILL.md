@@ -20,7 +20,7 @@ description: "Bring a new MZ Labs SwitchRecomp release into this fork: import th
    `scripts/bootstrap.py` instead. If it added a new top-level Windows toolchain folder, add it to the excludes in
    `scripts/import-upstream.sh` and `.gitignore`.
 5. **Rebuild and verify.** Bootstrap if `third_party/` changed, build both presets, and run the game
-   (`swr-run`, a few runs). If the port changed the recompiler, `cpu.h`, `cpu_helpers.c` or `SWR_ABI`, recompile the
+   (`swr-run`, a few runs). If the port changed the recompiler, `abi/cpu.h`, `abi/cpu_helpers.c` or `SWR_ABI`, recompile the
    game first.
 6. **Open the PR** once verified, and update ROADMAP.md if the release changed what is done or planned.
 

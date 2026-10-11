@@ -24,7 +24,7 @@ import re
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNTIME = os.path.join(REPO, 'runtime')
 # the headers and helpers the generated code is compiled with: the ABI between game module and runtime
-ABI_DIR = RUNTIME
+ABI_DIR = os.path.join(RUNTIME, 'abi')
 
 
 def abi_version():

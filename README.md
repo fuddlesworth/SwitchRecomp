@@ -170,6 +170,6 @@ The Apache license covers only the SwitchRecomp code. Third-party components kee
 | volk (Arseny Kapoulkine) | Loading Vulkan | MIT, `third_party/volk/LICENSE.md` |
 | Vulkan Memory Allocator (AMD) | GPU memory for the Vulkan renderer | MIT, `third_party/VulkanMemoryAllocator/LICENSE.txt` |
 | SDL3 | Window and input (the sdl3 backend): the system's on Linux, built from the submodule on Windows | zlib, `third_party/SDL/LICENSE.txt` |
-| texture2ddecoder | BCn textures on GPUs without them | MIT, `runtime/bcn/LICENSE_texture2ddecoder.txt` |
-| lsfg-vk | LSFG pass layout, ported to GL in `runtime/lsfg.c` | MIT |
-| DejaVu Sans Mono | The on-screen overlay font (`runtime/overlay_font.h`) | Bitstream Vera / DejaVu license |
+| texture2ddecoder | BCn textures on GPUs without them | MIT, `third_party/bcn/LICENSE_texture2ddecoder.txt` |
+| lsfg-vk | LSFG pass layout, ported to GL in `runtime/gpu/gl/lsfg.c` | MIT |
+| DejaVu Sans Mono | The on-screen overlay font (`runtime/gpu/gl/overlay_font.h`) | Bitstream Vera / DejaVu license |
