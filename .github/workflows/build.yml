@@ -32,7 +32,7 @@ jobs:
         preset: [gcc, clang]
     steps:
       - name: Install tools
-        run: pacman -Syu --noconfirm --needed base-devel cmake ninja nasm python git clang libx11 mesa sdl3
+        run: pacman -Syu --noconfirm --needed base-devel cmake ninja nasm python git clang mesa sdl3
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -49,10 +49,6 @@ jobs:
         run: |
           cmake -B build/novulkan -G Ninja -DSWR_VULKAN=OFF -DCMAKE_C_COMPILER=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} -DCMAKE_CXX_COMPILER=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }}
           cmake --build build/novulkan
-      - name: Build the X11 backend too
-        run: |
-          cmake -B build/x11 -G Ninja -DSWR_BACKEND=x11 -DCMAKE_C_COMPILER=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} -DCMAKE_CXX_COMPILER=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }}
-          cmake --build build/x11
       - name: Check the Python scripts
         run: |
           python -m compileall -q switchrecomp scripts tools
@@ -83,10 +79,6 @@ jobs:
         run: |
           cmake --preset mingw-cross
           cmake --build --preset mingw-cross
-      - name: Build the SDL3 backend too (with both renderers)
-        run: |
-          cmake --preset mingw-cross -B build/mingw-sdl3 -DSWR_BACKEND=sdl3
-          cmake --build build/mingw-sdl3
 
   windows:
     name: Windows (${{ matrix.compiler }})
@@ -110,13 +102,6 @@ jobs:
           cmake --preset ${{ matrix.compiler }}
           if ($LASTEXITCODE) { exit 1 }
           cmake --build --preset ${{ matrix.compiler }}
-          if ($LASTEXITCODE) { exit 1 }
-      - name: Build the SDL3 backend too (with both renderers)
-        run: |
-          . .\scripts\env.ps1 -Isolated
-          cmake --preset ${{ matrix.compiler }} -B build/sdl3 -DSWR_BACKEND=sdl3
-          if ($LASTEXITCODE) { exit 1 }
-          cmake --build build/sdl3
           if ($LASTEXITCODE) { exit 1 }
       - name: Check the Python scripts
         run: |

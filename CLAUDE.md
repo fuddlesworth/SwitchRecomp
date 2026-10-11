@@ -34,7 +34,9 @@ state. This file holds the rules sessions get wrong and points to the skills tha
 
 - The Bash tool runs **zsh**: `$t:s` is a zsh modifier, so write `"${t}:s"`. Scripts in the repo use bash shebangs.
 - Temporary files go in the session scratchpad, never in the repo root. Long runs use `run_in_background`.
-- Never `pkill`/`killall` (they match the shell running them): `pgrep -a Catherine`, then `kill PID`.
+- Never `pkill`/`killall`, or a `kill $(pgrep -f PATTERN)` loop: they match the shell running the command, whose
+  command line contains the pattern (twice that killed the session's own shell). List with `pgrep -a NAME` (or
+  `pgrep -x cc1`, by process name), then `kill PID` with the numbers in a separate command.
 - Don't build while a timing-sensitive test runs: the build deploys a new runtime into `games/` and loads the CPU.
 - No `sudo` and no system packages: the user installs those. `uvx` fetches ruff on its own.
 - Context is scarce. Never print a whole log (`games/Catherine.log` grows to megabytes), a whole disassembly or a
@@ -70,7 +72,7 @@ by the build's deploy step. Game code (`_code.so`) only needs recompiling when `
 | Vulkan renderer | `runtime/gpu/vk/`: `vk.h` (lists the parts), `device.c` (instance, device, queues, swapchain, VMA), `cmd.c` (frames in flight, staging), `surface.c` and `format.c` (render targets, formats), `texture.c` (textures, samplers), `buffer.c` (guest memory as buffers), `pipeline.c` (shader modules, pipelines), `render.c` (rendering passes, clears, draws), `compute.c` (compute on the compute queue, results landing in guest memory), `renderer.c` (its side of the renderer interface, presenting), `spirv.c` (GLSL to SPIR-V with glslang, SPIR-V cache); `third_party/Vulkan-Headers`, `third_party/volk`, `third_party/glslang`, `third_party/VulkanMemoryAllocator` |
 | Shader corpus | `SWR_SHADER_CORPUS=dir` records each translated shader; `build/<dir>/swr-shaderc dir --validate` translates it for Vulkan, compiles and validates it (`--gl` for GL output, to diff two builds) |
 | Video | `runtime/video/host1x.c` (NVDEC with OpenH264, VIC) |
-| Platform | `runtime/platform/`: `plat.c` (threads, memory, files per OS), `backend/` (sdl3 is the Linux default, x11 the fallback, win32 Windows), `recorder_win32.c` |
+| Platform | `runtime/platform/`: `plat.c` (logging, fatal), `plat_posix.c` and `plat_win32.c` (threads, locks, time, memory, files per OS), `profiler_win32.c`, `backend/` (`sdl3.c` on Linux and Windows, `headless.c`, `android.c`), `recorder_win32.c` (F7) |
 
 Each folder under `runtime/` is one CMake object library (`runtime/CMakeLists.txt`), and includes are written from `runtime/`
 (`#include "gpu/vk/vk.h"`). A function or global that another file uses is declared once, in the header next to the file

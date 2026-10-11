@@ -1,7 +1,7 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
-/* the touch overlay (overlay.c): on-screen controls drawn with GL, for the touch backends (Android, x11es) */
+/* the touch overlay (overlay.c): on-screen controls drawn with GL, for the Android backend */
 #ifndef SWR_OVERLAY_H
 #define SWR_OVERLAY_H
 #include "abi/cpu.h"

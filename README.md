@@ -16,7 +16,7 @@ Use only games and keys dumped from your own console. None are included, and non
 ### Requirements
 
 - GCC 16 or Clang 23, CMake 3.20 or newer, Ninja, Make, NASM, Python 3.12 or newer, Git
-- SDL3 and OpenGL 4.3 development files (the X11 backend needs Xlib instead of SDL3)
+- SDL3 and OpenGL 4.3 development files
 - `uv`, only to run the formatter
 
 ### Setup
@@ -50,15 +50,13 @@ cmake --preset gcc && cmake --build --preset gcc
 ```
 
 The window runs natively on Wayland, and on X11 (`SDL_VIDEO_DRIVER=x11` picks X11 on a Wayland desktop). Controls
-are the same as on Windows (below), with any controller SDL knows. The older X11-only backend is still there:
-configure with `-DSWR_BACKEND=x11`. It has no sticks and no gamepad support, and its keys differ (S for X, A for
-Y).
+are the same as on Windows (below).
 
 ## Windows
 
 ### Requirements
 
-- Windows 10 or 11, 64-bit, and a GPU with OpenGL 4.3 or newer (keep the driver up to date)
+- Windows 10 or 11, 64-bit, and a GPU with Vulkan 1.3 or OpenGL 4.3 (keep the driver up to date)
 - [Git for Windows](https://git-scm.com). Everything else is downloaded by the bootstrap.
 
 ### Setup
@@ -94,18 +92,14 @@ cd games; .\Catherine.exe
 Use `--preset clang` if you set up with `-Compiler clang`. A runtime change only needs
 `cmake --preset gcc; cmake --build --preset gcc`.
 
-Controls: an Xbox (XInput) controller works like a Switch controller, by position. Keyboard: arrows for the D-pad,
+Controls: any controller SDL knows works like a Switch controller, by position. Keyboard: arrows for the D-pad,
 WASD for the left stick, IJKL for the right stick, X or Space for A, Z for B, C for X, V for Y, Q and E for L and R,
 1 and 3 for ZL and ZR, Enter for Plus and Backspace for Minus. F1 shows help, F3 takes a screenshot, F4 switches the
 FPS limit, F5 writes a diagnostic trace, F7 records an .mp4 (Windows only), F8 saves a full-resolution PNG, F11 or
 Alt+Enter toggles fullscreen, and Escape quits.
 
-The SDL3 backend, the Linux default, also builds on Windows (the bootstrap builds SDL3 for it). It supports any
-controller SDL knows, not just XInput ones, and has the Vulkan renderer as well as OpenGL:
-
-```powershell
-cmake --preset gcc -B build\sdl3 -DSWR_BACKEND=sdl3; cmake --build build\sdl3
-```
+The window and input go through SDL3 on Windows too (the bootstrap builds it), with the same two renderers as on
+Linux.
 
 ## Settings and logs
 

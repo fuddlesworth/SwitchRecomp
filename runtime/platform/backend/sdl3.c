@@ -1,6 +1,6 @@
-/* SDL3 backend: window, OpenGL 4.3+ context or Vulkan surface, keyboard and gamepads. Runs natively on Wayland and
-   on X11 (SDL_VIDEO_DRIVER=x11 picks X11), and takes the same unattended-run options as the X11 backend (seconds,
-   frames, shot, press, script). With the Vulkan renderer built in (SWR_VULKAN), renderer= picks one at startup, and
+/* SDL3 backend, the window backend on Linux and Windows: window, OpenGL 4.3+ context or Vulkan surface, keyboard and
+   gamepads. Runs natively on Wayland and on X11 (SDL_VIDEO_DRIVER=x11 picks X11), and takes the unattended-run options
+   (seconds, frames, shot, press, script). With the Vulkan renderer built in (SWR_VULKAN), renderer= picks one at startup, and
    OpenGL takes over when Vulkan can't start. */
 #include "core/main.h"
 #include "core/options.h"
