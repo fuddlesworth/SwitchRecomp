@@ -10,6 +10,7 @@
 *.cert
 /work/
 /keys/
+/dumps/
 
 # Recompiled games: runtime, game module, generated C, data, saves, settings and logs
 /games/
