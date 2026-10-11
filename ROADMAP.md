@@ -10,7 +10,8 @@ Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 
 Catherine boots through the logos, the intro movie, the terms screen, the main menu and the New Game cutscene at
 about 58 to 60 FPS, and around 40 FPS in heavy 3D scenes. It took eight fixes to the v142 runtime to get there (see
-the history of `main`). There is no sound, and a memory-corruption crash shows up in roughly one run in seven.
+the history of `main`). There is no sound. A memory-corruption crash around the title screen now happens in most
+runs: in 4 of 4 runs of the old runtime and 4 of 6 of the current one, with the save data the earlier runs left.
 
 How the pieces fit:
 
@@ -26,26 +27,47 @@ How the pieces fit:
 
 ## Phase 0: repository and build
 
-- [ ] Git history: an `upstream` branch holding each MZ Labs release as imported, and `main` with our work on top,
-      one commit per fix. New upstream releases are imported with `scripts/import-upstream.sh` and merged.
-- [ ] `.gitignore` that keeps game data, keys, dumps and build output out of git.
-- [ ] CMake build for the Linux runtime, with OpenH264 and hactool as submodules built from source.
-- [ ] Scripts for the whole pipeline: extract a dump with hactool, recompile, link the runtime into `games/`.
-- [ ] Move the debugging tools written during bring-up (symbolizer, thread-dump reader, Maxwell scanner) into
-      `tools/`.
-- [ ] `README.md` for the Linux setup, crediting "SwitchRecomp by MZ Labs" as NOTICE.txt requires.
+- [x] Git history: an `upstream` branch holding each MZ Labs release as released and then formatted, and `main`
+      with our work on top, one commit per fix. `scripts/import-upstream.sh` imports new releases.
+- [x] `.gitignore` that keeps game data, keys, dumps and build output out of git.
+- [x] No prebuilt binaries: OpenH264, SPIRV-Cross and hactool are submodules that `scripts/bootstrap.sh` builds,
+      for Linux or cross-built for Windows.
+- [x] CMake build for the Linux runtime, with presets for GCC 16 and Clang 23, C23 and C++23.
+- [x] Scripts for the whole pipeline: extract a dump, recompile, deploy the runtime into `games/`.
+- [x] Formatting: clang-format 23 and ruff through `scripts/format.sh`, applied to the whole history.
+- [x] Debugging tools in `tools/`: symbol names, disassembly, unattended runs.
+- [ ] Still to move from bring-up: the thread-dump reader and the Maxwell instruction scanner.
+- [x] `README.md` for the Linux setup, crediting "SwitchRecomp by MZ Labs" as NOTICE requires. `LICENSE` and
+      `NOTICE` replace the release's `.txt` files.
 
 ## Phase 1: Claude Code setup
 
-- [ ] `CLAUDE.md` with the project's rules: what never gets committed, how upstream code is changed, how a change
+- [x] `CLAUDE.md` with the project's rules: what never gets committed, how upstream code is changed, how a change
       is verified, licensing of reference code.
-- [ ] Skills for the procedures that sessions get wrong: building, running the game with scripted input and
-      screenshots, triaging a crash report, importing an upstream release, recording a lesson.
-- [ ] Domain review agents for the audit loop (kernel and services, GPU and shaders, audio and video, recompiler,
-      build) and read-only investigators for crash triage and shader inspection.
-- [ ] A hook that blocks committing keys or game files and editing generated output.
+- [x] Skills: `swr-build`, `swr-run`, `swr-crash`, `swr-service`, `import-upstream`, `record-lesson`, and the
+      `code-audit` loop.
+- [x] Six domain review agents for the audit loop (kernel and services, GPU, audio and video, platform,
+      recompiler, build and tooling), and two read-only investigators (`crash-triage`, `sdk-scout`).
+- [x] A hook that blocks staging keys or game files, broad `git add`, force pushes, `pkill` and `sudo`, and edits
+      to generated or third-party trees.
 
-## Phase 2: sound
+## Phase 2: stability
+
+This comes before sound: the title-screen crash now ends most runs, so nothing past it can be tested reliably, and
+a renderer rewrite on top of a memory-corruption bug would make every regression ambiguous.
+
+- [ ] Smoke test: a scripted run from boot to the New Game cutscene that checks for crashes, FPS and screenshots,
+      runnable unattended (Xvfb or a headless Wayland compositor).
+- [x] VIC jobs wrote past NvRmStream's 128-entry syncpoint table into the game's heap (host1x syncpoints now come
+      from the GPU's allocator).
+- [ ] The title-screen crash. Worker threads read job records whose pointers have been overwritten with float data
+      that looks like vertex positions (`x10=3f800000438e91de`, a position with w = 1.0). The leading suspect is the
+      compute write-back copying shader output into guest memory that the game has since reused. The fix is to
+      check every write-back target against the current memory map and the GPU fence the game waited on.
+- [ ] Turn compiler warnings back on (upstream builds with `-w`) and fix them file by file, starting with the
+      files we change.
+
+## Phase 3: sound
 
 Catherine uses two audio paths, and both are silent today.
 
@@ -59,20 +81,6 @@ Catherine uses two audio paths, and both are silent today.
       circular-buffer sinks. Ryujinx's `Ryujinx.Audio` renderer (MIT) is the reference. yuzu's `audio_core` is GPLv3
       and can be read for behavior but never copied, because this project is Apache 2.0.
 - [ ] Check `hwopus` and other audio services the game opens once `audren` produces sound.
-
-## Phase 3: stability
-
-This can run in parallel with Phase 2, and it should be finished before Phase 5 starts, since a renderer rewrite on
-top of a memory-corruption bug makes every regression ambiguous.
-
-- [ ] Smoke test: a scripted run from boot to the New Game cutscene that checks for crashes, FPS and screenshots,
-      runnable unattended (Xvfb or a headless Wayland compositor).
-- [ ] The intermittent crash. Worker threads read job records whose pointers have been overwritten with float data
-      that looks like vertex positions (`x10=3f800000438e91de`, a position with w = 1.0). The leading suspect is the
-      compute write-back copying shader output into guest memory that the game has since reused. The fix is to
-      check every write-back target against the current memory map and the GPU fence the game waited on.
-- [ ] Turn compiler warnings back on (upstream builds with `-w`) and fix them file by file, starting with the
-      files we change.
 
 ## Phase 4: Wayland and the platform layer
 
@@ -103,7 +111,7 @@ underneath. What can change is how much of the hardware is emulated and how well
 - [ ] A Vulkan backend implementing the same interface as `gpu_gl.c`. It consumes SPIR-V from Phase 5, gets a real
       pipeline cache, runs compute asynchronously with explicit synchronization, and replaces the glq thread.
 - [ ] Texture and buffer cache tracking: invalidation on CPU writes and correct write-back, which is the same area
-      as the Phase 3 crash.
+      as the Phase 2 crash.
 - [ ] Research: NVN-level emulation. The game reaches NVN through `nvnBootstrapLoader` and
       `nvnDeviceGetProcAddress`, so the recompiled code could be pointed at our own NVN implementation on Vulkan.
       That skips command-buffer decoding and most of the register-level emulation. NVN has around 800 entry points,

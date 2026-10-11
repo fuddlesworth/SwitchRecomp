@@ -51,7 +51,7 @@ add_executable(swr-runtime ${sources})
 target_include_directories(swr-runtime PRIVATE "${RT}")
 target_link_libraries(swr-runtime PRIVATE pthread dl m)
 target_link_options(swr-runtime PRIVATE -rdynamic)
-# Upstream's flags. -w hides the warnings for now; turning them back on is in ROADMAP.md (Phase 3)
+# Upstream's flags. -w hides the warnings for now; turning them back on is in ROADMAP.md (Phase 2)
 target_compile_options(swr-runtime PRIVATE -w -fno-strict-aliasing)
 
 if(NOT SWR_BACKEND STREQUAL "headless")
