@@ -5,4 +5,8 @@ Comment=Runs Switch games recompiled to native code
 Exec=swr-runtime
 Icon=switchrecomp
 Categories=Game;Emulator;
+Keywords=Nintendo;Switch;recompiler;
 Terminal=false
+# AppImageLauncher (and appimaged) leave an AppImage where it is when this is false. Integrating would move it into
+# ~/Applications, away from the game module a copy named after a game (games/Game.AppImage) loads from its own folder
+X-AppImage-Integrate=false
