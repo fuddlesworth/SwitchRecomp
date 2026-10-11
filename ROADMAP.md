@@ -132,8 +132,16 @@ The game stalls the first time it meets a shader (`waiting for shader=414` in a 
 Some GPU emulation can't be avoided: the shaders are compiled Maxwell code and have to be translated whatever sits
 underneath. What can change is how much of the hardware is emulated and how well it maps to the host.
 
-- [ ] A Vulkan backend implementing the same interface as `gpu_gl.c`. It consumes SPIR-V from Phase 5, gets a real
-      pipeline cache, runs compute asynchronously with explicit synchronization, and replaces the glq thread.
+- [~] A Vulkan backend implementing the same interface as `gpu_gl.c`, built next to OpenGL with `-DSWR_GPU=vulkan`
+      until it matches it. Vulkan 1.3 (timeline semaphores, synchronization2, dynamic rendering), loaded through
+      SDL's loader with volk so nothing links against a Vulkan library.
+  - [x] Step 1, presenting: instance, device with a graphics and a separate compute queue, swapchain through SDL3
+        (Wayland and X11), and the CPU path's frames shown on it. Nothing is drawn yet.
+  - [ ] Step 2, shaders: the Maxwell translator's GLSL with Vulkan bindings, compiled to SPIR-V with glslang (a new
+        submodule), and an on-disk SPIR-V cache (Phase 5).
+  - [ ] Step 3, drawing: render targets, textures, samplers, pipelines and draws, ported from `gpu_gl.c`.
+  - [ ] Step 4, compute on its own queue, with completion signals held until results land (the Phase 2 crash).
+  - [ ] Step 5, parity with OpenGL, screenshot by screenshot, then Vulkan becomes the default, also on Windows.
 - [ ] Texture and buffer cache tracking: invalidation on CPU writes and correct write-back, which is the same area
       as the Phase 2 crash.
 - [ ] Research: NVN-level emulation. The game reaches NVN through `nvnBootstrapLoader` and
