@@ -166,15 +166,25 @@ void vk_submit(VkSemaphore wait, VkPipelineStageFlags2 wait_stage, VkSemaphore s
     /* staging memory is host coherent, but the host writes must be visible to the transfers */
     if (f->stage_mem) vmaFlushAllocation(g_vk.vma, f->stage_mem, 0, VK_WHOLE_SIZE);
     VK_OK(vkEndCommandBuffer(f->cb));
-    VkSemaphoreSubmitInfo w = {
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = wait, .stageMask = wait_stage};
+    VkSemaphoreSubmitInfo w[2] = {
+        {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = wait, .stageMask = wait_stage}};
+    u32 nw = wait ? 1 : 0;
+    extern VkSemaphore g_vk_csem;
+    extern u64 g_vk_cs_wait_value;
+    if (g_vk_cs_wait_value) { /* draws read compute results on the GPU: after that batch */
+        w[nw++] = (VkSemaphoreSubmitInfo){.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                          .semaphore = g_vk_csem,
+                                          .value = g_vk_cs_wait_value,
+                                          .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+        g_vk_cs_wait_value = 0;
+    }
     VkSemaphoreSubmitInfo s = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                .semaphore = signal,
                                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
     VkCommandBufferSubmitInfo c = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = f->cb};
     VkSubmitInfo2 si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                        .waitSemaphoreInfoCount = wait ? 1u : 0u,
-                        .pWaitSemaphoreInfos = &w,
+                        .waitSemaphoreInfoCount = nw,
+                        .pWaitSemaphoreInfos = w,
                         .commandBufferInfoCount = 1,
                         .pCommandBufferInfos = &c,
                         .signalSemaphoreInfoCount = signal ? 1u : 0u,

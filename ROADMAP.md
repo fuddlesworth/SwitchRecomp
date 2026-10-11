@@ -171,9 +171,12 @@ underneath. What can change is how much of the hardware is emulated and how well
   - [x] Step 4, compute on its own queue (`vk_compute.c`). Dispatches are batched on the compute queue, and their
         results land in guest memory, with the rule from Phase 2, before anything the game can observe: a read
         or GPU write of that memory, a semaphore release or report, a syncpoint. That is the ordering that
-        stopped the title-screen crash, and on the compute queue it costs about 1 ms per batch of dispatches
-        instead of the whole rendering backlog. 0 crashes in 7 runs past the title screen (GL: 2 of 5 the same
-        day), at the same frame rate as GL.
+        stopped the title-screen crash, and it costs little on the compute queue. Draws read results that haven't
+        landed straight from the arena (the batch signals a timeline semaphore the next graphics submit waits on),
+        a dispatch reads what an earlier one in its batch wrote in place (multi-pass skinning), and the arena grows
+        and is reused rather than filling up: about 200 000 dispatches in 4 800 batches over 150 s, with 1.3 s
+        spent waiting. 0 crashes in 13 runs past the title screen (GL: 2 of 5 the same day), slightly faster than
+        GL (8 700 frames in 150 s against 8 600).
   - [x] Step 5, the default. The sdl3 backend builds both renderers into one runtime (`renderer.c` calls the active
         one; `gl_names.h` renames `gpu_gl.c`'s side without editing it), and `renderer=auto` in the .ini picks Vulkan,
         falling back to OpenGL when Vulkan can't start or when LSFG frame generation is set up. Vulkan has the
@@ -189,10 +192,25 @@ underneath. What can change is how much of the hardware is emulated and how well
       change for several frames: a movie's frames now reach their texture every frame. Results land in guest memory
       with the rule from Phase 2, and render targets are written back before any CPU-side copy reads them. OpenGL
       keeps its content checks.
-- [ ] Research: NVN-level emulation. The game reaches NVN through `nvnBootstrapLoader` and
-      `nvnDeviceGetProcAddress`, so the recompiled code could be pointed at our own NVN implementation on Vulkan.
-      That skips command-buffer decoding and most of the register-level emulation. NVN has around 800 entry points,
-      so this only makes sense once the Vulkan backend works.
+- [x] Research: NVN-level emulation, for Catherine. Findings (from the disassembly, nothing run):
+      - The NVN driver is linked statically into the `sdk` module; `nvnBootstrapLoader` (0xcf8fd90) is exported
+        there and imported by `main` through a PLT stub (GOT slot 0x8ae3d20), so the runtime could interpose it at
+        load time.
+      - `main`'s loader (0x8320b70) asks `nvnDeviceGetProcAddress` for 468 entry points into a table of function
+        pointers at 0x8ae8000. Game code uses about 178 of them, nearly all from one wrapper layer, the engine's
+        `cvDevice` (0x831e000 to 0x8327000): command buffers (138 requested), textures and samplers, state objects,
+        memory pools, queues, syncs and the window. It never writes command memory itself, and reads nothing back
+        from the GPU but fences: no report counters or queries.
+      - The movie player (`android::SfNvnUtil` in `subsdk1`) uses NVX entry points that reach NvRm surfaces and
+        syncpoints, so the host1x path stays whatever sits above it.
+      - Assessment: an NVN implementation on Vulkan would need those ~178 entry points (stubs for the rest), the
+        texture and sampler pools as packed Maxwell descriptors (shaders index them by handle), memory pools as
+        CPU-visible memory with aliasing, and the same shader translation (the programs are still Maxwell code, and
+        shaders read raw GPU addresses from constant buffers). It would replace command-buffer decoding, the
+        register shadowing in `gpu_3d.c` and the cache guessing, since NVN states what changes. A partial version
+        that keeps the real driver for most calls is hard, because both would have to agree on object state.
+        With the register-level Vulkan renderer now matching OpenGL, this stays a possible later rewrite rather
+        than a next step: the cost is large and it fixes nothing that is broken today.
 
 ## Phase 7: polish and games
 
