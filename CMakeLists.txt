@@ -44,119 +44,13 @@ endif()
 set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O2 -g")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g")
 
-set(RT "${CMAKE_SOURCE_DIR}/runtime")
-
 function(swr_require_dep file option)
     if(NOT EXISTS "${DEPS}/${file}")
         message(FATAL_ERROR "${DEPS}/${file} is missing. Run scripts/bootstrap.py (scripts\\bootstrap.ps1 on Windows), or configure with -D${option}=OFF.")
     endif()
 endfunction()
 
-set(sources plat mem kernel ipc svc_core svc_hid svc_fs svc_vi nvdrv gpu gpu_engines gpu_3d loader main host1x entry)
-if(SWR_BACKEND STREQUAL "headless")
-    list(APPEND sources gpu_nogl)
-else()
-    list(APPEND sources gpu_gl gl_load shader astc glq glq_gen)
-    if(SWR_BACKEND STREQUAL "x11es")
-        list(APPEND sources overlay)
-    endif()
-endif()
+add_subdirectory(runtime)
 if(SWR_VULKAN)
-    list(APPEND sources renderer gpu_vk vk_device vk_shader vk_cmd vk_format vk_surface vk_texture vk_buffer vk_pipeline
-         vk_render vk_compute)
-endif()
-list(APPEND sources backend_${SWR_BACKEND})
-if(WIN32 AND SWR_BACKEND MATCHES "^(win32|sdl3)$")
-    list(APPEND sources rec_win32) # F7 video recorder, Media Foundation
-endif()
-list(TRANSFORM sources PREPEND "${RT}/")
-list(TRANSFORM sources APPEND ".c")
-
-add_executable(swr-runtime ${sources})
-# OpenH264 and SPIRV-Cross are C++: link with the C++ driver even when no C++ source of ours is in the build
-set_target_properties(swr-runtime PROPERTIES LINKER_LANGUAGE CXX)
-target_include_directories(swr-runtime PRIVATE "${RT}")
-if(WIN32)
-    # Static, so the runtime runs without the MinGW DLLs next to it
-    target_link_libraries(swr-runtime PRIVATE gdi32 winmm user32 opengl32 comdlg32 shell32)
-    target_link_options(swr-runtime PRIVATE -static)
-    if(SWR_BACKEND MATCHES "^(win32|sdl3)$")
-        target_link_libraries(swr-runtime PRIVATE mfplat mfreadwrite mfuuid ole32)
-        target_link_options(swr-runtime PRIVATE -mwindows)
-    else()
-        target_link_options(swr-runtime PRIVATE -mconsole)
-    endif()
-else()
-    target_link_libraries(swr-runtime PRIVATE pthread dl m)
-    target_link_options(swr-runtime PRIVATE -rdynamic)
-endif()
-# Upstream's flags. -w hides the warnings for now; turning them back on is in ROADMAP.md (Phase 2)
-target_compile_options(swr-runtime PRIVATE -w -fno-strict-aliasing)
-
-if(SWR_VULKAN)
-    # gpu_gl.c's side of the renderer interface takes glr_ names, renderer.c calls the active renderer
-    set_source_files_properties("${RT}/gpu_gl.c" PROPERTIES COMPILE_OPTIONS "-include;${RT}/gl_names.h")
-    # volk loads Vulkan through the window backend's loader, so nothing links against libvulkan
-    target_sources(swr-runtime PRIVATE "${CMAKE_SOURCE_DIR}/third_party/volk/volk.c" "${RT}/vk_vma.cpp")
-    target_include_directories(swr-runtime PRIVATE "${CMAKE_SOURCE_DIR}/third_party/Vulkan-Headers/include"
-                                                   "${CMAKE_SOURCE_DIR}/third_party/volk"
-                                                   "${CMAKE_SOURCE_DIR}/third_party/VulkanMemoryAllocator/include")
-    target_compile_definitions(swr-runtime PRIVATE SWR_VULKAN VK_NO_PROTOTYPES)
-    swr_require_dep(lib/libglslang-all.a SWR_VULKAN)
-    target_include_directories(swr-runtime PRIVATE "${DEPS}/include")
-    target_link_libraries(swr-runtime PRIVATE "${DEPS}/lib/libglslang-all.a")
-endif()
-if(NOT SWR_BACKEND STREQUAL "headless")
-    target_sources(swr-runtime PRIVATE "${RT}/bcn/bcn.cpp" "${RT}/bcn/bcdec.cpp")
-    target_include_directories(swr-runtime PRIVATE "${RT}/bcn")
-endif()
-
-if(SWR_BACKEND STREQUAL "sdl3" AND WIN32)
-    # static, from scripts/bootstrap.py
-    if(NOT EXISTS "${DEPS}/sdl3/lib/cmake/SDL3/SDL3Config.cmake")
-        message(FATAL_ERROR "${DEPS}/sdl3 is missing. Run scripts/bootstrap.py (scripts\\bootstrap.ps1 on Windows), or configure with -DSWR_BACKEND=win32.")
-    endif()
-    find_package(SDL3 REQUIRED CONFIG PATHS "${DEPS}/sdl3" NO_DEFAULT_PATH)
-    target_link_libraries(swr-runtime PRIVATE SDL3::SDL3-static)
-elseif(SWR_BACKEND STREQUAL "sdl3")
-    find_package(SDL3 REQUIRED CONFIG)
-    target_link_libraries(swr-runtime PRIVATE SDL3::SDL3)
-elseif(SWR_BACKEND STREQUAL "x11")
-    target_link_libraries(swr-runtime PRIVATE X11 GL)
-elseif(SWR_BACKEND STREQUAL "x11es")
-    target_link_libraries(swr-runtime PRIVATE X11 EGL)
-endif()
-
-
-if(SWR_H264)
-    swr_require_dep(lib/libdecoder.a SWR_H264)
-    target_include_directories(swr-runtime PRIVATE "${DEPS}/include")
-    target_link_libraries(swr-runtime PRIVATE "${DEPS}/lib/libdecoder.a" "${DEPS}/lib/libcommon.a")
-else()
-    target_compile_definitions(swr-runtime PRIVATE SWR_NO_H264)
-endif()
-
-if(SWR_LSFG AND SWR_BACKEND MATCHES "^(sdl3|x11|win32)$")
-    swr_require_dep(lib/libspvc.a SWR_LSFG)
-    target_sources(swr-runtime PRIVATE "${RT}/lsfg.c" "${RT}/lsfg_spvc.cpp")
-    target_include_directories(swr-runtime PRIVATE "${DEPS}/include/spirv_cross")
-    target_link_libraries(swr-runtime PRIVATE "${DEPS}/lib/libspvc.a")
-elseif(NOT SWR_BACKEND STREQUAL "headless")
-    target_sources(swr-runtime PRIVATE "${RT}/lsfg_stub.c")
-endif()
-
-if(SWR_DEPLOY)
-    add_custom_command(TARGET swr-runtime POST_BUILD
-        COMMAND "${CMAKE_COMMAND}" "-DRUNTIME=$<TARGET_FILE:swr-runtime>" "-DGAMES=${SWR_GAMES_DIR}" "-DWINDOWS=${WIN32}"
-                -P "${CMAKE_SOURCE_DIR}/cmake/deploy.cmake"
-        VERBATIM)
-endif()
-
-# swr-shaderc: translates a shader corpus (SWR_SHADER_CORPUS) offline and compiles it to SPIR-V
-if(SWR_VULKAN)
-    add_executable(swr-shaderc "${CMAKE_SOURCE_DIR}/tools/swr_shaderc.c" "${RT}/shader.c" "${RT}/vk_shader.c")
-    target_include_directories(swr-shaderc PRIVATE "${RT}" "${DEPS}/include")
-    target_compile_options(swr-shaderc PRIVATE -w -fno-strict-aliasing)
-    target_link_libraries(swr-shaderc PRIVATE "${DEPS}/lib/libglslang-all.a" pthread m)
-    set_target_properties(swr-shaderc PROPERTIES LINKER_LANGUAGE CXX)
+    add_subdirectory(tools)
 endif()

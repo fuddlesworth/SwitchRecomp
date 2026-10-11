@@ -21,13 +21,12 @@ How the pieces fit:
 
 - **CPU**: the game's ARM64 code is translated to C once (the `switchrecomp` package) and built as
   `<Game>_code.so`. This part is a real recompilation.
-- **OS**: kernel, IPC and services are high-level emulation in `runtime/` (`kernel.c`, `ipc.c`, `svc_*.c`,
-  `nvdrv.c`).
+- **OS**: kernel, IPC and services are high-level emulation in `runtime/kernel/` and `runtime/hle/`.
 - **GPU**: emulated at the hardware level. The game's own NVN driver is recompiled with the game and writes Maxwell
-  command buffers. `gpu.c`, `gpu_engines.c` and `gpu_3d.c` decode them, `shader.c` translates Maxwell shader
-  binaries to GLSL, and a renderer draws: `gpu_vk.c` and the `vk_*.c` files with Vulkan, or `gpu_gl.c` with
-  OpenGL. `renderer.c` calls the active one through the interface `gpu_nogl.c` shows (about 20 functions).
-- **Video**: `host1x.c` emulates NVDEC and VIC, with OpenH264 doing the H.264 decode.
+  command buffers. `runtime/gpu/` decodes them (`gpu.c`, `engines.c`, `maxwell3d.c`), `gpu/shader/` translates
+  Maxwell shader binaries to GLSL, and a renderer draws: `gpu/vk/` with Vulkan or `gpu/gl/` with OpenGL.
+  `gpu/renderer.c` calls the active one through the interface `gpu/null/null.c` shows (about 20 functions).
+- **Video**: `runtime/video/host1x.c` emulates NVDEC and VIC, with OpenH264 doing the H.264 decode.
 
 ## Phase 0: repository and build
 
@@ -228,16 +227,16 @@ hard fork from here (decided 2026-10-11): upstream releases are ported by hand r
 `import-upstream` skill), so files can be moved, split and renamed freely. Each step is its own PR, built in every
 variant and run on Catherine with both renderers.
 
-- [~] The recompiler as a package (`switchrecomp/`, run as `python3 -m switchrecomp`), split by job. The runtime is
+- [x] The recompiler as a package (`switchrecomp/`, run as `python3 -m switchrecomp`), split by job. The runtime is
       built only by CMake, so its source list lives in one place, and `SWR_ABI` in `cpu.h` is the one ABI version
       both sides check.
-- [ ] `runtime/` as a tree of components (`abi`, `core`, `kernel`, `hle`, `gpu` with `gl` and `vk`, `video`,
+- [x] `runtime/` as a tree of components (`abi`, `core`, `kernel`, `hle`, `gpu` with `gl` and `vk`, `video`,
       `platform`), each a CMake object library, with includes by path.
 - [ ] Headers per component: `rt.h` split up, every inline `extern` replaced by a declaration in the header that
       owns it, and `-Wnested-externs -Wmissing-prototypes` to keep it that way.
 - [ ] The renderer interface as a table of operations that the OpenGL, Vulkan and null renderers fill in, in place of
-      the `gpu_gl_*` names, `renderer.c`'s macros and `gl_names.h`.
-- [ ] The big files split along their seams: `gpu_gl.c`, `shader.c`, `svc_core.c` (one file per service family),
-      `main.c`, `kernel.c`, `cpu_helpers.c`, `plat.c`, `host1x.c`, `gpu_engines.c`.
+      the `gpu_gl_*` names, `gpu/renderer.c`'s macros and `gpu/gl/names.h`.
+- [ ] The big files split along their seams: `gpu/gl/renderer.c`, `shader.c`, `hle/services.c` (one file per service
+      family), `main.c`, `kernel.c`, `cpu_helpers.c`, `plat.c`, `host1x.c`, `gpu/engines.c`.
 - [ ] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.
 

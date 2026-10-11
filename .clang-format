@@ -24,7 +24,7 @@ AlignConsecutiveMacros: AcrossComments
 IndentCaseLabels: true
 # Include order matters in places (glfn.h after the GL headers): never reorder
 SortIncludes: Never
-# gpu_gl.c's SR(first, last) range list has no semicolons between items: without this, clang-format wraps it as
+# gpu/gl/renderer.c's SR(first, last) range list has no semicolons between items: without this, clang-format wraps it as
 # one expression and never settles. glfn.h's X-macro list has the same shape, but X is also a variable name
 # elsewhere, so scripts/format.sh leaves glfn.h alone instead
 StatementMacros: [SR]
