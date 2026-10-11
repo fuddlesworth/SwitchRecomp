@@ -1,6 +1,7 @@
 # SwitchRecomp - Copyright 2026 MZ Labs
 # Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
 # any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
+# This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE).
 """SwitchRecomp: static recompiler for Switch games, AArch64 -> C -> native.
 
 The game code is translated to C ahead of time (plus a fallback interpreter built from the same instruction templates)

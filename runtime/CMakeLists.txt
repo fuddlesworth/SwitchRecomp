@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
 # The runtime: one object library per component, linked into swr-runtime. Each component sees runtime/ as its include
 # root (#include "kernel/kernel.h"), and the flags and third-party headers every component shares (swr_common).
 #

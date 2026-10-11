@@ -22,9 +22,12 @@ property of their owners.
 
 --------------------------------------------------------------------------------
 This repository (https://github.com/fuddlesworth/SwitchRecomp) is a derived work
-of SwitchRecomp by MZ Labs, under the same license. The text above is MZ Labs'
-notice as released. In this repository, the license is in LICENSE (the source
-files' "LICENSE.txt"), this notice is NOTICE ("NOTICE.txt"), and the
-third-party components and their licenses are listed in README.md (the release's
-README.txt). The third-party libraries are downloaded as source at build time
+of SwitchRecomp by MZ Labs. The text above is MZ Labs' notice as released.
+
+MZ Labs' code stays under the Apache License 2.0, which is in LICENSE.apache
+(the source files' "LICENSE.txt"). This notice is NOTICE ("NOTICE.txt"). The
+fork as a whole, with its changes to MZ Labs' files and the files it added, is
+licensed under the GNU General Public License, version 3 or (at your option) any
+later version, which is in LICENSE. The third-party components and their
+licenses are listed in README.md (the release's README.txt). The third-party libraries are downloaded as source at build time
 (cmake/dependencies.cmake) and built with the runtime instead of being bundled.

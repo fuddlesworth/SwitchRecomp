@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
 # Builds the SwitchRecomp runtime for Linux or FreeBSD, or for Windows with llvm-mingw (natively, or cross-built). The
 # game module (<Game>_code.so or .dll) comes from the recompiler (python3 -m switchrecomp), see scripts/recomp.py. The
 # third-party libraries are fetched and built with the runtime, see cmake/dependencies.cmake.

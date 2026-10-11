@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
 """Extracts a game dump into the exefs/ + romfs/ folder that switchrecomp.py reads, with the hactool that the CMake
 build makes (build/default/hactool, built here when it is missing).
 

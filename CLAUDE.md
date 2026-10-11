@@ -23,10 +23,12 @@ file holds the rules sessions get wrong and points to the skills that carry the 
 - **Upstream code is ours to change, carefully.** `main` is MZ Labs' code plus our commits. Keep changes small and
   in the file's style, with a comment saying why. The `upstream` branch is only ever written by
   `scripts/import-upstream.sh`.
-- **Licensing.** The project is Apache 2.0 and every copy keeps NOTICE. Code under MIT, BSD, ISC, zlib or
-  Apache 2.0 can be ported with its notice (Ryujinx is MIT). GPL code (yuzu, suyu, sudachi, Citron, Eden) may be
-  read to understand behavior but never copied or closely paraphrased. Switchbrew and the SDK's own behavior, read
-  from the disassembly, are the primary references.
+- **Licensing.** The fork is GPL-3.0-or-later (`LICENSE`, since 2026-10-11). MZ Labs' files keep their Apache-2.0
+  header, with the line saying the fork's changes are GPL, and every copy keeps NOTICE (`LICENSE.apache` is their
+  license). A new file starts with `SPDX-License-Identifier: GPL-3.0-or-later` and the fork's copyright line. Code
+  under GPL-3.0, GPL-2.0-or-later (yuzu, suyu, sudachi, Citron, Eden), LGPL, MIT, BSD, ISC, zlib or Apache 2.0 can
+  be ported, keeping its copyright lines and naming where it came from (Ryujinx is MIT). GPL-2.0-only code can't be.
+  Switchbrew and the SDK's own behavior, read from the disassembly, are the primary references.
 - **Formatting:** `scripts/format.sh` before committing (clang-format 23, ruff). It only changes whitespace, and
   the whole history is formatted, so an unformatted file shows up as noise in every diff. Third-party code
   (the packages in `.cache/cpm`) is never formatted.

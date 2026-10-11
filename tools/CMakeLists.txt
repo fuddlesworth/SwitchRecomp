@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
 # swr-shaderc: translates a shader corpus (SWR_SHADER_CORPUS) or a game's NVN shader files offline and compiles them
 # to SPIR-V, with the runtime's shader and spirv components
 add_executable(swr-shaderc swr_shaderc.c)

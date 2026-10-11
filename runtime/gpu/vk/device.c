@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright 2026 the SwitchRecomp fork contributors */
 /* Vulkan instance, device, queues and swapchain. Vulkan 1.3 is required: timeline semaphores (1.2),
    synchronization2 and dynamic rendering (1.3) are what the renderer is built on. */
 #include <stdlib.h>

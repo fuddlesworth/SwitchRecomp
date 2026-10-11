@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright 2026 the SwitchRecomp fork contributors */
 /* Compute: the compute class's launches (QMD), on the separate compute queue. Each dispatch gets copies of its constant and storage buffers in a host-visible arena and is recorded into
    a batch. The batch is submitted and its results land in guest memory before anything could observe them: a read
    of that memory (gmem_read and gmem_ptr call cs_mem_need), anything after it in the stream

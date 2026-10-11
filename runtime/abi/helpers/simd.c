@@ -1,6 +1,7 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
-   any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
+   any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
+   This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Part of cpu_helpers.c, which includes it: AdvSIMD arithmetic: lanes, saturation, per-lane floating point, and the instruction groups (three-same, three-different, two-register, across lanes, copy, modified and shift immediates, by-element, permute, TBL). Not compiled on its own. */
 /* =============================================================== AdvSIMD */
 #define VR(n) (&c->v[n])

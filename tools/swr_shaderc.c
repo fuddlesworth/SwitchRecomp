@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright 2026 the SwitchRecomp fork contributors */
 /* Translates a shader corpus (SWR_SHADER_CORPUS=dir in a game run) offline and checks the result: every shader is
    compiled to SPIR-V with glslang and, with --validate, checked with spirv-val.
 

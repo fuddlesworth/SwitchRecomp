@@ -53,6 +53,8 @@ How the pieces fit:
 - [ ] Still to move from bring-up: the thread-dump reader and the Maxwell instruction scanner.
 - [x] `README.md` for the Linux setup, crediting "SwitchRecomp by MZ Labs" as NOTICE requires. `LICENSE` and
       `NOTICE` replace the release's `.txt` files.
+- [x] The fork is GPL-3.0-or-later since 2026-10-11, so code from yuzu and its forks can be ported. MZ Labs' files
+      keep their Apache-2.0 headers and NOTICE, with `LICENSE.apache`.
 
 ## Phase 1: Claude Code setup
 
@@ -108,8 +110,8 @@ Catherine uses two audio paths, and both are silent today.
 - [ ] **`audren` (music and sound effects).** The runtime answers `RequestUpdate` in the right format but mixes
       nothing. Needed: memory pools, voices (PCM16 and DSP-ADPCM, with pitch and resampling), volume and mix
       routing through submixes to the final mix, biquad filters, then effects (delay, reverb, aux) and the device and
-      circular-buffer sinks. Ryujinx's `Ryujinx.Audio` renderer (MIT) is the reference. yuzu's `audio_core` is GPLv3
-      and can be read for behavior but never copied, because this project is Apache 2.0.
+      circular-buffer sinks. Ryujinx's `Ryujinx.Audio` renderer (MIT) is the reference. yuzu's `audio_core`
+      (GPL-2.0-or-later) can be ported too, keeping its copyright lines.
 - [ ] Check `hwopus` and other audio services the game opens once `audren` produces sound.
 
 ## Phase 4: Wayland and the platform layer

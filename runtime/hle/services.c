@@ -1,6 +1,7 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
-   any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
+   any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
+   This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* sm, am, set, time, acc, apm, plus a bunch of stub services that just say ok (nifm, shop, prepo...) */
 #include "hle/services.h"
 #include "core/main.h"

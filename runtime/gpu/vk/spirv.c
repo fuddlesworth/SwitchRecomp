@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright 2026 the SwitchRecomp fork contributors */
 /* GLSL (from the Maxwell translator in Vulkan mode) to SPIR-V, with glslang. Shared by the Vulkan renderer and
    tools/swr_shaderc.c, so it depends on nothing else of the runtime. */
 #include "gpu/shader/shader.h"

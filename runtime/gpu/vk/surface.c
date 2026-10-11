@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright 2026 the SwitchRecomp fork contributors */
 /* Render targets (and later textures) by guest GPU address. A render target lives on the GPU; vk_rt_flush writes it
    back to guest memory when the CPU side needs it (DMA and 2D copies), vk_rt_reload reads it again after the CPU
    side wrote that memory. Games reuse one address for render targets of different sizes and formats within a frame:

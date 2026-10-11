@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
 """Runs a recompiled game unattended, one or more times, and summarizes each run.
 
     tools/run_game.py Catherine                          # one 60 s run of the New Game script

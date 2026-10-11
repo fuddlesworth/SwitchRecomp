@@ -1,6 +1,7 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
-   any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
+   any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
+   This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* GM20B front end: GPFIFO, puller, semaphores/syncpoints, I2M, DMA, 2D and the bits of 3D that
    write memory (clears, reports). Actual drawing is the renderer's job. */
 #include "gpu/renderer.h"

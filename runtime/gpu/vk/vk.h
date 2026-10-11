@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright 2026 the SwitchRecomp fork contributors */
 /* Vulkan renderer: shared state and the interfaces between its parts. Functions are loaded through volk from the
    loader the window backend gives (SDL's), so nothing links against a Vulkan library.
 
