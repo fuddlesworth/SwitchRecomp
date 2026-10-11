@@ -511,11 +511,11 @@ u64 st_ur_wait;
 u32 g_ub_bound[64];
 void ur_init(void) {
     if (g_gles || getenv("SWR_NO_UBO_RING")) return;
-    PFNGLBUFFERSTORAGEPROC bs = (PFNGLBUFFERSTORAGEPROC)backend_gl_proc("glBufferStorage");
-    PFNGLMAPBUFFERRANGEPROC mbr = (PFNGLMAPBUFFERRANGEPROC)backend_gl_proc("glMapBufferRange");
-    p_fs = (PFNGLFENCESYNCPROC)backend_gl_proc("glFenceSync");
-    p_cws = (PFNGLCLIENTWAITSYNCPROC)backend_gl_proc("glClientWaitSync");
-    p_ds = (PFNGLDELETESYNCPROC)backend_gl_proc("glDeleteSync");
+    PFNGLBUFFERSTORAGEPROC bs = (PFNGLBUFFERSTORAGEPROC)glq_proc("glBufferStorage");
+    PFNGLMAPBUFFERRANGEPROC mbr = (PFNGLMAPBUFFERRANGEPROC)glq_proc("glMapBufferRange");
+    p_fs = (PFNGLFENCESYNCPROC)glq_proc("glFenceSync");
+    p_cws = (PFNGLCLIENTWAITSYNCPROC)glq_proc("glClientWaitSync");
+    p_ds = (PFNGLDELETESYNCPROC)glq_proc("glDeleteSync");
     if (!bs || !mbr || !p_fs || !p_cws || !p_ds) return;
     GLint al = 256;
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &al);
@@ -669,8 +669,8 @@ void mb_init(void) {
     GLint mu = 0;
     glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &mu);
     if (mu < 65) return;
-    p_bt = (PFN_BT_)backend_gl_proc("glBindTextures");
-    p_bs = (PFN_BT_)backend_gl_proc("glBindSamplers");
+    p_bt = (PFN_BT_)glq_proc("glBindTextures");
+    p_bs = (PFN_BT_)glq_proc("glBindSamplers");
     if (!p_bt || !p_bs) {
         p_bt = p_bs = NULL;
         return;

@@ -3,6 +3,7 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* the F7 recorder (Windows), F8 full-resolution screenshots, screenshots and render target dumps */
 #include "gpu/gl/gl.h"
+#include "core/clock.h"
 
 #ifdef _WIN32
 /* ============================================================ F7 recorder
@@ -48,11 +49,11 @@ static void rec_gl_free(void) {
 }
 static void rec_start(void) {
     if (!p_rmap) {
-        p_rmap = (PFNGLMAPBUFFERRANGEPROC)backend_gl_proc("glMapBufferRange");
-        p_runmap = (PFNGLUNMAPBUFFERPROC)backend_gl_proc("glUnmapBuffer");
-        p_rfs = (PFNGLFENCESYNCPROC)backend_gl_proc("glFenceSync");
-        p_rcws = (PFNGLCLIENTWAITSYNCPROC)backend_gl_proc("glClientWaitSync");
-        p_rds = (PFNGLDELETESYNCPROC)backend_gl_proc("glDeleteSync");
+        p_rmap = (PFNGLMAPBUFFERRANGEPROC)glq_proc("glMapBufferRange");
+        p_runmap = (PFNGLUNMAPBUFFERPROC)glq_proc("glUnmapBuffer");
+        p_rfs = (PFNGLFENCESYNCPROC)glq_proc("glFenceSync");
+        p_rcws = (PFNGLCLIENTWAITSYNCPROC)glq_proc("glClientWaitSync");
+        p_rds = (PFNGLDELETESYNCPROC)glq_proc("glDeleteSync");
     }
     if (!p_rmap || !p_runmap || !p_rfs || !p_rcws || !p_rds) {
         WARN("recorder: the video driver lacks the required features\n");
@@ -427,11 +428,11 @@ static void shot8_capture(GLuint tex, const float* xf, int tw, int th) {
     if (!g_shot8_req || g_s8_sync) return;
     g_shot8_req = 0;
     if (!p_s8map) {
-        p_s8map = (PFNGLMAPBUFFERRANGEPROC)backend_gl_proc("glMapBufferRange");
-        p_s8unmap = (PFNGLUNMAPBUFFERPROC)backend_gl_proc("glUnmapBuffer");
-        p_s8fs = (PFNGLFENCESYNCPROC)backend_gl_proc("glFenceSync");
-        p_s8cws = (PFNGLCLIENTWAITSYNCPROC)backend_gl_proc("glClientWaitSync");
-        p_s8ds = (PFNGLDELETESYNCPROC)backend_gl_proc("glDeleteSync");
+        p_s8map = (PFNGLMAPBUFFERRANGEPROC)glq_proc("glMapBufferRange");
+        p_s8unmap = (PFNGLUNMAPBUFFERPROC)glq_proc("glUnmapBuffer");
+        p_s8fs = (PFNGLFENCESYNCPROC)glq_proc("glFenceSync");
+        p_s8cws = (PFNGLCLIENTWAITSYNCPROC)glq_proc("glClientWaitSync");
+        p_s8ds = (PFNGLDELETESYNCPROC)glq_proc("glDeleteSync");
     }
     if (!p_s8map || !p_s8unmap || !p_s8fs || !p_s8cws || !p_s8ds) {
         WARN("F8 screenshot: the video driver lacks the required features\n");
@@ -552,7 +553,7 @@ void screen_quad(GLuint tex, const float* xf, int tw, int th) {
     glTexParameteri(GL_TEXTURE_2D, 0x8A48, 0x8A49);
 } /* restore DECODE for when the game samples it */
 void screen_swap(void) {
-    TM(TM_SWAP, backend_gl_swap());
+    TM(TM_SWAP, glq_swap());
     state_dirty();
     g_pipe_on = 0;
     mb_reset();

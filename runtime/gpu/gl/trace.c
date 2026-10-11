@@ -509,7 +509,7 @@ void glr_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u
                 if (g_zt->skipclr != g_frames + 1) {
                     g_zt->skipclr = g_frames + 1;
                     static PFNGLCLEARTEXIMAGEPROC p_cz;
-                    if (!p_cz) p_cz = (PFNGLCLEARTEXIMAGEPROC)backend_gl_proc("glClearTexImage");
+                    if (!p_cz) p_cz = (PFNGLCLEARTEXIMAGEPROC)glq_proc("glClearTexImage");
                     if (p_cz) {
                         if (g_zt->f.fmt == GL_DEPTH_STENCIL) {
                             struct {
@@ -787,7 +787,7 @@ void glr_clear(GpuChannel* ch, u32 v) {
             if (a && q[2] && q[3] && q[4]) {
                 Tex* ct = rt_texture(a, q[2], q[3], q[4], q[5], 0);
                 static PFNGLCLEARTEXIMAGEPROC p_cti;
-                if (!p_cti) p_cti = (PFNGLCLEARTEXIMAGEPROC)backend_gl_proc("glClearTexImage");
+                if (!p_cti) p_cti = (PFNGLCLEARTEXIMAGEPROC)glq_proc("glClearTexImage");
                 if (ct && p_cti && !ct->f.depth) {
                     float cc[4];
                     memcpy(cc, &r[0x360], 16);
