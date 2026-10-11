@@ -129,6 +129,7 @@ When something goes wrong, `games/<Game>.log` has the details, `games/threads.tx
 | Disassemble game code | `tools/disasm.py work/Catherine NvRmStreamFlushSync` |
 | Run the game for a set time with scripted input and a screenshot | `./Catherine --seconds=60 --script=15000:400,16000:1 --shot=out` |
 | Import a new MZ Labs release | `scripts/import-upstream.sh SwitchRecomp_v143.zip v143`, then `git merge upstream` |
+| Record the shaders a run translates, then check them for Vulkan | `SWR_SHADER_CORPUS=dir ./Catherine`, then `build/vk/swr-shaderc dir --validate` |
 
 The `upstream` branch holds the MZ Labs releases: each one as released (tagged `upstream-vN`) and then formatted like
 `main`, so merging a release into `main` only shows what it changed.
@@ -156,6 +157,9 @@ The Apache license covers only the SwitchRecomp code. Third-party components kee
 | OpenH264 (Cisco) | Game videos | BSD 2-Clause, `third_party/openh264/LICENSE` |
 | SPIRV-Cross (Khronos) | LSFG shaders | Apache 2.0, `third_party/SPIRV-Cross/LICENSE` |
 | hactool (SciresM) | Extracting dumps | ISC, `third_party/hactool/LICENSE` |
+| glslang (Khronos) | Vulkan shaders to SPIR-V | BSD 3-Clause, MIT and Apache 2.0, and a parser under GPL 3 with the Bison exception, `third_party/glslang/LICENSE.txt` |
+| Vulkan-Headers (Khronos) | Vulkan definitions | Apache 2.0, `third_party/Vulkan-Headers/LICENSE.md` |
+| volk (Arseny Kapoulkine) | Loading Vulkan | MIT, `third_party/volk/LICENSE.md` |
 | texture2ddecoder | BCn textures on GPUs without them | MIT, `runtime/bcn/LICENSE_texture2ddecoder.txt` |
 | lsfg-vk | LSFG pass layout, ported to GL in `runtime/lsfg.c` | MIT |
 | DejaVu Sans Mono | The on-screen overlay font (`runtime/overlay_font.h`) | Bitstream Vera / DejaVu license |

@@ -137,8 +137,11 @@ underneath. What can change is how much of the hardware is emulated and how well
       SDL's loader with volk so nothing links against a Vulkan library.
   - [x] Step 1, presenting: instance, device with a graphics and a separate compute queue, swapchain through SDL3
         (Wayland and X11), and the CPU path's frames shown on it. Nothing is drawn yet.
-  - [ ] Step 2, shaders: the Maxwell translator's GLSL with Vulkan bindings, compiled to SPIR-V with glslang (a new
-        submodule), and an on-disk SPIR-V cache (Phase 5).
+  - [x] Step 2, shaders: the Maxwell translator has a Vulkan mode (`#version 450`, one descriptor set per stage with
+        the bindings in `shader.h`), compiled to SPIR-V with glslang 16.6 (a submodule the bootstrap builds), through
+        an on-disk SPIR-V cache. `SWR_SHADER_CORPUS` records the shaders a run translates, and `swr-shaderc` checks a
+        corpus offline: 116 of Catherine's 117 shaders compile and pass `spirv-val` (the other uses a global load the
+        translator can't place, in GL too), and the GL output is byte-identical to before.
   - [ ] Step 3, drawing: render targets, textures, samplers, pipelines and draws, ported from `gpu_gl.c`.
   - [ ] Step 4, compute on its own queue, with completion signals held until results land (the Phase 2 crash).
   - [ ] Step 5, parity with OpenGL, screenshot by screenshot, then Vulkan becomes the default, also on Windows.
