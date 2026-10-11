@@ -13,8 +13,9 @@ list(TRANSFORM decoder PREPEND "${src}/codec/decoder/core/src/")
 list(TRANSFORM decoder APPEND .cpp)
 
 add_library(openh264 STATIC ${common} ${decoder} "${src}/codec/decoder/plus/src/welsDecoderExt.cpp")
-# The API headers are included as "wels/codec_api.h"
-target_include_directories(openh264 SYSTEM PUBLIC "${src}/codec/api")
+# The API headers are included as "wels/codec_api.h". BEFORE and not SYSTEM, so a system OpenH264 found through an
+# -I in CFLAGS can't stand in for them (cmake/dependencies.cmake says why)
+target_include_directories(openh264 BEFORE PUBLIC "${src}/codec/api")
 target_include_directories(openh264 PRIVATE "${src}/codec/api/wels" "${src}/codec/common/inc"
                                             "${src}/codec/decoder/core/inc" "${src}/codec/decoder/plus/inc")
 target_compile_definitions(openh264 PRIVATE NDEBUG)

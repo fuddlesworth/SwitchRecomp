@@ -6,11 +6,16 @@ build makes (build/default/hactool, built here when it is missing).
     scripts/extract.py game.nsp --update update.nsp --name Game     # base and update combined
     scripts/extract.py game.xci --keys ~/keys/prod.keys --title-keys ~/keys/title.keys
 
-Keys default to prod.keys and title.keys in the repository root. Lines hactool rejects (a value whose length is not a
+Keys are looked for in the repository root, then in ~/.switch/ (where hactool and other Switch tools keep them),
+unless --keys and --title-keys name them. Lines hactool rejects (a value whose length is not a
 whole number of 16-byte blocks, as some dumped key files have) are left out of the copy hactool reads. Title keys of
 the tickets inside NSPs are added to the title keys.
 
 The update has to be for the same title as the base: its program ID is the base's with 0x800 added.
+
+The containers are unpacked into a temporary folder first, as big as the dumps: in the system's temporary folder (often
+a RAM disk) when it has room for them with half again to spare, next to the output otherwise. It is removed when the
+extraction ends, and so is the output folder when the extraction fails and the folder didn't exist before.
 """
 
 import argparse
@@ -24,6 +29,26 @@ import tempfile
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HACTOOL = os.path.join(REPO, 'build', 'default', 'hactool' + ('.exe' if sys.platform == 'win32' else ''))
 KEY_LINE = re.compile(r'^\s*([0-9A-Za-z_]+)\s*=\s*([0-9A-Fa-f]+)\s*$')
+
+
+def find_keys(given, name):
+    """The key file to use: the one given, or the first of REPO/name and ~/.switch/name that exists."""
+    if given:
+        return given
+    places = [os.path.join(REPO, name), os.path.join(os.path.expanduser('~'), '.switch', name)]
+    return next((p for p in places if os.path.isfile(p)), places[0])
+
+
+def temp_parent(out, inputs):
+    """Where to unpack: the system's temporary folder when it has room for the dumps with half again to spare."""
+    need = sum(os.path.getsize(f) for f in inputs) * 3 // 2
+    system = tempfile.gettempdir()
+    try:
+        if shutil.disk_usage(system).free >= need:
+            return system
+    except OSError:
+        pass
+    return os.path.dirname(out)
 
 
 def clean_keys(src, dst):
@@ -59,6 +84,8 @@ class Hactool:
         r = subprocess.run([HACTOOL, '--disablekeywarns', *args], capture_output=True, text=True, env=self.env)
         if r.returncode:
             out = '\n'.join(l for l in (r.stdout + r.stderr).splitlines() if 'key' not in l.lower())
+            if not out:
+                out = "(its messages all mention keys, which aren't shown: check the keys are for this dump)"
             raise SystemExit('hactool %s failed:\n%s' % (' '.join(args), out[-2000:]))
         return r.stdout
 
@@ -69,20 +96,25 @@ class Hactool:
         else:
             self.run('-tpfs0', '--outdir=' + out, container)
 
-    def program_nca(self, folder):
+    def program_nca(self, folder, container):
         """The largest NCA of content type Program in folder."""
-        best = None
+        best, kinds = None, set()
         for name in os.listdir(folder):
             path = os.path.join(folder, name)
             if not name.endswith('.nca') or name.endswith('.cnmt.nca'):
                 continue
             info = self.run('-i', path)
             m = re.search(r'Content Type:\s*(\w+)', info)
+            if m:
+                kinds.add(m.group(1))
             if m and m.group(1) == 'Program':
                 if best is None or os.path.getsize(path) > os.path.getsize(best):
                     best = path
         if best is None:
-            raise SystemExit('no Program NCA in ' + folder)
+            raise SystemExit(
+                '%s has no game code (no Program NCA, only %s): it is probably DLC. Extract the base game, '
+                'and pass an update with --update.' % (container, ', '.join(sorted(kinds)) or 'nothing')
+            )
         return best
 
 
@@ -92,9 +124,10 @@ def main():
     ap.add_argument('--update', help='an update .nsp for the same title')
     ap.add_argument('--name', help='output name (default: the base file name)')
     ap.add_argument('--out', help='output folder (default: work/NAME)')
-    ap.add_argument('--keys', default=os.path.join(REPO, 'prod.keys'))
-    ap.add_argument('--title-keys', default=os.path.join(REPO, 'title.keys'))
+    ap.add_argument('--keys', help='prod.keys (default: the repository root, then ~/.switch)')
+    ap.add_argument('--title-keys', help='title.keys (default: the repository root, then ~/.switch)')
     a = ap.parse_args()
+    a.keys, a.title_keys = find_keys(a.keys, 'prod.keys'), find_keys(a.title_keys, 'title.keys')
 
     if not os.path.isfile(HACTOOL):
         print('Building hactool', flush=True)
@@ -105,16 +138,17 @@ def main():
             if subprocess.run(cmd, cwd=REPO, stdout=subprocess.DEVNULL).returncode:
                 raise SystemExit('hactool did not build: %s failed' % ' '.join(cmd))
     if not os.path.isfile(a.keys):
-        raise SystemExit('no keys at %s (use --keys)' % a.keys)
+        raise SystemExit('no prod.keys in %s or ~/.switch (use --keys)' % REPO)
     name = a.name or os.path.splitext(os.path.basename(a.base))[0]
     out = os.path.abspath(a.out or os.path.join(REPO, 'work', name))
     if os.path.exists(os.path.join(out, 'exefs')):
         raise SystemExit('%s already has an exefs folder' % out)
 
-    # The NCAs are as big as the game: unpack them next to the output, not in /tmp. hactool creates the last folder
-    # of a path only, and exits 0 when it can't write the files
+    # hactool creates the last folder of a path only, and exits 0 when it can't write the files
+    made_out = not os.path.exists(out)
     os.makedirs(out, exist_ok=True)
-    tmp = tempfile.mkdtemp(prefix='.extract-', dir=os.path.dirname(out))
+    tmp = tempfile.mkdtemp(prefix='.extract-', dir=temp_parent(out, filter(None, (a.base, a.update))))
+    ok = False
     try:
         home = os.path.join(tmp, 'home')
         os.makedirs(os.path.join(home, '.switch'))
@@ -132,22 +166,28 @@ def main():
             print('Unpacking', a.update)
             hac.unpack(a.update, update_dir)
 
-        # Title keys: the user's file, then every common ticket found in the containers
+        # Title keys: the user's file, then every common ticket found in the containers. hactool fails on a rights
+        # ID listed twice, as when the user's file already has a ticket's key, so each is written once
+        title_keys = {}
+        if os.path.isfile(a.title_keys):
+            with open(a.title_keys) as fi:
+                for line in fi:
+                    m = KEY_LINE.match(line)
+                    if m:
+                        title_keys.setdefault(m.group(1).lower(), m.group(2))
+        for folder in filter(None, (base_dir, update_dir)):
+            for f in os.listdir(folder):
+                if f.endswith('.tik'):
+                    key = ticket_title_key(os.path.join(folder, f))
+                    if key:
+                        title_keys.setdefault(key[0].lower(), key[1])
         with open(os.path.join(home, '.switch', 'title.keys'), 'w') as fo:
-            if os.path.isfile(a.title_keys):
-                with open(a.title_keys) as fi:
-                    fo.write(fi.read() + '\n')
-            for folder in filter(None, (base_dir, update_dir)):
-                for f in os.listdir(folder):
-                    if f.endswith('.tik'):
-                        key = ticket_title_key(os.path.join(folder, f))
-                        if key:
-                            fo.write('%s = %s\n' % key)
+            fo.writelines('%s = %s\n' % kv for kv in title_keys.items())
 
-        base = hac.program_nca(base_dir)
+        base = hac.program_nca(base_dir, a.base)
         exefs, romfs = os.path.join(out, 'exefs'), os.path.join(out, 'romfs')
         if update_dir:
-            update = hac.program_nca(update_dir)
+            update = hac.program_nca(update_dir, a.update)
             print('Extracting the base with the update applied')
             hac.run('--basenca=' + base, '--exefsdir=' + exefs, '--romfsdir=' + romfs, update)
         else:
@@ -155,8 +195,11 @@ def main():
             hac.run('--exefsdir=' + exefs, '--romfsdir=' + romfs, base)
         if not os.path.isfile(os.path.join(exefs, 'main')):
             raise SystemExit('the extracted exefs has no main: is the update for this base game?')
+        ok = True
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        if not ok and made_out:
+            shutil.rmtree(out, ignore_errors=True)
     print('Done:', out)
 
 
