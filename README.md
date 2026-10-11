@@ -1,4 +1,12 @@
-# SwitchRecomp
+# ScarletNX
+
+<h1 align="center">
+  <br>
+  <img src="./wimsy.svg" alt="Eden" width="200">
+  <br>
+  <b>Wimsy, the ScarletNX mascot</b>
+  <br>
+</h1>
 
 A fork of **SwitchRecomp by MZ Labs**, a static recompiler for Nintendo Switch games, for Linux and Windows. The
 game's ARM64 code is translated to C once and compiled into a native program. The runtime stands in for the Switch's
@@ -183,3 +191,14 @@ Third-party components keep their own licenses, found in each package CPM.cmake 
 | volk (Arseny Kapoulkine) | Loading Vulkan | MIT |
 | Vulkan Memory Allocator (AMD) | GPU memory for the Vulkan renderer | MIT |
 | SDL3 | Window and input (the sdl3 backend): the system's on Linux and FreeBSD, built with the runtime on Windows | zlib |
+
+This project builds on the work of the Switch emulation and homebrew community, whose projects showed how the
+console and its operating system behave:
+
+- yuzu, Ryujinx, [Ryubing](https://git.ryujinx.app/ryubing/ryujinx) (Ryujinx's continuation),
+  [Citron](https://git.citron-emu.org/citron/emulator) and [Eden](https://git.eden-emu.dev/eden-emu/eden), the Switch
+  emulators
+- [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere), the reimplementation of Horizon OS
+- LibHac, the library for the Switch's file systems and content formats
+
+Wimsy, the mascot in `wimsy.svg`, was drawn by Madeline_Dev, © 2025 Eden Emulator Project, under the GPL 3.
