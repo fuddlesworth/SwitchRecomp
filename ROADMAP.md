@@ -30,11 +30,16 @@ How the pieces fit:
 - [x] Git history: an `upstream` branch holding each MZ Labs release as released and then formatted, and `main`
       with our work on top, one commit per fix. `scripts/import-upstream.sh` imports new releases.
 - [x] `.gitignore` that keeps game data, keys, dumps and build output out of git.
-- [x] No prebuilt binaries: OpenH264, SPIRV-Cross and hactool are submodules that `scripts/bootstrap.sh` builds,
-      for Linux or cross-built for Windows.
+- [x] No prebuilt binaries: OpenH264, SPIRV-Cross and hactool are submodules that `scripts/bootstrap.py` builds,
+      on Linux, on Windows, or cross-built for Windows.
 - [x] CMake build for the Linux runtime, with presets for GCC 16 and Clang 23, C23 and C++23.
 - [x] Scripts for the whole pipeline: extract a dump, recompile, deploy the runtime into `games/`.
 - [x] Formatting: clang-format 23 and ruff through `scripts/format.sh`, applied to the whole history.
+- [x] Windows: `scripts/bootstrap.ps1` downloads a pinned, checksummed toolchain (w64devkit, NASM, Python, and
+      llvm-mingw for Clang) so a Windows machine needs only Git. CMake builds the Windows runtime natively or
+      cross-built.
+- [x] CI on every push and pull request: formatting, Linux with GCC and Clang, Windows with GCC and Clang from a bare
+      runner, and the Linux to Windows cross build.
 - [x] Debugging tools in `tools/`: symbol names, disassembly, unattended runs.
 - [ ] Still to move from bring-up: the thread-dump reader and the Maxwell instruction scanner.
 - [x] `README.md` for the Linux setup, crediting "SwitchRecomp by MZ Labs" as NOTICE requires. `LICENSE` and

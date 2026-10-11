@@ -44,10 +44,10 @@ state. This file holds the rules sessions get wrong and points to the skills tha
 
 | Task | Command |
 | --- | --- |
-| Third-party libraries and hactool (once, and after a submodule changes) | `scripts/bootstrap.sh` |
+| Third-party libraries and hactool (once, and after a submodule changes) | `scripts/bootstrap.py` (Windows: `scripts\bootstrap.ps1`, then `. scripts\env.ps1` per window) |
 | Build the runtime (deploys to every game in `games/`) | `cmake --preset gcc && cmake --build --preset gcc` (or `clang`) |
 | Extract a dump | `scripts/extract.py "Game.xci" --name Game [--update u.nsp]` |
-| Recompile a game | `scripts/recomp.sh work/Game Game` |
+| Recompile a game | `scripts/recomp.py work/Game Game` |
 | Run with scripted input and a screenshot | `cd games && ./Catherine --seconds=60 --shot=/path/out --script=ms:hexbuttons,...` |
 | Name addresses / disassemble game code | `tools/symbols.py work/Catherine ADDR...` / `tools/disasm.py work/Catherine FUNC` |
 | Format / check | `scripts/format.sh` / `scripts/format.sh --check` |

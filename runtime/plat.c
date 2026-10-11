@@ -94,6 +94,7 @@ void fatal(const char* fmt, ...) {
 #if defined(_WIN32)
 /* ------------------------------------------------------------------ Windows */
 #include <process.h>
+#include <io.h> /* _get_osfhandle */
 void pm_init(PMutex* m) { InitializeSRWLock(&m->l); }
 void pm_lock(PMutex* m) { AcquireSRWLockExclusive(&m->l); }
 void pm_unlock(PMutex* m) { ReleaseSRWLockExclusive(&m->l); }

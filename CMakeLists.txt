@@ -1,7 +1,8 @@
-# Builds the SwitchRecomp runtime for Linux. The game module (<Game>_code.so) comes from switchrecomp.py, see
-# scripts/recomp.sh. Run scripts/bootstrap.sh once first: it builds OpenH264 and SPIRV-Cross into deps/linux.
+# Builds the SwitchRecomp runtime for Linux, or for Windows with MinGW-w64 (natively, or cross-built). The
+# game module (<Game>_code.so or .dll) comes from switchrecomp.py, see scripts/recomp.py. Run scripts/bootstrap.py
+# once first: it builds OpenH264 and SPIRV-Cross into deps/linux or deps/win64.
 #
-#   cmake --preset gcc && cmake --build --preset gcc        (or clang; see CMakePresets.json)
+#   cmake --preset gcc && cmake --build --preset gcc        (or clang, or mingw-cross; see CMakePresets.json)
 #
 # After each build the runtime is copied next to every recompiled game in games/ (SWR_DEPLOY), so a runtime fix
 # reaches the games without recompiling them.
@@ -16,10 +17,17 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 
-set(SWR_BACKEND x11 CACHE STRING "Window and input backend: x11, x11es or headless")
-set_property(CACHE SWR_BACKEND PROPERTY STRINGS x11 x11es headless)
-option(SWR_H264 "Decode NVDEC video with OpenH264 (deps/linux)" ON)
-option(SWR_LSFG "LSFG frame generation, needs SPIRV-Cross (deps/linux)" ON)
+if(WIN32)
+    set(SWR_BACKEND win32 CACHE STRING "Window and input backend: win32 or headless")
+    set_property(CACHE SWR_BACKEND PROPERTY STRINGS win32 headless)
+    set(DEPS "${CMAKE_SOURCE_DIR}/deps/win64")
+else()
+    set(SWR_BACKEND x11 CACHE STRING "Window and input backend: x11, x11es or headless")
+    set_property(CACHE SWR_BACKEND PROPERTY STRINGS x11 x11es headless)
+    set(DEPS "${CMAKE_SOURCE_DIR}/deps/linux")
+endif()
+option(SWR_H264 "Decode NVDEC video with OpenH264 (deps/)" ON)
+option(SWR_LSFG "LSFG frame generation, needs SPIRV-Cross (deps/)" ON)
 option(SWR_DEPLOY "Copy the runtime next to every recompiled game in SWR_GAMES_DIR after building" ON)
 set(SWR_GAMES_DIR "${CMAKE_SOURCE_DIR}/games" CACHE PATH "Folder holding the recompiled games")
 
@@ -31,7 +39,6 @@ set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O2 -g")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g")
 
 set(RT "${CMAKE_SOURCE_DIR}/runtime")
-set(DEPS "${CMAKE_SOURCE_DIR}/deps/linux")
 
 # The same source list as switchrecomp.py's build_runtime
 set(sources plat mem kernel ipc svc_core svc_hid svc_fs svc_vi nvdrv gpu gpu_engines gpu_3d loader main host1x entry)
@@ -44,13 +51,28 @@ else()
     endif()
 endif()
 list(APPEND sources backend_${SWR_BACKEND})
+if(SWR_BACKEND STREQUAL "win32")
+    list(APPEND sources rec_win32) # F7 video recorder, Media Foundation
+endif()
 list(TRANSFORM sources PREPEND "${RT}/")
 list(TRANSFORM sources APPEND ".c")
 
 add_executable(swr-runtime ${sources})
 target_include_directories(swr-runtime PRIVATE "${RT}")
-target_link_libraries(swr-runtime PRIVATE pthread dl m)
-target_link_options(swr-runtime PRIVATE -rdynamic)
+if(WIN32)
+    # Static, so the runtime runs without the MinGW DLLs next to it
+    target_link_libraries(swr-runtime PRIVATE gdi32 winmm user32 opengl32 comdlg32 shell32)
+    target_link_options(swr-runtime PRIVATE -static)
+    if(SWR_BACKEND STREQUAL "win32")
+        target_link_libraries(swr-runtime PRIVATE mfplat mfreadwrite mfuuid ole32)
+        target_link_options(swr-runtime PRIVATE -mwindows)
+    else()
+        target_link_options(swr-runtime PRIVATE -mconsole)
+    endif()
+else()
+    target_link_libraries(swr-runtime PRIVATE pthread dl m)
+    target_link_options(swr-runtime PRIVATE -rdynamic)
+endif()
 # Upstream's flags. -w hides the warnings for now; turning them back on is in ROADMAP.md (Phase 2)
 target_compile_options(swr-runtime PRIVATE -w -fno-strict-aliasing)
 
@@ -67,7 +89,7 @@ endif()
 
 function(swr_require_dep file option)
     if(NOT EXISTS "${DEPS}/${file}")
-        message(FATAL_ERROR "${DEPS}/${file} is missing. Run scripts/bootstrap.sh, or configure with -D${option}=OFF.")
+        message(FATAL_ERROR "${DEPS}/${file} is missing. Run scripts/bootstrap.py (scripts\\bootstrap.ps1 on Windows), or configure with -D${option}=OFF.")
     endif()
 endfunction()
 
@@ -79,7 +101,7 @@ else()
     target_compile_definitions(swr-runtime PRIVATE SWR_NO_H264)
 endif()
 
-if(SWR_LSFG AND SWR_BACKEND STREQUAL "x11")
+if(SWR_LSFG AND SWR_BACKEND MATCHES "^(x11|win32)$")
     swr_require_dep(lib/libspvc.a SWR_LSFG)
     target_sources(swr-runtime PRIVATE "${RT}/lsfg.c" "${RT}/lsfg_spvc.cpp")
     target_include_directories(swr-runtime PRIVATE "${DEPS}/include/spirv_cross")
@@ -90,7 +112,7 @@ endif()
 
 if(SWR_DEPLOY)
     add_custom_command(TARGET swr-runtime POST_BUILD
-        COMMAND "${CMAKE_COMMAND}" "-DRUNTIME=$<TARGET_FILE:swr-runtime>" "-DGAMES=${SWR_GAMES_DIR}"
+        COMMAND "${CMAKE_COMMAND}" "-DRUNTIME=$<TARGET_FILE:swr-runtime>" "-DGAMES=${SWR_GAMES_DIR}" "-DWINDOWS=${WIN32}"
                 -P "${CMAKE_SOURCE_DIR}/cmake/deploy.cmake"
         VERBATIM)
 endif()

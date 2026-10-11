@@ -28,7 +28,7 @@ __pycache__/
 /bin/
 *.exe
 
-# Third-party libraries and tools built by scripts/bootstrap.sh
+# Third-party libraries and tools built by scripts/bootstrap.py
 /deps/
 
 # Claude Code state local to this checkout

@@ -7,8 +7,10 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
 
 ## Order
 
-1. `scripts/bootstrap.sh`: once, and again whenever `third_party/` moved (it compares each submodule's commit with
-   a stamp in `deps/`). Without it CMake stops with the missing file and the flag that would skip it.
+1. `scripts/bootstrap.py`: once, and again whenever `third_party/` moved (it compares each submodule's commit and
+   the compiler with a stamp in `deps/`). Without it CMake stops with the missing file and the flag that would skip
+   it. On Windows, `scripts\bootstrap.ps1` downloads the toolchain into `deps\tools` first and then runs it;
+   `. scripts\env.ps1` puts that toolchain on PATH in a new PowerShell window.
 2. `cmake --preset gcc && cmake --build --preset gcc`. The clang preset builds the same into `build/clang`.
 3. The build's last step copies the runtime to `games/<Game>` for every `games/<Game>_code.so`. That is the binary
    that runs. The build prints `Runtime deployed to ...` for each: no line means no game got the new runtime.
@@ -17,12 +19,22 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
 
 | What happens | Why | What to do |
 | --- | --- | --- |
-| Movies stay black, the log says no H.264 decoder | `switchrecomp.py`'s own runtime build drops OpenH264 without a word when `deps/linux/lib/libdecoder.a` is missing | Build the runtime with CMake (`scripts/recomp.sh` does). It refuses to configure without the library. |
+| Movies stay black, the log says no H.264 decoder | `switchrecomp.py`'s own runtime build drops OpenH264 without a word when `deps/linux/lib/libdecoder.a` is missing | Build the runtime with CMake (`scripts/recomp.py` does). It refuses to configure without the library. |
 | A fix has no effect | The game ran an old runtime: the build didn't deploy (no `_code.so` in `games/` yet), or the game was already running | Check the deploy lines. A running game keeps its old copy (the deploy renames over it). |
 | The two presets disagree on what is deployed | Both deploy to the same `games/` | The last build wins. Rebuild the one you mean to test. |
 | A test binary next to the game was overwritten | The deploy targets every `*_code.so` in `games/`, symlinks included | Keep A/B copies outside `games/`, or don't build while they exist. |
 | No warnings | Upstream builds with `-w` | Check a changed file with warnings on: `gcc -std=gnu23 -O2 -Wall -Wextra -fsyntax-only -Iruntime -Iruntime/bcn -Ideps/linux/include runtime/FILE.c`. Fix what comes from the change. |
 | Game crashes at startup with "recompiled code is from another SwitchRecomp version" | `ABI` in `switchrecomp.py` and the runtime's check disagree | Recompile the game. |
+
+## Windows
+
+CI (`.github/workflows/build.yml`) builds Windows natively with GCC and Clang from `scripts/bootstrap.ps1`, and
+cross-builds it on Linux. To check Windows code before pushing, cross-build it here: with a MinGW-w64 toolchain on
+PATH (Arch's `mingw-w64-gcc`, or the Linux build of llvm-mingw, which provides the `x86_64-w64-mingw32-*` names),
+run `python3 scripts/bootstrap.py --target win64`, then `cmake --preset mingw-cross && cmake --build --preset
+mingw-cross`. Upstream code that only Windows compiles (`backend_win32.c`, `rec_win32.c`, the `_WIN32` parts of
+`plat.c`) has relied on implicit declarations that `-w` hid and that GCC 14+ and Clang reject: a missing header shows
+up only there.
 
 ## When the game module must be recompiled
 
@@ -31,8 +43,8 @@ Only when the generated code or its contract changed: `codegen.py`, `a64.py`, `n
 minutes with GCC; the objects in `games/<Game>_build/` are reused when their C didn't change.
 
 ```bash
-scripts/recomp.sh work/Catherine Catherine            # SWR_PRESET=clang for the clang runtime
-scripts/recomp.sh work/Catherine Catherine --cc clang  # the game module with clang too
+scripts/recomp.py work/Catherine Catherine                  # runtime and game module with GCC
+scripts/recomp.py work/Catherine Catherine --preset clang   # both with Clang
 ```
 
 ## Formatting

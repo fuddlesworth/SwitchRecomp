@@ -63,7 +63,7 @@ def main():
     a = ap.parse_args()
 
     games = os.path.join(REPO, 'games')
-    exe = os.path.join(games, a.game)
+    exe = os.path.join(games, a.game + ('.exe' if sys.platform == 'win32' else ''))
     if not os.path.isfile(exe):
         raise SystemExit('%s does not exist: build the runtime (it deploys there) or recompile the game' % exe)
     out = a.out or tempfile.mkdtemp(prefix='swr-run-')

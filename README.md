@@ -1,52 +1,106 @@
-# SwitchRecomp for Linux
+# SwitchRecomp
 
-A Linux-first fork of **SwitchRecomp by MZ Labs**, a static recompiler for Nintendo Switch games. The game's ARM64
-code is translated to C once and compiled into a native program. The runtime stands in for the Switch's operating
-system, and its GPU emulation draws with OpenGL. The game's data is read as it is from the extracted dump.
+A fork of **SwitchRecomp by MZ Labs**, a static recompiler for Nintendo Switch games, for Linux and Windows. The
+game's ARM64 code is translated to C once and compiled into a native program. The runtime stands in for the Switch's
+operating system, and its GPU emulation draws with OpenGL. The game's data is read as it is from the extracted dump.
 
-This fork adds a CMake build, source builds of every third-party library, scripts for the whole pipeline, and fixes
-to the runtime. Catherine: Full Body is the game it is tested with. [ROADMAP.md](ROADMAP.md) has the plan and the
+This fork adds a CMake build, source builds of every third-party library, scripts for the whole pipeline, CI on
+both systems, and fixes to the runtime. Catherine: Full Body is the game it is tested with. [ROADMAP.md](ROADMAP.md) has the plan and the
 current state, and the history of `main` has every fix with the reason for it. The MZ Labs release this fork started
 from (v142) is the tag `upstream-v142`.
 
 Use only games and keys dumped from your own console. None are included, and none may be committed here.
 
-## Requirements
+## Linux
 
-- GCC 16 or Clang 23, CMake 3.20 or newer, Ninja, Make, NASM, Python 3.10 or newer
+### Requirements
+
+- GCC 16 or Clang 23, CMake 3.20 or newer, Ninja, Make, NASM, Python 3.12 or newer, Git
 - X11 and OpenGL 4.3 development files
 - `uv`, only to run the formatter
 
-## Setup
+### Setup
 
 ```bash
-git clone --recurse-submodules git@github.com:fuddlesworth/SwitchRecomp.git
+git clone --recurse-submodules https://github.com/fuddlesworth/SwitchRecomp.git
 cd SwitchRecomp
-scripts/bootstrap.sh
+python3 scripts/bootstrap.py
 ```
 
-`scripts/bootstrap.sh` builds OpenH264, SPIRV-Cross and hactool from the pinned submodules in `third_party/` into
-`deps/`. Run it again after a submodule changes. `--target win64` cross-builds the Windows libraries with
-MinGW-w64.
+`scripts/bootstrap.py` builds OpenH264, SPIRV-Cross and hactool from the pinned submodules in `third_party/` into
+`deps/`. Run it again after a submodule changes. `--target win64` cross-builds the Windows libraries with MinGW-w64
+(then `cmake --preset mingw-cross` builds the Windows runtime).
 
-## Recompiling a game
+### Recompiling a game
 
 Put `prod.keys` (and `title.keys`, for NSPs) in the repository root, or pass them with `--keys` and `--title-keys`.
 
 ```bash
-scripts/extract.py "Catherine Full Body.xci" --name Catherine   # -> work/Catherine/{exefs,romfs}
-scripts/recomp.sh work/Catherine Catherine                      # -> games/Catherine
+python3 scripts/extract.py "Catherine Full Body.xci" --name Catherine   # -> work/Catherine/{exefs,romfs}
+python3 scripts/recomp.py work/Catherine Catherine                      # -> games/Catherine
 cd games && ./Catherine
 ```
 
-An update is applied with `--update update.nsp`. It must be for the same title as the base game.
-
-The first recompile of a big game takes several minutes. After that, a runtime change only needs a runtime build,
-which copies the new runtime next to every game in `games/`:
+`--preset clang` builds with Clang instead of GCC. The first recompile of a big game takes several minutes. After
+that, a runtime change only needs a runtime build, which copies the new runtime next to every game in `games/`:
 
 ```bash
-cmake --preset gcc && cmake --build --preset gcc      # or the clang preset
+cmake --preset gcc && cmake --build --preset gcc
 ```
+
+Keyboard: arrows for the D-pad, X or Space for A, Z for B, S for X, A for Y, Q and E for L and R, 1 and 3 for ZL and
+ZR, Enter for Plus, Backspace for Minus and Escape to quit. The X11 backend has no sticks and no gamepad support yet
+(see ROADMAP.md, Phase 4).
+
+## Windows
+
+### Requirements
+
+- Windows 10 or 11, 64-bit, and a GPU with OpenGL 4.3 or newer (keep the driver up to date)
+- [Git for Windows](https://git-scm.com). Everything else is downloaded by the bootstrap.
+
+### Setup
+
+In PowerShell:
+
+```powershell
+git clone --recurse-submodules https://github.com/fuddlesworth/SwitchRecomp.git
+cd SwitchRecomp
+powershell -ExecutionPolicy Bypass -File scripts\bootstrap.ps1
+```
+
+`scripts\bootstrap.ps1` downloads w64devkit (GCC, Make, CMake, Ninja), NASM and Python into `deps\tools`, checks each
+download against its pinned SHA-256, and builds the libraries and hactool with them. `-Compiler clang` also downloads
+llvm-mingw and builds everything with Clang. Nothing is installed on the system.
+
+In every new PowerShell window, put those tools on PATH first:
+
+```powershell
+. scripts\env.ps1
+```
+
+### Recompiling a game
+
+Put `prod.keys` (and `title.keys`, for NSPs) in the repository folder, or pass them with `--keys` and `--title-keys`.
+
+```powershell
+python scripts\extract.py "Catherine Full Body.xci" --name Catherine   # -> work\Catherine
+python scripts\recomp.py work\Catherine Catherine                      # -> games\Catherine.exe
+cd games; .\Catherine.exe
+```
+
+Use `--preset clang` if you set up with `-Compiler clang`. A runtime change only needs
+`cmake --preset gcc; cmake --build --preset gcc`.
+
+Controls: an Xbox (XInput) controller works like a Switch controller, by position. Keyboard: arrows for the D-pad,
+WASD for the left stick, IJKL for the right stick, X or Space for A, Z for B, C for X, V for Y, Q and E for L and R,
+1 and 3 for ZL and ZR, Enter for Plus and Backspace for Minus. F1 shows help, F3 takes a screenshot, F4 switches the
+FPS limit, F5 writes a diagnostic trace, F7 records an .mp4, F8 saves a full-resolution PNG, F11 or Alt+Enter toggles
+fullscreen, and Escape quits.
+
+## Settings and logs
+
+An update is applied when extracting, with `--update update.nsp`. It must be for the same title as the base game.
 
 Game settings are in `games/<Game>.ini`, which the runtime rewrites with every option explained each time it
 starts. The ones you are most likely to change:
@@ -63,10 +117,6 @@ starts. The ones you are most likely to change:
 
 When something goes wrong, `games/<Game>.log` has the details, `games/threads.txt` the state of every game thread
 (rewritten every 15 seconds), and `games/performance.txt` a summary of slow frames.
-
-Controls on the keyboard (X11): arrows for the D-pad, X or Space for A, Z for B, S for X, A for Y, Q and E for L and
-R, 1 and 3 for ZL and ZR, Enter for Plus, Backspace for Minus and Escape to quit. The X11 backend has no sticks and no
-gamepad support yet (see ROADMAP.md, Phase 4).
 
 ## Development
 
@@ -85,10 +135,11 @@ The `upstream` branch holds the MZ Labs releases: each one as released (tagged `
 | --- | --- |
 | `switchrecomp.py`, `codegen.py`, `a64.py`, `nxloader.py` | The recompiler: loading, analysis, ARM64 to C |
 | `runtime/` | The runtime: kernel, services, GPU, video, platform backends |
-| `scripts/` | Bootstrap, extraction, recompiling, formatting, upstream imports |
+| `scripts/` | Bootstrap (and the Windows toolchain download), extraction, recompiling, formatting, upstream imports |
 | `tools/` | Debugging tools |
-| `third_party/` | Pinned submodules, built by `scripts/bootstrap.sh` |
-| `deps/`, `build/`, `work/`, `games/` | Built libraries, build trees, extracted dumps and recompiled games, none of them in git |
+| `third_party/` | Pinned submodules, built by `scripts/bootstrap.py` |
+| `.github/workflows/` | CI: formatting, and builds on Linux (GCC, Clang, cross to Windows) and Windows (GCC, Clang) |
+| `deps/`, `build/`, `work/`, `games/` | Built libraries and tools, build trees, extracted dumps and recompiled games, none of them in git |
 
 ## License and credits
 

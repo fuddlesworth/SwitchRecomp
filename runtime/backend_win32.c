@@ -5,6 +5,7 @@
    F1 help  F3 screenshot  F4 fps limit  F11 fullscreen  Esc quit */
 #include "rt.h"
 #include <windows.h>
+#include <mmsystem.h> /* timeBeginPeriod: rt.h defines WIN32_LEAN_AND_MEAN, which leaves it out of windows.h */
 
 static HWND g_hwnd;
 static HDC g_hdc;

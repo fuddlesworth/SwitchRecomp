@@ -15,7 +15,7 @@ description: "Bring a new MZ Labs SwitchRecomp release into this fork: import th
    the commit message of ours (`git log -L` on the region). Keep upstream's change unless ours fixes something it
    still gets wrong, and say which in the merge commit message.
 4. **New third-party binaries.** If the zip added prebuilt libraries, they stay out: add a submodule and a step in
-   `scripts/bootstrap.sh` instead. If it added a new top-level Windows toolchain folder, add it to the excludes in
+   `scripts/bootstrap.py` instead. If it added a new top-level Windows toolchain folder, add it to the excludes in
    `scripts/import-upstream.sh` and `.gitignore`.
 5. **Rebuild and verify.** Bootstrap if `third_party/` changed, build both presets, and run the game
    (`swr-run`, a few runs). If the release changed `codegen.py`, `a64.py`, `cpu.h`, `cpu_helpers.c` or the `ABI`
