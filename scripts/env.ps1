@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
 # Puts the toolchain that scripts\bootstrap.ps1 downloaded on PATH for this PowerShell window, and sets CC and CXX to
 # its Clang. Dot-source it:
 #

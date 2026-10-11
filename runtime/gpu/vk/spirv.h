@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright 2026 the SwitchRecomp fork contributors */
 /* GLSL to SPIR-V for the Vulkan renderer (glslang) */
 #ifndef SWR_VK_SHADER_H
 #define SWR_VK_SHADER_H

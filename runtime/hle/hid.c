@@ -1,6 +1,7 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
-   any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
+   any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
+   This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* hid. Games read the shared memory directly, so we fill it in the real layout (17 entry LIFOs). */
 #include "hle/hid.h"
 #include "hle/services.h"

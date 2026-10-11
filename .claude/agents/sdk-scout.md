@@ -27,5 +27,5 @@ Method:
    you know the page.
 
 Report what the code expects, as a list with the addresses that show each point, then the differences from the
-runtime with `file:line`. Mark anything inferred rather than read as `HYPOTHESIS`. Ryujinx (MIT) behavior may be
-mentioned; never quote GPL emulator code.
+runtime with `file:line`. Mark anything inferred rather than read as `HYPOTHESIS`. Ryujinx (MIT) and yuzu-family
+(GPL) behavior may be mentioned, with where it comes from.

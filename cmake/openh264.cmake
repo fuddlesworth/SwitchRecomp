@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
 # OpenH264's decoder as a static library (target openh264), built from the source list of its Makefile
 # (codec/common/targets.mk and codec/decoder/targets.mk), with its x86-64 assembly when NASM is there. The runtime only
 # decodes, so the encoder and the processing library are left out.

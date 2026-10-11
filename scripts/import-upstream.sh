@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
 # Imports an MZ Labs SwitchRecomp release zip onto the `upstream` branch, without touching the working tree or the
 # current branch: one commit with the release as it is (tagged upstream-VERSION), then one with it formatted by
 # scripts/format.sh. Merge `upstream` into `main` afterwards. Since both branches are formatted the same way, the merge

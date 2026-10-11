@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
 """Names game addresses from the modules' symbol tables (demangled).
 
     tools/symbols.py work/Catherine cf34380 82f161c ...

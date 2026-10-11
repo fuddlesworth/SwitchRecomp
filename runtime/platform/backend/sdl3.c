@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright 2026 the SwitchRecomp fork contributors */
 /* SDL3 backend, the window backend on Linux and Windows: the window and its Vulkan surface, keyboard and gamepads. Runs
    natively on Wayland and on X11 (SDL_VIDEO_DRIVER=x11 picks X11), and takes the unattended-run options (seconds,
    frames, shot, press, script). */

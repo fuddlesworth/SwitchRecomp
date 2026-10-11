@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
 # Sets up a Windows machine for SwitchRecomp with nothing installed: downloads the toolchain into deps\tools, each file
 # pinned and checked against its SHA-256. The third-party libraries come with the CMake build (cmake\dependencies.cmake).
 #

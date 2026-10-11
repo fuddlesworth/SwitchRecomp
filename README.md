@@ -159,12 +159,18 @@ The `upstream` branch holds the MZ Labs releases: each one as released (tagged `
 
 ## License and credits
 
-SwitchRecomp is © 2026 MZ Labs, under the Apache License 2.0. [LICENSE](LICENSE) has the license and
-[NOTICE](NOTICE) the credit that every copy and derived work keeps. This fork is under the same terms. The source
-files' headers still name the release's `LICENSE.txt` and `NOTICE.txt`, which are `LICENSE` and `NOTICE` here.
+This fork is licensed under the GNU General Public License, version 3 or (at your option) any later version
+([LICENSE](LICENSE)). It is a derived work of SwitchRecomp, © 2026 MZ Labs, which is under the Apache License 2.0
+([LICENSE.apache](LICENSE.apache)). Apache-licensed code can be part of a GPLv3 work: MZ Labs' files keep their
+copyright headers and are distributed here as part of the GPLv3 whole, with a line saying the fork's changes are
+GPL-3.0-or-later. [NOTICE](NOTICE) keeps the credit to "SwitchRecomp by MZ Labs" that every copy and derived work
+carries. Those headers name the release's `LICENSE.txt` and `NOTICE.txt`, which are `LICENSE.apache` and `NOTICE`
+here. Files the fork wrote start with `SPDX-License-Identifier: GPL-3.0-or-later`.
 
-The Apache license covers only the SwitchRecomp code. Third-party components keep their own licenses, found in each
-package CPM.cmake downloads (`.cache/cpm/<name>/`, from the URLs in `cmake/dependencies.cmake`):
+The game modules the recompiler builds include the runtime's `runtime/abi/` code, which is under the GPL like the rest.
+Games, keys and firmware are not part of this project.
+
+Third-party components keep their own licenses, found in each package CPM.cmake downloads (`.cache/cpm/<name>/`, from the URLs in `cmake/dependencies.cmake`):
 
 | Component | Used for | License |
 | --- | --- | --- |

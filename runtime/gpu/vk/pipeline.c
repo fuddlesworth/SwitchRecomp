@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright 2026 the SwitchRecomp fork contributors */
 /* Shaders and pipelines. A guest shader is translated to GLSL in the translator's Vulkan mode (shader.c), patched
    for what Vulkan does differently (vk_glsl_post: the alpha test and the depth range, with push constants), compiled to SPIR-V
    through the on-disk cache and kept as a module. Every stage uses the same descriptor set layout, one set per
