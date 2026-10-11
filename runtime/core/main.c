@@ -136,6 +136,20 @@ static void split_path(const char* argv0) {
         g_exedir[0] = 0;
 }
 
+/* players point --game at the dump itself (--game=ARMS.xci), and the runtime then looks for ARMS.xci_code.so. It only
+   runs recompiled code, so name what is missing instead of the .so it would have looked for */
+static int is_dump(const char* path) {
+    static const char* const ext[] = {".xci", ".xcz", ".nsp", ".nsz", ".nca", ".nro", ".nso"};
+    const char* dot = strrchr(path, '.');
+    if (!dot || strpbrk(dot, "/\\")) return 0;
+    for (size_t i = 0; i < sizeof ext / sizeof *ext; i++) {
+        size_t k = 0;
+        while (ext[i][k] && (dot[k] | 0x20) == ext[i][k]) k++;
+        if (!ext[i][k] && !dot[k]) return 1;
+    }
+    return 0;
+}
+
 int swr_main(int argc, char** argv) {
     /* In an AppImage argv[0] points into its mount (APPDIR). APPIMAGE is the file that was run, so a copy named after
        the game (games/Catherine or games/Catherine.AppImage) finds games/Catherine_code.so like the bare runtime does.
@@ -148,6 +162,11 @@ int swr_main(int argc, char** argv) {
     const char* game = NULL;
     for (int i = 1; i < argc; i++)
         if (!strncmp(argv[i], "--game=", 7) && argv[i][7]) game = argv[i] + 7;
+    if (game && is_dump(game))
+        fatal("%s is a game dump. SwitchRecomp does not run dumps: it runs a game recompiled from one. Extract and "
+              "recompile it first with a clone of the repository (scripts/extract.py, then scripts/recomp.py, as "
+              "the README describes), then point --game at the result, for example --game=games/Catherine.",
+              game);
     split_path(game ? game : in_appimage ? appimage : argv[0]);
     char ini[1400];
     snprintf(ini, sizeof ini, "%s%s.ini", g_exedir, g_exename);

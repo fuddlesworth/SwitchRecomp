@@ -42,7 +42,8 @@ library it needs, made with [pkgforge's tools](https://github.com/pkgforge-dev/A
 Linux. Point it at a game with `--game`, as in `./SwitchRecomp-x86_64.AppImage --game=games/Catherine`, which runs
 `games/Catherine_code.so` with `games/Catherine_data/`. Or copy it next to the game's code as
 `games/Catherine.AppImage` (or just `games/Catherine`): like the runtime the build makes, it then runs the game it is
-named after. Recompiling the game still takes a clone of this repository and Clang. `scripts/make-appimage.sh` is what
+named after. It runs games that are already recompiled, not dumps: `--game` takes the recompiled game, never an XCI or
+NSP, and recompiling one still takes a clone of this repository and Clang. `scripts/make-appimage.sh` is what
 makes it.
 
 ### Recompiling a game
