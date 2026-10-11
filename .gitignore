@@ -30,3 +30,8 @@ __pycache__/
 
 # Third-party libraries and tools built by scripts/bootstrap.sh
 /deps/
+
+# Claude Code state local to this checkout
+.claude/audit-state.json
+.claude/settings.local.json
+.claude/worktrees/
