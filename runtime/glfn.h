@@ -52,7 +52,7 @@
  X(PFNGLGETPROGRAMRESOURCEINDEXPROC,glGetProgramResourceIndex) X(PFNGLSHADERSTORAGEBLOCKBINDINGPROC,glShaderStorageBlockBinding) \
  X(PFNGLDRAWBUFFERPROC,glDrawBuffer) X(PFNGLTEXPARAMETERFPROC,glTexParameterf) X(PFNGLGETBUFFERSUBDATAPROC,glGetBufferSubData) \
  X(PFNGLPROVOKINGVERTEXPROC,glProvokingVertex) X(PFNGLSAMPLECOVERAGEPROC,glSampleCoverage) X(PFNGLDELETEPROGRAMPROC,glDeleteProgram) \
- X(PFNGLCOPYBUFFERSUBDATAPROC,glCopyBufferSubData) X(PFNGLPROGRAMUNIFORM4FVPROC,glProgramUniform4fv) X(PFNGLISENABLEDPROC,glIsEnabled) X(PFNGLGENERATEMIPMAPPROC,glGenerateMipmap)
+ X(PFNGLCOPYBUFFERSUBDATAPROC,glCopyBufferSubData) X(PFNGLPROGRAMUNIFORM4FVPROC,glProgramUniform4fv) X(PFNGLISENABLEDPROC,glIsEnabled) X(PFNGLGETBOOLEANVPROC,glGetBooleanv) X(PFNGLGENERATEMIPMAPPROC,glGenerateMipmap)
 
 #define X(T,n) extern T p_##n;
 SWR_GL_FUNCS(X)
@@ -186,6 +186,7 @@ extern PFNGLPROGRAMBINARYPROC p_glProgramBinary; extern PFNGLGETPROGRAMBINARYPRO
 #define glCopyBufferSubData p_glCopyBufferSubData
 #define glProgramUniform4fv p_glProgramUniform4fv
 #define glIsEnabled p_glIsEnabled
+#define glGetBooleanv p_glGetBooleanv
 #define glClipControl p_glClipControl
 #endif
 int swr_gl_load(void* (*getproc)(const char*));

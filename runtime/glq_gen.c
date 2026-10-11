@@ -40,6 +40,26 @@ void APIENTRY q_glGetIntegerv(GLenum pname, GLint* data) {
     qa_.data = data;
     glq_sync(e_glGetIntegerv, &qa_);
 }
+typedef void(APIENTRY* T_glGetBooleanv)(GLenum pname, GLboolean* data);
+T_glGetBooleanv r_glGetBooleanv;
+typedef struct {
+    GLenum pname;
+    GLboolean* data;
+} S_glGetBooleanv;
+static void e_glGetBooleanv(void* p) {
+    S_glGetBooleanv* qa_ = (S_glGetBooleanv*)p;
+    r_glGetBooleanv(qa_->pname, qa_->data);
+}
+void APIENTRY q_glGetBooleanv(GLenum pname, GLboolean* data) {
+    if (t_glq_direct) {
+        r_glGetBooleanv(pname, data);
+        return;
+    }
+    S_glGetBooleanv qa_;
+    qa_.pname = pname;
+    qa_.data = data;
+    glq_sync(e_glGetBooleanv, &qa_);
+}
 typedef GLenum(APIENTRY* T_glGetError)(void);
 T_glGetError r_glGetError;
 typedef struct {
@@ -3459,6 +3479,7 @@ void APIENTRY q_glUseProgramStages(GLuint pipeline, GLbitfield stages, GLuint pr
 const GlqEnt g_glq_tab[] = {
     {"glGetString", (void**)&r_glGetString, (void*)q_glGetString, (void**)&p_glGetString},
     {"glGetIntegerv", (void**)&r_glGetIntegerv, (void*)q_glGetIntegerv, (void**)&p_glGetIntegerv},
+    {"glGetBooleanv", (void**)&r_glGetBooleanv, (void*)q_glGetBooleanv, (void**)&p_glGetBooleanv},
     {"glGetError", (void**)&r_glGetError, (void*)q_glGetError, (void**)&p_glGetError},
     {"glEnable", (void**)&r_glEnable, (void*)q_glEnable, (void**)&p_glEnable},
     {"glDisable", (void**)&r_glDisable, (void*)q_glDisable, (void**)&p_glDisable},
