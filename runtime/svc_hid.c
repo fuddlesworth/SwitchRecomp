@@ -155,6 +155,15 @@ static int hid_vibration_list(SvcObj* o, IpcCtx* c) {
     return 0;
 } /* IActiveVibrationDeviceList: 0 ActivateVibrationDevice */
 static u64 g_hold_type = 0, g_comm_mode = 0, g_handheld_mode = 0;
+/* No1 reports ONE style like real hardware (the SDK asserts on multi-style sets, e.g. in GetVibrationDeviceHandles):
+   Pro Controller if the game supports it, else dual Joy-Con. Input goes to every lifo, so either one reads the pad */
+static void npad1_setup(void) {
+    u8* b = kshmem_ptr(g_hid_shm);
+    if ((g_style_supported & 1u) || !(g_style_supported & (1u << 2)))
+        npad_setup(b, 0, 1u << 0, 1u << 0); /* FullKey */
+    else
+        npad_setup(b, 0, 1u << 2, (1u << 4) | (1u << 5)); /* JoyDual: JoyLeft + JoyRight */
+}
 static int hid_disp(SvcObj* o, IpcCtx* c) {
     switch (c->cmd) {
         case 0: out_obj(c, svcobj_new("IAppletResource", hid_applet_res, 0)); return 0;
@@ -190,7 +199,10 @@ static int hid_disp(SvcObj* o, IpcCtx* c) {
                 out32(c, 0);
             }
             return 0;
-        case 100: g_style_supported = in32(c, 0); return 0; /* SetSupportedNpadStyleSet */
+        case 100:
+            g_style_supported = in32(c, 0);
+            npad1_setup();
+            return 0; /* SetSupportedNpadStyleSet */
         case 101: out32(c, g_style_supported); return 0;
         case 106: {
             u32 id = in32(c, 0);
@@ -308,8 +320,8 @@ static SvcObj* new_hidsys(void) { return svcobj_new("hid:sys", hidsys_disp, 0); 
 void svc_hid_init(void) {
     g_hid_shm = kshmem_new(0x40000, "hid");
     u8* b = kshmem_ptr(g_hid_shm);
-    npad_setup(b, 0, (1u << 0) | (1u << 2), (1u << 0) | (1u << 5)); /* No1: FullKey + JoyDual */
-    npad_setup(b, 8, 1u << 1, (1u << 2) | (1u << 3));               /* Handheld */
+    npad1_setup();
+    npad_setup(b, 8, 1u << 1, (1u << 2) | (1u << 3)); /* Handheld */
     hid_update();
     hid_update();
     svc_register("hid", new_hid);
