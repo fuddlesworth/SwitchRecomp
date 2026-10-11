@@ -113,11 +113,11 @@ Catherine uses two audio paths, and both are silent today.
       hotkeys.
 - [x] The GL context: SDL creates it (EGL under Wayland) on the GPU thread. The GL worker's shared context is current
       on a hidden helper window, since EGL won't make one surface current on two threads.
-- [x] `backend_x11.c` stays as a fallback (`-DSWR_BACKEND=x11`), and CI keeps building it.
-- [x] The SDL3 backend on Windows too (`-DSWR_BACKEND=sdl3`), for controllers other than XInput ones and for the
-      Vulkan renderer. The bootstrap builds SDL3 statically from `third_party/SDL`, and CI builds both variants. The
-      Vulkan build runs Catherine under Wine. The win32 backend stays the default until the SDL3 one has run on real
-      Windows: under Wine, SDL3 can't open an OpenGL window at all, so that combination is only built.
+- [x] The SDL3 backend on Windows too, for controllers other than XInput ones and for the Vulkan renderer. The
+      bootstrap builds SDL3 statically from `third_party/SDL`. It runs Catherine on Vulkan under Wine. Under Wine,
+      SDL3 can't open an OpenGL window at all, so OpenGL on Windows is only built.
+- [x] The x11, x11es and win32 backends were removed on 2026-10-11: SDL3 is the window backend on Linux and Windows,
+      with headless for tests and Android's own. SDL3 still hasn't run on real Windows, only under Wine.
 - [ ] Try a real controller: the mapping follows SDL's positional buttons, but no pad was at hand to test it.
 
 ## Phase 5: shaders
@@ -185,8 +185,7 @@ underneath. What can change is how much of the hardware is emulated and how well
         resolution scale (render targets at the scaled size, written back and reloaded through unscaled images) and
         `shadows=0`. Catherine matches OpenGL from boot to the New Game cutscene: the logo frame is pixel-identical,
         later screens match by eye. Only OpenGL has LSFG, dynamic resolution, the F7 recorder and F8 screenshots.
-        On Windows the default backend is still win32 (OpenGL), until the SDL3 backend has run on real Windows
-        (Phase 4); with `-DSWR_BACKEND=sdl3` it is the same as on Linux, and runs Catherine on Vulkan under Wine.
+        On Windows the SDL3 backend is the same as on Linux, and runs Catherine on Vulkan under Wine.
 - [x] Texture and buffer cache tracking. On Linux the guest's memory is registered with a userfaultfd in
       asynchronous write-protect mode, and `PAGEMAP_SCAN` lists the pages written since a range was last scanned
       (`plat_ww_scan`; Windows has `GetWriteWatch` with `SWR_WW`). The Vulkan caches scan a texture or buffer when they
@@ -255,6 +254,7 @@ variant and run on Catherine with both renderers.
       by job: options, the guest clock, RtAPI, the crash report and the CPU-side present stay in `core/`, and
       the audio renderer update and the shared fonts moved to `hle/audren.c` and `hle/pl.c`. The kernel
       is six files (`kernel.c`, `thread.c`, `sync.c`, `svc.c`, `svc_mem.c`, `debug.c`), sharing
-      `kernel/kernel_int.h`.
+      `kernel/kernel_int.h`. The platform layer is a file per OS (`plat_posix.c`, `plat_win32.c` with
+      `profiler_win32.c`), and `plat.c` keeps logging.
 - [ ] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.
 

@@ -28,8 +28,8 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
 
 ## The Vulkan renderer
 
-The sdl3 backend builds both renderers into one runtime (`SWR_VULKAN`, on by default; x11, x11es, win32 and
-headless have only OpenGL). `renderer=auto|vulkan|opengl` in the game's .ini, or `--renderer=opengl` on the command
+The sdl3 backend, the only window backend on Linux and Windows since the x11, x11es and win32 ones were removed,
+builds both renderers into one runtime (`SWR_VULKAN`, on by default; headless has the null renderer). `renderer=auto|vulkan|opengl` in the game's .ini, or `--renderer=opengl` on the command
 line (`run_game.py Catherine -- --renderer=opengl`), picks one at startup, and the log says which ran
 (`renderer: ...`). auto means Vulkan, falling back to OpenGL when Vulkan can't start (no driver, no Vulkan 1.3) or
 when LSFG frame generation is set up. The interface is the `Renderer` table in `gpu/renderer.h`: the OpenGL, Vulkan
@@ -64,19 +64,19 @@ goes in the header next to the file that defines it, which that file includes to
 agree. Anything else is static. An `extern` inside a function, or a prototype copied into another `.c` file, is the
 pattern this replaced: upstream had 237 of them, and some disagreed with the definition.
 
-The SDL3 backend, with both renderers, builds for Windows too: `cmake --preset mingw-cross -B build/mingw-sdl3
--DSWR_BACKEND=sdl3 -DSWR_DEPLOY=OFF` (the bootstrap builds a static SDL3 into `deps/win64/sdl3`).
+The Windows runtime is the SDL3 backend with both renderers: `cmake --preset mingw-cross && cmake --build --preset
+mingw-cross` (the bootstrap builds a static SDL3 into `deps/win64/sdl3`).
 
 To run a Windows build, use Wine with a game module built for Windows, kept out of `games/`:
-- `python3 -m switchrecomp work/Catherine -o Catherine --outdir build/wingame --target win64 --cc x86_64-w64-mingw32-gcc
-  --runtime build/mingw-sdl3/swr-runtime.exe`. Make `build/wingame/Catherine_data/romfs` a symlink to the Linux copy
+- `python3 -m switchrecomp work/Catherine -o Catherine --outdir build/wingame --target win64 --cc x86_64-w64-mingw32-clang
+  --runtime build/mingw-cross/swr-runtime.exe`. Make `build/wingame/Catherine_data/romfs` a symlink to the Linux copy
   first, or it copies 13 GB.
 - Use a prefix of its own, made without the Mono and Gecko installers, which otherwise wait for a click with nothing
   on screen: `WINEPREFIX=$PWD/build/wineprefix WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all wineboot -i`, and
   the same variables for `wine Catherine.exe --seconds=20 --shot=shot`. The log is `Catherine.log` next to it.
-- What works under Wine 11.19 here: the win32 backend (OpenGL) and the SDL3 backend with Vulkan. SDL3 can't open an
-  OpenGL window under that Wine at all ("No matching GL pixel format available", even in a ten-line SDL program), so
-  the SDL3 backend with `renderer=opengl` is only checked by building it.
+- What works under Wine 11.19 here: the SDL3 backend with Vulkan. SDL3 can't open an OpenGL window under that Wine at
+  all ("No matching GL pixel format available", even in a ten-line SDL program), so `renderer=opengl` on Windows is
+  only checked by building it.
 
 ## When the game module must be recompiled
 
