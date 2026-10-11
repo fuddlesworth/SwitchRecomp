@@ -46,6 +46,7 @@ struct KThread {
     int core;       /* the core it runs on, what svcGetCurrentProcessorNumber reports */
     int ideal_core; /* as svcSetThreadCoreMask set it: -1 when the game doesn't care */
     u32 yields;     /* svcSleepThread yields, every 64th of which is a host one */
+    int on_core;    /* the core it holds while it runs (core_enter), -1 while it waits */
     u64 affinity;
     u64 tls;
     u64 entry, arg, stack_top;
@@ -93,6 +94,8 @@ void kevent_signal(KEvent* e);
 void kevent_clear(KEvent* e);
 void kobj_signal(KObj* o); /* wakes waiters */
 KThread* kthread_cur(void);
+void core_enter(KThread* t); /* waits for its core to be free, then holds it */
+void core_leave(KThread* t); /* lets another thread on its core run */
 KThread* kthread_create(u64 entry, u64 arg, u64 stack_top, int prio, int core);
 void kthread_start(KThread* t);
 void kernel_run_main(u64 entry, u64 stack_size, int prio, int core);

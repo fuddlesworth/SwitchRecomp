@@ -9,6 +9,8 @@ void swr_svc(CPU* c, u32 imm) {
     u64 a0 = c->x[0], a1 = c->x[1], a2 = c->x[2];
     u64 a3 = c->x[3];
     swr_svc_(c, imm);
+    KThread* self = kthread_cur();
+    if (self) core_enter(self); /* if the SVC let go of the core */
     if (imm != 0x1E && imm != 0x0B && imm != 0x10) {
         u32 i = __atomic_fetch_add(&g_svc_ring_n, 1, __ATOMIC_RELAXED) & 63;
         SvcRec* r = &g_svc_ring[i];
@@ -88,9 +90,12 @@ static void swr_svc_(CPU* c, u32 imm) {
                    rest of a time slice to any thread sharing the host CPU, about 2 ms each here, which made its
                    loading take minutes. Guest threads run in parallel on the host, so a yield returns at once, with
                    every 64th in a row still a real one so a spin loop can't starve a thread on its host CPU */
+                core_leave(t); /* threads waiting for this core go first */
                 if (!(++t->yields & 63)) plat_yield();
-            } else
+            } else {
+                core_leave(t);
                 plat_sleep_ns(ns);
+            }
             return;
         }
         case 0x0C: {
@@ -151,10 +156,13 @@ static void swr_svc_(CPU* c, u32 imm) {
                 n->core = core;
             else if (!((mask >> n->core) & 1))
                 n->core = 63 - __builtin_clzll(mask);
+            if (n == t && t->on_core >= 0 && t->on_core != n->core) core_leave(t); /* moves on the way out */
             x[0] = 0;
             return;
         }
-        case 0x10: x[0] = (u32)(t ? t->core : 0); return;
+        case 0x10: /* the core it holds: after a new core mask it moves there only when it next lets go */
+            x[0] = (u32)(t ? (t->on_core >= 0 ? t->on_core : t->core) : 0);
+            return;
         case 0x11: {
             KEvent* e = (KEvent*)h_get_type((u32)x[0], KO_EVENT);
             if (!e) {
@@ -237,8 +245,14 @@ static void swr_svc_(CPU* c, u32 imm) {
             x[0] = R_NOTFOUND;
             return;
         }
-        case 0x21: ipc_handle(t, (u32)x[0], t->tls); return;
-        case 0x22: ipc_handle(t, (u32)x[2], x[0]); return;
+        case 0x21: /* the caller waits for the reply off its core */
+            core_leave(t);
+            ipc_handle(t, (u32)x[0], t->tls);
+            return;
+        case 0x22:
+            core_leave(t);
+            ipc_handle(t, (u32)x[2], x[0]);
+            return;
         case 0x24:
             x[0] = 0;
             x[1] = 0x51;

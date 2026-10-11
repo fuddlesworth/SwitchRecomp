@@ -43,6 +43,7 @@ KThread* kthread_create(u64 entry, u64 arg, u64 stack_top, int prio, int core) {
     t->prio = prio;
     t->core = core < 0 ? 0 : core;
     t->ideal_core = t->core;
+    t->on_core = -1;
     t->affinity = 1ull << t->core;
     t->tls = alloc_tls();
     pc_init(&t->cv);
@@ -65,9 +66,35 @@ KThread* kthread_create(u64 entry, u64 arg, u64 stack_top, int prio, int core) {
     return t;
 }
 
+/* A console core runs one thread at a time, and games build on it: Tears of the Kingdom keeps per-core state (command
+   memory cursors, heap caches) without locks, indexed by svcGetCurrentProcessorNumber, and every thread created on the
+   default core shares core 0. Guest threads run on host threads in parallel, so a thread holds its core while it runs
+   and lets go only where a console thread is off the CPU too: when it blocks in the kernel, sleeps or yields, makes an
+   IPC call, or waits in WFE. A ticket per core keeps the order fair. */
+static PMutex g_core_lk;
+static PCond g_core_cv;
+static u64 g_core_next[4], g_core_serving[4];
+void core_enter(KThread* t) {
+    if (t->on_core >= 0) return;
+    int k = t->core & 3;
+    pm_lock(&g_core_lk);
+    u64 my = g_core_next[k]++;
+    while (g_core_serving[k] != my) pc_wait(&g_core_cv, &g_core_lk, -1);
+    t->on_core = k;
+    pm_unlock(&g_core_lk);
+}
+void core_leave(KThread* t) {
+    if (!t || t->on_core < 0) return;
+    pm_lock(&g_core_lk);
+    g_core_serving[t->on_core]++;
+    t->on_core = -1;
+    pc_broadcast(&g_core_cv);
+    pm_unlock(&g_core_lk);
+}
 static void thread_body(void* p) {
     KThread* t = p;
     kthread_set(t);
+    core_enter(t);
     CPU* c = &t->cpu;
     swr_fpcr_apply(c);
     LOGV("[thread %llu] starts at %llx\n", (unsigned long long)t->id, (unsigned long long)c->pc);
@@ -84,6 +111,7 @@ void kthread_start(KThread* t) {
     if (plat_thread(thread_body, t, (size_t)64 << 20)) fatal("could not create a system thread");
 }
 void svc_exit_thread(KThread* t) {
+    core_leave(t);
     pm_lock(&g_klock);
     t->state = 2;
     kobj_signal_nl(&t->o);
@@ -92,7 +120,11 @@ void svc_exit_thread(KThread* t) {
     plat_thread_exit();
 }
 
-void kernel_init(void) { pm_init(&g_klock); }
+void kernel_init(void) {
+    pm_init(&g_klock);
+    pm_init(&g_core_lk);
+    pc_init(&g_core_cv);
+}
 
 /* main thread: stack size from npdm, x0=0, x1=own handle */
 KThread* g_main;
