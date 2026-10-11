@@ -238,6 +238,7 @@ static void query_get(GpuChannel* ch, u32* r, int base, u32 v) {
     u64 addr = ((u64)(r[base] & 0xFF) << 32) | r[base + 1];
     u32 seq = r[base + 2];
     u32 op = v & 3;
+    if (op != 1) gpu_signal_point();
     if (op == 0) { /* release */
         if (((v >> 4) & 1) || ((v >> 28) & 1))
             gmem_w32(addr, seq);

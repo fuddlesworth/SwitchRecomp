@@ -84,6 +84,8 @@ a renderer rewrite on top of a memory-corruption bug would make every regression
         (40 to 80 ms per release, stretches at 1 FPS), so it was not kept. A Vulkan backend with its own compute
         queue and explicit synchronization can order these without the stall.
       - Open question: what the game waited on before allocating those nodes (`sdk-scout` on the allocator).
+      - The Vulkan renderer orders it that way (Phase 6, step 4): 0 crashes in 7 runs. What remains here is
+        the same ordering for OpenGL, or Vulkan becoming the default.
 - [ ] Turn compiler warnings back on (upstream builds with `-w`) and fix them file by file, starting with the
       files we change.
 
@@ -153,12 +155,17 @@ underneath. What can change is how much of the hardware is emulated and how well
           vertex, index, constant and storage buffers (stable data in buffers of its own, changing data read from
           the staging ring). Catherine's logos, menus and the opening movie match GL; the Atlus logo is
           pixel-identical. The viewport maps the guest's transform directly (y down), so shaders don't flip y.
-    - [ ] 3D scenes. Static geometry draws; skinned models (the cutscene's characters and balloons) wait for
-          compute (step 4). Still to do: draws that sample their own render target (read as empty for now),
-          clears with a partial color mask, the 2D engine's blits on the GPU, a pipeline cache on disk.
-  - [ ] Step 4, compute on its own queue, with completion signals held until results land (the Phase 2 crash).
-        Without compute the Vulkan build hasn't hit that crash yet (none in 3 runs past the title screen, against
-        2 of 5 GL runs the same day), which agrees with what Phase 2 found, though the sample is small.
+    - [x] 3D scenes: the New Game cutscene matches GL, with its skinned models (step 4). Draws that read the depth
+          target they test against (soft particles) bind it read-only. Clears with a partial color mask are a
+          full-screen draw with that mask, the 2D engine's blits between render targets run on the GPU, and the
+          driver's pipeline cache is kept in `shader_cache/vk_pipelines.bin`. A draw that samples a color target
+          it renders to reads it as empty (none in Catherine so far).
+  - [x] Step 4, compute on its own queue (`vk_compute.c`). Dispatches are batched on the compute queue, and their
+        results land in guest memory, with the rule from Phase 2, before anything the game can observe: a read
+        or GPU write of that memory, a semaphore release or report, a syncpoint. That is the ordering that
+        stopped the title-screen crash, and on the compute queue it costs about 1 ms per batch of dispatches
+        instead of the whole rendering backlog. 0 crashes in 7 runs past the title screen (GL: 2 of 5 the same
+        day), at the same frame rate as GL.
   - [ ] Step 5, parity with OpenGL, screenshot by screenshot, then Vulkan becomes the default, also on Windows.
 - [ ] Texture and buffer cache tracking: invalidation on CPU writes and correct write-back, which is the same area
       as the Phase 2 crash.

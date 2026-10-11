@@ -12,7 +12,6 @@ u64 g_draws;
 volatile i32 g_vi_crop[4];
 volatile u32 g_vi_transform;
 int g_texoff_emul;
-volatile int g_cs_any;
 
 static VkSemaphore g_acquired[VK_FRAMES];
 /* the CPU fallback's image, and the last presented frame for screenshots */
@@ -24,6 +23,8 @@ void gpu_vk_start(void) {
     if (!vk_init()) fatal("Vulkan could not start (see the log). Build with -DSWR_GPU=gl to use OpenGL.");
     vk_cmd_init();
     vk_pipeline_init();
+    extern void (*g_gpu_before_write)(u64, u64);
+    g_gpu_before_write = vk_compute_before_write;
     VkSemaphoreCreateInfo sci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (int i = 0; i < VK_FRAMES; i++) VK_OK(vkCreateSemaphore(g_vk.dev, &sci, NULL, &g_acquired[i]));
 }
@@ -57,17 +58,10 @@ void r3d_cb_bind_gl(GpuChannel* ch, int stage, u32 v) {
     g_vk_cbsize[stage][idx] = (v & 1) ? r[0x8E0] : 0;
 }
 int r3d_blit_gl(void* s, void* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx, double sdy) {
-    (void)s;
-    (void)d;
-    (void)dx;
-    (void)dy;
-    (void)dw;
-    (void)dh;
-    (void)sx;
-    (void)sy;
-    (void)sdx;
-    (void)sdy;
-    return 0; /* the front end copies through memory, with gpu_gl_rt_flush/reload around it */
+    vk_lock();
+    int r = vk_blit2d(s, d, dx, dy, dw, dh, sx, sy, sdx, sdy);
+    vk_unlock();
+    return r; /* 0: the front end copies through memory, with gpu_gl_rt_flush/reload around it */
 }
 void gpu_gl_rt_flush(u64 gva) {
     vk_lock();
@@ -80,18 +74,20 @@ void gpu_gl_rt_reload(u64 gva) {
     vk_unlock();
 }
 void gpu_gl_dispatch(void* ch, const void* q, unsigned long long code) {
-    (void)ch;
-    (void)q;
-    (void)code;
+    extern void r3d_pending_flush(void);
+    extern void vk_dispatch(GpuChannel * ch, const u32* q, u64 code);
+    if (getenv("SWR_NO_COMPUTE")) return;
+    r3d_pending_flush(); /* a merged draw the front end is holding comes first */
+    vk_lock();
+    vk_dispatch(ch, q, code);
+    vk_unlock();
 }
 void gpu_gl_note_compute(void) {}
-void cs_mem_need(u64 a, u64 n) {
-    (void)a;
-    (void)n;
-}
-void gpu_gl_before_syncwait(void) {}
+/* compute results land before the stream signals or waits (vk_compute.c) */
+void gpu_gl_before_syncwait(void) { vk_compute_land(); }
 void gpu_gl_stream_incr(u32 id) {
     extern void syncpt_incr(u32);
+    vk_compute_land();
     syncpt_incr(id);
 }
 void gpu_gl_dump_rts(void) {}
@@ -209,9 +205,13 @@ void gpu_gl_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u3
     g_vk_present++;
     vk_tex_frame();
     vk_buf_frame();
+    if (g_vk_present % 300 == 0) vk_pipeline_save();
     if (g_vk_present % 600 == 0) {
-        extern u64 g_vk_drawn, g_vk_skipped;
-        LOG("vulkan: %llu draws, %llu skipped\n", (unsigned long long)g_vk_drawn, (unsigned long long)g_vk_skipped);
+        extern u64 g_vk_drawn, g_vk_skipped, g_vk_dispatches, g_vk_cs_batches, g_vk_cs_skipped, g_vk_cs_wait_ns;
+        LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped\n",
+            (unsigned long long)g_vk_drawn, (unsigned long long)g_vk_skipped, (unsigned long long)g_vk_dispatches,
+            (unsigned long long)g_vk_cs_batches, (unsigned long long)(g_vk_cs_wait_ns / 1000000),
+            (unsigned long long)g_vk_cs_skipped);
     }
     vk_submit(g_acquired[slot], VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, g_vk.sc_done[idx]);
     VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
