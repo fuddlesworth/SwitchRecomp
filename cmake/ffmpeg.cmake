@@ -8,7 +8,8 @@
 # shell and make (gmake on the BSDs), and NASM for the x86-64 assembly.
 set(src "${FFmpeg_SOURCE_DIR}")
 set(prefix "${CMAKE_BINARY_DIR}/ffmpeg")
-find_program(SWR_FFMPEG_SH NAMES bash sh REQUIRED)
+# sh before bash: on Windows a bash.exe in System32 is WSL's launcher, and w64devkit's sh is the one to use
+find_program(SWR_FFMPEG_SH NAMES sh bash REQUIRED)
 find_program(SWR_FFMPEG_MAKE NAMES gmake make REQUIRED)
 
 set(args
@@ -36,10 +37,22 @@ set(args
     # FFmpeg's own warnings stay out of the build output
     --extra-cflags=-w)
 if(WIN32)
-    list(APPEND args --target-os=mingw32 --arch=${CMAKE_SYSTEM_PROCESSOR})
+    # CMake names the architecture AMD64 on Windows, which configure doesn't know
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+        set(arch x86_64)
+    else()
+        string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" arch)
+    endif()
+    list(APPEND args --target-os=mingw32 --arch=${arch})
 endif()
 if(CMAKE_CROSSCOMPILING)
-    list(APPEND args --enable-cross-compile --host-cc=cc)
+    # configure builds a few helper programs for the machine doing the build, which needs its own C compiler
+    find_program(SWR_HOST_CC NAMES clang cc)
+    if(NOT SWR_HOST_CC)
+        message(FATAL_ERROR "Cross-building FFmpeg needs a C compiler for this machine too (clang or cc). Install one, "
+                            "or configure with -DSWR_H264=OFF.")
+    endif()
+    list(APPEND args --enable-cross-compile --host-cc=${SWR_HOST_CC})
 endif()
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
     find_program(SWR_NASM nasm)
