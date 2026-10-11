@@ -142,7 +142,15 @@ underneath. What can change is how much of the hardware is emulated and how well
         an on-disk SPIR-V cache. `SWR_SHADER_CORPUS` records the shaders a run translates, and `swr-shaderc` checks a
         corpus offline: 116 of Catherine's 117 shaders compile and pass `spirv-val` (the other uses a global load the
         translator can't place, in GL too), and the GL output is byte-identical to before.
-  - [ ] Step 3, drawing: render targets, textures, samplers, pipelines and draws, ported from `gpu_gl.c`.
+  - [~] Step 3, drawing: render targets, textures, samplers, pipelines and draws, ported from `gpu_gl.c`, in slices.
+    - [x] Render targets and clears: targets by guest address (parked and reused when a size or format comes
+          back), dynamic rendering passes kept open across clears and draws to the same set, write-back to guest
+          memory and reload from it around CPU-side copies, frames in flight with a staging ring and deferred
+          destruction, memory through VMA. The game's frame is presented from its render target. Draws bind their
+          targets but record nothing yet, so Catherine shows black where GL shows the logos.
+    - [ ] Textured 2D draws: texture cache, samplers, pipelines, vertex, index and constant buffers (the logos and
+          menus).
+    - [ ] 3D scenes.
   - [ ] Step 4, compute on its own queue, with completion signals held until results land (the Phase 2 crash).
   - [ ] Step 5, parity with OpenGL, screenshot by screenshot, then Vulkan becomes the default, also on Windows.
 - [ ] Texture and buffer cache tracking: invalidation on CPU writes and correct write-back, which is the same area

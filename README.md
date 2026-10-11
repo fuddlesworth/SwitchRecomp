@@ -41,9 +41,10 @@ python3 scripts/recomp.py work/Catherine Catherine                      # -> gam
 cd games && ./Catherine
 ```
 
-`--preset clang` builds with Clang instead of GCC. A Vulkan renderer is in progress (`-DSWR_GPU=vulkan`): it opens
-the window and presents, but doesn't draw the game yet, so OpenGL stays the default. The first recompile of a big game takes several minutes. After
-that, a runtime change only needs a runtime build, which copies the new runtime next to every game in `games/`:
+`--preset clang` builds with Clang instead of GCC. A Vulkan renderer is in progress (`-DSWR_GPU=vulkan`): it clears
+and presents the game's render targets, but doesn't draw yet, so OpenGL stays the default. The first recompile of a
+big game takes several minutes. After that, a runtime change only needs a runtime build, which copies the new
+runtime next to every game in `games/`:
 
 ```bash
 cmake --preset gcc && cmake --build --preset gcc
@@ -160,6 +161,7 @@ The Apache license covers only the SwitchRecomp code. Third-party components kee
 | glslang (Khronos) | Vulkan shaders to SPIR-V | BSD 3-Clause, MIT and Apache 2.0, and a parser under GPL 3 with the Bison exception, `third_party/glslang/LICENSE.txt` |
 | Vulkan-Headers (Khronos) | Vulkan definitions | Apache 2.0, `third_party/Vulkan-Headers/LICENSE.md` |
 | volk (Arseny Kapoulkine) | Loading Vulkan | MIT, `third_party/volk/LICENSE.md` |
+| Vulkan Memory Allocator (AMD) | GPU memory for the Vulkan renderer | MIT, `third_party/VulkanMemoryAllocator/LICENSE.txt` |
 | texture2ddecoder | BCn textures on GPUs without them | MIT, `runtime/bcn/LICENSE_texture2ddecoder.txt` |
 | lsfg-vk | LSFG pass layout, ported to GL in `runtime/lsfg.c` | MIT |
 | DejaVu Sans Mono | The on-screen overlay font (`runtime/overlay_font.h`) | Bitstream Vera / DejaVu license |

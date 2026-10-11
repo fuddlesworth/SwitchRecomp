@@ -3,6 +3,9 @@
 #include "vk.h"
 
 VkState g_vk;
+static PMutex g_vklock;
+void vk_lock(void) { pm_lock(&g_vklock); }
+void vk_unlock(void) { pm_unlock(&g_vklock); }
 
 const char* vk_result_str(VkResult r) {
     switch (r) {
@@ -27,12 +30,6 @@ int vk_ok_(VkResult r, const char* what, const char* file, int line) {
     if (r >= 0) return 1;
     WARN("vulkan: %s failed: %s (%d) at %s:%d\n", what, vk_result_str(r), (int)r, file, line);
     return 0;
-}
-
-u32 vk_memory_type(u32 bits, VkMemoryPropertyFlags want) {
-    for (u32 i = 0; i < g_vk.mem.memoryTypeCount; i++)
-        if ((bits >> i & 1) && (g_vk.mem.memoryTypes[i].propertyFlags & want) == want) return i;
-    return ~0u;
 }
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBitsEXT sev,
@@ -186,7 +183,14 @@ static int create_device(void) {
     volkLoadDevice(g_vk.dev);
     vkGetDeviceQueue(g_vk.dev, g_vk.gfx_family, 0, &g_vk.gfx);
     vkGetDeviceQueue(g_vk.dev, g_vk.compute_family, 0, &g_vk.compute);
-    pm_init(&g_vk.gfx_lock);
+    VmaVulkanFunctions vf = {.vkGetInstanceProcAddr = vkGetInstanceProcAddr,
+                             .vkGetDeviceProcAddr = vkGetDeviceProcAddr};
+    VmaAllocatorCreateInfo vai = {.physicalDevice = g_vk.phys,
+                                  .device = g_vk.dev,
+                                  .instance = g_vk.instance,
+                                  .vulkanApiVersion = VK_API_VERSION_1_3,
+                                  .pVulkanFunctions = &vf};
+    if (!VK_OK(vmaCreateAllocator(&vai, &g_vk.vma))) return 0;
     LOG("vulkan: %s, Vulkan %u.%u.%u, driver %08x, graphics queue family %u, compute %u%s\n", g_vk.props.deviceName,
         VK_API_VERSION_MAJOR(g_vk.props.apiVersion), VK_API_VERSION_MINOR(g_vk.props.apiVersion),
         VK_API_VERSION_PATCH(g_vk.props.apiVersion), g_vk.props.driverVersion, g_vk.gfx_family, g_vk.compute_family,
@@ -288,6 +292,7 @@ int vk_swapchain_create(void) {
 }
 
 int vk_init(void) {
+    pm_init(&g_vklock);
     PFN_vkGetInstanceProcAddr gipa = (PFN_vkGetInstanceProcAddr)backend_vk_loader();
     if (!gipa) {
         WARN("vulkan: no Vulkan loader (is a Vulkan driver installed?)\n");

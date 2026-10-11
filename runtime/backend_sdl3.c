@@ -132,8 +132,10 @@ void backend_window_size(int* w, int* h) {
 }
 void video_present_rgba(const u32* px, int w, int h, int stride) {
 #ifdef SWR_VULKAN
-    extern void vk_present_rgba(const u32*, int, int, int);
-    vk_present_rgba(px, w, h, stride);
+    (void)px; /* the Vulkan renderer presents from the game's buffer (gpu_gl_present_buffer) */
+    (void)w;
+    (void)h;
+    (void)stride;
 #else
     extern void gpu_gl_present_cpu(const u32*, int, int, int);
     gpu_gl_present_cpu(px, w, h, stride);

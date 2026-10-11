@@ -33,9 +33,9 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
 `SWR_SHADER_CORPUS=dir` (any renderer), then `build/vk/swr-shaderc dir --validate` for Vulkan, and `--gl --out` from
 two builds, diffed, to show the GL output didn't change. `SWR_VK_VALIDATION=1`
 turns on the Khronos validation layer when it is installed (Arch: `vulkan-validation-layers`, which the user
-installs). Until it draws, a screenshot (`--shot`) shows the CPU path's frame, not what Vulkan presented: check what
-reached the window with a desktop capture (`spectacle -b -n -f -o FILE`), and delete the capture afterwards, since it
-shows the user's whole desktop.
+installs). A screenshot (`--shot`, or run_game.py's) reads back the frame Vulkan presented. Until draws are
+recorded, Catherine's frames are black: to check a clear reaches the window, force a clear color temporarily and
+present a target the game clears (its framebuffer is only ever drawn to).
 
 ## Windows
 
