@@ -195,8 +195,10 @@ Third-party components keep their own licenses, found in each package CPM.cmake 
 This project builds on the work of the Switch emulation and homebrew community, whose projects showed how the
 console and its operating system behave:
 
-- yuzu, Ryujinx, Ryubing (Ryujinx's continuation), Citron and Eden, the Switch emulators
-- Atmosphère, the reimplementation of Horizon OS
+- yuzu, Ryujinx, [Ryubing](https://git.ryujinx.app/ryubing/ryujinx) (Ryujinx's continuation),
+  [Citron](https://git.citron-emu.org/citron/emulator) and [Eden](https://git.eden-emu.dev/eden-emu/eden), the Switch
+  emulators
+- [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere), the reimplementation of Horizon OS
 - LibHac, the library for the Switch's file systems and content formats
 
 Wimsy, the mascot in `wimsy.svg`, was drawn by Madeline_Dev, © 2025 Eden Emulator Project, under the GPL 3.
