@@ -120,16 +120,23 @@ Catherine uses two audio paths, and both are silent today.
 
 ## Phase 5: shaders
 
-The game stalls the first time it meets a shader (`waiting for shader=414` in a short session).
+The game stalled the first time it met a shader (`waiting for shader=414` in a short session).
 
-- [ ] A persistent shader cache: store translated GLSL and GL program binaries on disk, keyed by the Maxwell code
-      hash and the draw state that affects translation (vertex attribute types, the VertexA/VertexB pair, texture
-      types).
-- [ ] Pre-translation at recomp time. Catherine ships its shaders as files (`romfs/data/shaders_binary/*.vs`,
-      `*.ps`), so most can be translated before the game ever runs. Variants that depend on draw state are recorded
-      in the cache on the first run and built at startup afterwards, the way Ryujinx's shader cache works.
-- [ ] SPIR-V output. Emit SPIR-V directly from the Maxwell decoder, or compile the generated GLSL with glslang at
-      cache-build time. SPIR-V pays off with the Vulkan backend (Phase 6). OpenGL's `GL_ARB_gl_spirv` gains little.
+- [x] A persistent shader cache. OpenGL already had one from upstream: the translated GLSL in
+      `shader_cache/shader_pack_v3.bin`, program binaries next to it, compiled in the background at startup. It still
+      loaded a known program's binary on the compile thread, so every shader the session met skipped its draws for a
+      frame (1758 draws in a warm-cache run to the cutscene). Outside Windows that binary now loads on the GPU thread,
+      and those skips are gone. Vulkan keeps SPIR-V (`shader_cache/spirv/`, keyed by the GLSL) and the driver's
+      pipeline cache (`shader_cache/vk_pipelines.bin`).
+- [x] Pre-translation at recomp time. Catherine ships its shaders as NVN files (`romfs/data/shaders_binary/*.vs`,
+      `*.ps`): a control section, then the program at 2896 bytes, a vertex shader's VertexA and VertexB one after the
+      other. `swr-shaderc --nvn` translates them as the renderer would on first use (VertexA and VertexB merged) and
+      fills the SPIR-V cache, and `scripts/recomp.py` runs it after recompiling. Of the shaders a first run to the
+      cutscene uses, 134 of 149 fragment and 56 of 60 vertex shaders are already there. The rest depend on draw state
+      (integer attributes, textures or outputs) or read constant buffers while translating. Pipelines still compile
+      on first use, then come from the driver's cache.
+- [x] SPIR-V output: the generated GLSL compiled with glslang (Phase 6, step 2). Emitting SPIR-V straight from the
+      Maxwell decoder would save little now that glslang's output is cached and mostly made ahead of time.
 
 ## Phase 6: GPU
 

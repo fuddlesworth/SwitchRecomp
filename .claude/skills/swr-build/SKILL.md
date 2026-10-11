@@ -36,7 +36,10 @@ when LSFG frame generation is set up. `renderer.c` holds the interface names and
 `gpu_gl.c`'s side gets `glr_` names from `gl_names.h` (force-included by CMake, so upstream's file is unchanged),
 `gpu_vk.c`'s side is `vkr_`.
 
-The build also makes `swr-shaderc`. A translator change is checked on a shader corpus before any rendering: record one
+The build also makes `swr-shaderc`. `swr-shaderc --nvn DIR --cache games/shader_cache/spirv` pre-translates a game's
+NVN shader files into the SPIR-V cache (`scripts/recomp.py` runs it on any romfs folder holding them); to measure what
+it covers, record a corpus of a run and replay it with `--cache` against a copy of the pre-filled folder, counting the
+files it adds. A translator change is checked on a shader corpus before any rendering: record one
 with `SWR_SHADER_CORPUS=dir` (any renderer), then `build/gcc/swr-shaderc dir --validate` for Vulkan, and `--gl --out` from
 two builds, diffed, to show the GL output didn't change. `SWR_VK_VALIDATION=1`
 turns on the Khronos validation layer when it is installed (Arch: `vulkan-validation-layers`, which the user

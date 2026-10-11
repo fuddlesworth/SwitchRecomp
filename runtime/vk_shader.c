@@ -113,3 +113,39 @@ u32* vk_spirv_cached(const char* glsl, int stage, const char* cache_dir, size_t*
     }
     return w;
 }
+
+/* gpu_gl.c's sh_post for Vulkan: the alpha test discards before every return of a fragment shader, and a vertex
+   shader for a guest in -1..1 depth mode moves z to Vulkan's 0..1 (the viewport handles y, see vk_render.c) */
+char* vk_glsl_post(char* src, int stage) {
+    if (!src) return src;
+    const char* fn = NULL;
+    const char* ret = NULL;
+    if (stage == ST_FS && strstr(src, "out vec4 frag_color0")) {
+        fn =
+            "layout(push_constant) uniform SWR_PC { layout(offset=16) vec4 swr_at; };\n"
+            "bool swr_atest(float a){ int f=int(swr_at.y); float r=swr_at.z;\n"
+            "  if(f==0) return false; if(f==1) return a<r; if(f==2) return a==r; if(f==3) return a<=r; if(f==4) return a>r; if(f==5) return a!=r; if(f==6) return a>=r; return true; }\n";
+        ret = "{ if(swr_at.x!=0.0 && !swr_atest(frag_color0.w)) discard; return; }";
+    } else if (stage == ST_VS) {
+        fn = "layout(push_constant) uniform SWR_PC { vec4 swr_vp; };\n";
+        ret = "{ if(swr_vp.y!=0.0) gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5; return; }";
+    }
+    char* p = fn ? strstr(src, "void main(){") : NULL;
+    if (!p) return src;
+    size_t pre = (size_t)(p - src), nret = 0;
+    for (const char* q = p; (q = strstr(q, "return;")); q += 7) nret++;
+    char* out = malloc(strlen(src) + strlen(fn) + nret * strlen(ret) + 1);
+    memcpy(out, src, pre);
+    char* o = out + pre;
+    o += sprintf(o, "%s", fn);
+    for (const char* q = p; *q;) {
+        if (!strncmp(q, "return;", 7)) {
+            o += sprintf(o, "%s", ret);
+            q += 7;
+        } else
+            *o++ = *q++;
+    }
+    *o = 0;
+    free(src);
+    return out;
+}

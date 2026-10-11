@@ -79,41 +79,6 @@ void vk_pipeline_init(void) {
 }
 
 /* ------------------------------------------------------------ shaders */
-/* gpu_gl.c's sh_post for Vulkan: the alpha test discards before every return of a fragment shader, and a vertex
-   shader for a guest in -1..1 depth mode moves z to Vulkan's 0..1 (the viewport handles y, see vk_render.c) */
-static char* sh_post(char* src, int stage) {
-    if (!src) return src;
-    const char* fn = NULL;
-    const char* ret = NULL;
-    if (stage == ST_FS && strstr(src, "out vec4 frag_color0")) {
-        fn =
-            "layout(push_constant) uniform SWR_PC { layout(offset=16) vec4 swr_at; };\n"
-            "bool swr_atest(float a){ int f=int(swr_at.y); float r=swr_at.z;\n"
-            "  if(f==0) return false; if(f==1) return a<r; if(f==2) return a==r; if(f==3) return a<=r; if(f==4) return a>r; if(f==5) return a!=r; if(f==6) return a>=r; return true; }\n";
-        ret = "{ if(swr_at.x!=0.0 && !swr_atest(frag_color0.w)) discard; return; }";
-    } else if (stage == ST_VS) {
-        fn = "layout(push_constant) uniform SWR_PC { vec4 swr_vp; };\n";
-        ret = "{ if(swr_vp.y!=0.0) gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5; return; }";
-    }
-    char* p = fn ? strstr(src, "void main(){") : NULL;
-    if (!p) return src;
-    size_t pre = (size_t)(p - src), nret = 0;
-    for (const char* q = p; (q = strstr(q, "return;")); q += 7) nret++;
-    char* out = malloc(strlen(src) + strlen(fn) + nret * strlen(ret) + 1);
-    memcpy(out, src, pre);
-    char* o = out + pre;
-    o += sprintf(o, "%s", fn);
-    for (const char* q = p; *q;) {
-        if (!strncmp(q, "return;", 7)) {
-            o += sprintf(o, "%s", ret);
-            q += 7;
-        } else
-            *o++ = *q++;
-    }
-    *o = 0;
-    free(src);
-    return out;
-}
 
 static VkSh* g_shh[1024];
 typedef struct {
@@ -201,7 +166,7 @@ VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, 
             if (corpus == (const char*)-1) corpus = getenv("SWR_SHADER_CORPUS");
             if (corpus) shader_corpus_save(corpus, code, mlen, 0x10000, stage, &s->si, h ^ key2);
         }
-        char* src = sh_post(shader_to_glsl(code, 0x10000, stage, &s->si), stage);
+        char* src = vk_glsl_post(shader_to_glsl(code, 0x10000, stage, &s->si), stage);
         if (stage != ST_FS) s->si.attr_sint_mask = sint_mask;
         if (s->si.unsupported)
             WARN("shader %016llx: %d untranslated instructions (first: %s)\n", (unsigned long long)h, s->si.unsupported,
