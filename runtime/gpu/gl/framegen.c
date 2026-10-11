@@ -3,6 +3,7 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* LSFG frame generation in the present path */
 #include "gpu/gl/gl.h"
+#include "core/clock.h"
 
 /* ============================================================ LSFG frame gen (user's own Lossless.dll) */
 static GLuint g_lf_fbo;

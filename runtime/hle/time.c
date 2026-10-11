@@ -3,6 +3,7 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* time: clocks and the time zone */
 #include "hle/services_int.h"
+#include "core/clock.h"
 /* ================================================================ time */
 static KShmem* g_time_shm;
 static int sysclock_disp(SvcObj* o, IpcCtx* c) {

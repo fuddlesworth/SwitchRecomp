@@ -5,11 +5,11 @@
    address arbiter) and the SVCs games actually call. */
 #include "kernel/kernel.h"
 #include "core/loader.h"
-#include "core/main.h"
 #include "kernel/ipc.h"
 #include "kernel/mem.h"
 #include "platform/log.h"
 #include "platform/plat.h"
+#include "core/rtapi.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

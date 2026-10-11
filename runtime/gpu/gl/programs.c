@@ -474,7 +474,7 @@ static WJob* wr_pop(WRing* r) {
 }
 static void shader_worker(void* arg) {
     (void)arg;
-    if (!backend_gl_worker_current()) {
+    if (!glq_worker_current()) {
         __atomic_store_n(&g_worker, -1, __ATOMIC_RELEASE);
         return;
     }
@@ -789,9 +789,9 @@ int sh_sep_ready(Sh* s) {
 void sep_init(void) {
     g_sep = 0;
     if (g_gles || getenv("SWR_NO_SEP") || !p_glProgramParameteri) goto out;
-    p_ups = (PFN_UPS_)backend_gl_proc("glUseProgramStages");
-    p_bpp = (PFN_BPP_)backend_gl_proc("glBindProgramPipeline");
-    PFN_GPP_ gpp = (PFN_GPP_)backend_gl_proc("glGenProgramPipelines");
+    p_ups = (PFN_UPS_)glq_proc("glUseProgramStages");
+    p_bpp = (PFN_BPP_)glq_proc("glBindProgramPipeline");
+    PFN_GPP_ gpp = (PFN_GPP_)glq_proc("glGenProgramPipelines");
     if (!p_ups || !p_bpp || !gpp) goto out;
     gpp(1, &g_pipe);
     if (g_pipe) g_sep = 1;

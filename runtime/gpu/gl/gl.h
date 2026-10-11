@@ -30,10 +30,6 @@
 #include "gpu/shader/shader.h"
 #include "gpu/gl/glq.h"
 
-/* GL calls in this file go through glq when it's on */
-#define backend_gl_proc           glq_proc
-#define backend_gl_swap           glq_swap
-#define backend_gl_worker_current glq_worker_current
 /* formats */
 typedef struct {
     GLenum ifmt, fmt, type;

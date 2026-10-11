@@ -4,6 +4,7 @@
    OpenGL takes over when Vulkan can't start. */
 #include "core/main.h"
 #include "core/options.h"
+#include "core/rtapi.h"
 #include "hle/hid.h"
 #include "kernel/kernel.h"
 #include "platform/backend.h"

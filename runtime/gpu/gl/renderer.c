@@ -17,16 +17,9 @@
 #include "core/options.h"
 #include "gpu/gl/lsfg.h"
 #include "gpu/renderer.h"
-#include "gpu/texture/astc.h"
-#include "gpu/texture/bcn.h"
-#include "hle/nvdrv.h"
-#include "kernel/mem.h"
 #include "platform/backend.h"
 #include "platform/log.h"
 #include "platform/plat.h"
-#ifdef _WIN32
-#include "platform/recorder.h"
-#endif
 #include "gpu/gpu.h"
 #include <time.h>
 #include <math.h>
@@ -37,6 +30,7 @@ int g_gl = 0; /* active renderer */
 static int g_gl_ready;
 #include "gpu/gl/glq.h"
 #include "gpu/gl/gl.h"
+#include "core/clock.h"
 u64 g_draws;
 __thread int t_gpu_thread; /* GL context owner */
 int g_diag_draws;
@@ -349,7 +343,7 @@ static void gpu_thread(void* arg) {
     { plat_thread_high_priority(); }
     {
         int qs = glq_start(); /* 1: GL lives on its own thread (context + fn pointers made there), 0: this thread */
-        if (qs < 0 || (qs == 0 && (!backend_gl_create() || !swr_gl_load(backend_gl_proc)))) {
+        if (qs < 0 || (qs == 0 && (!backend_gl_create() || !swr_gl_load(glq_proc)))) {
             WARN("No OpenGL 4.3: running without a graphics card\n");
             g_gl = 0;
             g_gl_ready = 1;
@@ -370,7 +364,7 @@ static void gpu_thread(void* arg) {
             GLint n = 0;
             glGetIntegerv(GL_NUM_EXTENSIONS, &n);
             typedef const GLubyte*(APIENTRY * GSI)(GLenum, GLuint);
-            GSI gsi = (GSI)backend_gl_proc("glGetStringi");
+            GSI gsi = (GSI)glq_proc("glGetStringi");
             for (GLint k = 0; k < n && gsi; k++) {
                 const char* e = (const char*)gsi(GL_EXTENSIONS, (GLuint)k);
                 if (!e) continue;
@@ -392,7 +386,7 @@ static void gpu_thread(void* arg) {
         GLint n = 0;
         glGetIntegerv(GL_NUM_EXTENSIONS, &n);
         typedef const GLubyte*(APIENTRY * GSI2)(GLenum, GLuint);
-        GSI2 gsi = (GSI2)backend_gl_proc("glGetStringi");
+        GSI2 gsi = (GSI2)glq_proc("glGetStringi");
         for (GLint k = 0; k < n && gsi; k++) {
             const char* e = (const char*)gsi(GL_EXTENSIONS, (GLuint)k);
             if (!e) continue;
@@ -416,8 +410,8 @@ static void gpu_thread(void* arg) {
         if (getenv("SWR_SYNC_SHADERS")) g_par = 0;
         if (g_par) {
             typedef void(APIENTRY * MSCT)(GLuint);
-            MSCT f = (MSCT)backend_gl_proc("glMaxShaderCompilerThreadsKHR");
-            if (!f) f = (MSCT)backend_gl_proc("glMaxShaderCompilerThreadsARB");
+            MSCT f = (MSCT)glq_proc("glMaxShaderCompilerThreadsKHR");
+            if (!f) f = (MSCT)glq_proc("glMaxShaderCompilerThreadsARB");
             if (f) f(0xFFFFFFFFu);
         }
         LOG("shaders: parallel compilation %s\n",
@@ -437,7 +431,7 @@ static void gpu_thread(void* arg) {
     }
     if (g_verbose >= 2) {
         typedef void(APIENTRY * DBGCB)(GLDEBUGPROC, const void*);
-        DBGCB f = (DBGCB)backend_gl_proc("glDebugMessageCallback");
+        DBGCB f = (DBGCB)glq_proc("glDebugMessageCallback");
         if (f) {
             glEnable(GL_DEBUG_OUTPUT);
             f(gl_dbg, NULL);
@@ -470,10 +464,10 @@ static void gpu_thread(void* arg) {
     sep_init();
     mb_init();
     ur_init();
-    if (!g_gles && !getenv("SWR_NO_CLIPCONTROL")) p_clip = (PFNGLCLIPCONTROLPROC)backend_gl_proc("glClipControl");
-    if (!g_gles && !getenv("SWR_NO_TEXVIEW")) p_tview = (PFNGLTEXTUREVIEWPROC)backend_gl_proc("glTextureView");
+    if (!g_gles && !getenv("SWR_NO_CLIPCONTROL")) p_clip = (PFNGLCLIPCONTROLPROC)glq_proc("glClipControl");
+    if (!g_gles && !getenv("SWR_NO_TEXVIEW")) p_tview = (PFNGLTEXTUREVIEWPROC)glq_proc("glTextureView");
     if (!g_gles) lsfg_init();
-    p_cis = (PFNGLCOPYIMAGESUBDATAPROC)backend_gl_proc("glCopyImageSubData");
+    p_cis = (PFNGLCOPYIMAGESUBDATAPROC)glq_proc("glCopyImageSubData");
     gl_selftest();
     state_dirty();
     mb_reset();

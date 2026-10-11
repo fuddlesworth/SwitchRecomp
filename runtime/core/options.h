@@ -7,6 +7,8 @@
 
 void ini_load(const char* path);
 void ini_set(const char* k, const char* v);
+void ini_open(const char* path); /* watch the file: ini_poll reloads it when it changes, and writes back what changed */
+void ini_poll(void);
 extern int g_opt_docked, g_opt_lang, g_opt_res, g_opt_fps, g_opt_vsync, g_opt_drs;
 extern int g_opt_diag, g_opt_shadows, g_opt_cmp_low, g_opt_resdyn, g_opt_prof;
 extern int g_opt_rec_smooth, g_opt_rec_fps;

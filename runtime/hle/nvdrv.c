@@ -3,7 +3,6 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* nvdrv: nvmap, nvhost-as-gpu, nvhost-ctrl, nvhost-ctrl-gpu, nvhost-gpu. Enough for NVN and deko3d. */
 #include "hle/nvdrv.h"
-#include "core/main.h"
 #include "gpu/gpu.h"
 #include "kernel/ipc.h"
 #include "kernel/kernel.h"
@@ -11,6 +10,7 @@
 #include "platform/log.h"
 #include "platform/plat.h"
 #include "video/host1x.h"
+#include "core/clock.h"
 #include <stdlib.h>
 #include <string.h>
 static void nv_events_check(void);

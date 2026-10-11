@@ -62,7 +62,7 @@ by the build's deploy step. Game code (`_code.so`) only needs recompiling when `
 | --- | --- |
 | Recompiler (`switchrecomp/`, run as `python3 -m switchrecomp`) | `cli.py` (command line), `nxloader.py` (NSO/NRO, symbols), `codegen.py` + `a64.py` (ARM64 to C), `module.py` (the module's C files), `toolchain.py` (compiling the module, the runtime through CMake), `data.py` |
 | Generated-code ABI | `runtime/abi/`: `cpu.h` (with `SWR_ABI`), `cpu_helpers.c` |
-| Startup | `runtime/core/`: `main.c` (startup, ini, audren update), `loader.c` (the game module), `entry.c`, `options.h` (ini settings) |
+| Startup | `runtime/core/`: `main.c` (startup, loading the game module), `options.c` (the .ini), `clock.c` (guest time), `rtapi.c` (what the game module calls), `crash.c`, `present.c` (vi's CPU-side present), `loader.c`, `entry.c` |
 | Kernel and memory | `runtime/kernel/`: `kernel.c` (threads, sync, SVCs), `mem.c`, `ipc.c` (helpers `in32`, `out32`, `buf_in`, `buf_out`, `out_obj`...) |
 | Services | `runtime/hle/`: one file per service family (`sm.c`, `am.c`, `set.c`, `time.c`, `acc.c`, `audio.c`, `misc.c` for the small ones, `services.c` registers them), `hid.c`, `fs.c`, `vi.c`, `nvdrv.c` (nvhost devices, syncpoints) |
 | GPU | `runtime/gpu/`: `gpu.c` (GPFIFO), `engines.c`, `maxwell3d.c`, `renderer.h` (the `Renderer` table every renderer fills in, `g_renderer`), `renderer.c` (the `renderer=` setting), `shader/` (Maxwell to GLSL: `shader.c` walks a program, `decode.c` the instruction table, `translate.c` each instruction, `corpus.c`), `texture/astc.c`, `null/` (headless); `third_party/bcn/` |

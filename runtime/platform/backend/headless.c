@@ -6,6 +6,7 @@
 #include "hle/hid.h"
 #include "platform/backend.h"
 #include "platform/plat.h"
+#include "core/rtapi.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

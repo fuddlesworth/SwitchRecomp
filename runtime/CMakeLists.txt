@@ -33,9 +33,10 @@ function(swr_component name)
     target_link_libraries(swr_${name} PUBLIC swr_common)
 endfunction()
 
-swr_component(core core/main.c core/entry.c core/loader.c)
+swr_component(core core/main.c core/entry.c core/loader.c core/rtapi.c core/clock.c core/crash.c core/options.c
+              core/present.c)
 swr_component(kernel kernel/kernel.c kernel/mem.c kernel/ipc.c)
-swr_component(hle hle/services.c hle/sm.c hle/am.c hle/set.c hle/time.c hle/acc.c hle/audio.c hle/misc.c hle/fs.c
+swr_component(hle hle/services.c hle/audren.c hle/pl.c hle/sm.c hle/am.c hle/set.c hle/time.c hle/acc.c hle/audio.c hle/misc.c hle/fs.c
               hle/hid.c hle/vi.c hle/nvdrv.c)
 swr_component(video video/host1x.c)
 swr_component(gpu gpu/gpu.c gpu/engines.c gpu/maxwell3d.c $<$<BOOL:${SWR_VULKAN}>:gpu/renderer.c>)

@@ -12,6 +12,7 @@
 #include <stdlib.h>
 /* engines: MME, 3D (regs, cb data, reports, clears), 2D, DMA, compute */
 #include "gpu/gpu.h"
+#include "core/clock.h"
 
 /* ============================================================ MME (macros) */
 typedef struct {

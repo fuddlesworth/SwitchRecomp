@@ -74,4 +74,7 @@ SvcObj* new_ldn(void);
 SvcObj* new_ectx(void);
 SvcObj* new_spl(void);
 
+/* audren.c */
+int audren_update(SvcObj* o, IpcCtx* c);
+
 #endif
