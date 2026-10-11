@@ -1,0 +1,32 @@
+# Game dumps, keys and anything extracted from them. These belong to their owners and never go in git.
+*.xci
+*.nsp
+*.nsz
+*.xcz
+*.nca
+*.nro
+*.keys
+*.tik
+*.cert
+/work/
+/keys/
+
+# Recompiled games: runtime, game module, generated C, data, saves, settings and logs
+/games/
+
+# Build output
+/build*/
+__pycache__/
+*.o
+*.so
+
+# The Windows toolchains and prebuilt binaries bundled in the MZ Labs zip (see scripts/import-upstream.sh)
+/python/
+/tcc/
+/gcc/
+/w64devkit/
+/bin/
+*.exe
+
+# OpenH264 built for Linux by an older manual setup. CMake builds it in build/ now.
+/runtime/oh264/lin/
