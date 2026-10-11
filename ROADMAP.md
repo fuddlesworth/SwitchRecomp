@@ -6,16 +6,16 @@ should land. A phase can start before the previous one is finished where it says
 
 Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 
-Current order (2026-10-10): Phase 4 (platform), then Phase 6 (GPU). The rest of Phase 2 waits for the GPU work,
-since the title-screen crash comes from how compute results and completion signals are ordered under OpenGL.
-Sound (Phase 3) comes after.
+Current order (2026-10-11): Phases 4, 5 and 6 are done, apart from trying a real controller (Phase 4), which needs
+someone with a pad. Next is Phase 2's remaining items, then sound (Phase 3).
 
-## Where things stand (2026-10-10)
+## Where things stand (2026-10-11)
 
 Catherine boots through the logos, the intro movie, the terms screen, the main menu and the New Game cutscene at
-about 58 to 60 FPS, and around 40 FPS in heavy 3D scenes. It took eight fixes to the v142 runtime to get there (see
-the history of `main`). There is no sound. A memory-corruption crash around the title screen now happens in most
-runs: in 4 of 4 runs of the old runtime and 4 of 6 of the current one, with the save data the earlier runs left.
+60 FPS. It took eight fixes to the v142 runtime to get there (see the history of `main`). There is no sound. The
+runtime has two renderers and uses Vulkan by default, with OpenGL as the fallback. On Vulkan the title-screen crash
+from Phase 2 hasn't happened in 13 runs. It still happens under OpenGL, in about half the runs past the title
+screen.
 
 How the pieces fit:
 
@@ -25,8 +25,8 @@ How the pieces fit:
   `nvdrv.c`).
 - **GPU**: emulated at the hardware level. The game's own NVN driver is recompiled with the game and writes Maxwell
   command buffers. `gpu.c`, `gpu_engines.c` and `gpu_3d.c` decode them, `shader.c` translates Maxwell shader
-  binaries to GLSL, and `gpu_gl.c` draws with OpenGL. The backend interface is small (see `gpu_nogl.c`, about 20
-  functions), which is what makes a second backend realistic.
+  binaries to GLSL, and a renderer draws: `gpu_vk.c` and the `vk_*.c` files with Vulkan, or `gpu_gl.c` with
+  OpenGL. `renderer.c` calls the active one through the interface `gpu_nogl.c` shows (about 20 functions).
 - **Video**: `host1x.c` emulates NVDEC and VIC, with OpenH264 doing the H.264 decode.
 
 ## Phase 0: repository and build
