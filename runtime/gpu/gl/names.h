@@ -1,4 +1,4 @@
-/* Force-included into gpu_gl.c when the runtime also has the Vulkan renderer (CMake, SWR_VULKAN): the OpenGL
+/* Force-included into gpu/gl/renderer.c when the runtime also has the Vulkan renderer (CMake, SWR_VULKAN): the OpenGL
    renderer's side of the renderer interface takes glr_ names, and renderer.c defines the real ones, calling
    whichever renderer is active. The shared variables (g_gl, g_draws, g_vi_crop...) keep their names. */
 #define gpu_gl_start           glr_start

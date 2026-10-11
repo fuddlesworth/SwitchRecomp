@@ -13,14 +13,20 @@
 #include <mferror.h>
 #include <codecapi.h>
 #include <stdio.h>
-#include "core/rt.h"
+#include "platform/log.h"
+#ifdef _WIN32
+#include "platform/recorder.h"
+#endif
+#include <stdlib.h>
+#include <string.h>
 
 /* big queue, never drop. Dropped frames left holes that some players refused to play
    (laggy parts push several repeated frames at once) */
 #define RQ 64
-DEFINE_GUID(SWR_MF_TRANSCODE_CONTAINERTYPE, 0x150ff23f, 0x4abc, 0x478b, 0xac, 0x4f, 0xe1, 0x91, 0x6f, 0xba, 0x1c, 0xca);
-DEFINE_GUID(SWR_MFTranscodeContainerType_FMPEG4, 0x9ba876f1, 0x419f, 0x4b77, 0xa1, 0xe0, 0x35, 0x95, 0x9d, 0x9d, 0x40,
-            0x04);
+static const GUID SWR_MF_TRANSCODE_CONTAINERTYPE = {
+    0x150ff23f, 0x4abc, 0x478b, {0xac, 0x4f, 0xe1, 0x91, 0x6f, 0xba, 0x1c, 0xca}};
+static const GUID SWR_MFTranscodeContainerType_FMPEG4 = {
+    0x9ba876f1, 0x419f, 0x4b77, {0xa1, 0xe0, 0x35, 0x95, 0x9d, 0x9d, 0x40, 0x04}};
 static IMFSample* g_q[RQ];
 static volatile LONG g_qh, g_qt;
 static HANDLE g_th, g_ev, g_ready_ev, g_space_ev;

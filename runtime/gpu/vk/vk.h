@@ -1,23 +1,23 @@
 /* Vulkan renderer: shared state and the interfaces between its parts. Functions are loaded through volk from the
    loader the window backend gives (SDL's), so nothing links against a Vulkan library.
 
-   vk_device.c   instance, device, queues, swapchain, memory allocator (VMA)
-   vk_cmd.c      frames in flight: the command buffer being recorded, a staging ring, deferred destruction
-   vk_format.c   guest render target and texture formats -> Vulkan formats
-   vk_surface.c  render targets and textures by guest address, uploads from and write-backs to guest memory
-   vk_texture.c  textures from the guest's texture headers (TIC), views and samplers (TSC)
-   vk_buffer.c   vertex, index, constant and storage buffers from guest memory
-   vk_pipeline.c translated shaders, the pipeline layout and pipelines by state
-   vk_render.c   the render target set (dynamic rendering), clears and draws
-   vk_compute.c  compute dispatches on the compute queue, and landing their results in guest memory
-   vk_shader.c   GLSL to SPIR-V
-   gpu_vk.c      the renderer interface the GPU front end calls (gpu_gl_*, r3d_*_gl) and presenting
+   device.c    instance, device, queues, swapchain, memory allocator (VMA)
+   cmd.c       frames in flight: the command buffer being recorded, a staging ring, deferred destruction
+   format.c    guest render target and texture formats -> Vulkan formats
+   surface.c   render targets and textures by guest address, uploads from and write-backs to guest memory
+   texture.c   textures from the guest's texture headers (TIC), views and samplers (TSC)
+   buffer.c    vertex, index, constant and storage buffers from guest memory
+   pipeline.c  translated shaders, the pipeline layout and pipelines by state
+   render.c    the render target set (dynamic rendering), clears and draws
+   compute.c   compute dispatches on the compute queue, and landing their results in guest memory
+   spirv.c     GLSL to SPIR-V
+   renderer.c  the renderer interface the GPU front end calls (gpu/renderer.h) and presenting
 
    Everything that records commands runs under vk_lock(): submits come from the game's GPU channel threads and
    presents from the thread that queues a buffer. */
 #ifndef SWR_VK_H
 #define SWR_VK_H
-#include "core/rt.h"
+#include "abi/cpu.h"
 #include "gpu/gpu.h"
 #include "volk.h"
 #include "vk_mem_alloc.h"
@@ -51,13 +51,12 @@ typedef struct {
 } VkState;
 extern VkState g_vk;
 
-/* the window backend's side (backend_sdl3.c) */
+/* the window backend's side (platform/backend/sdl3.c) */
 void* backend_vk_loader(void); /* vkGetInstanceProcAddr */
 const char* const* backend_vk_extensions(u32* n);
 int backend_vk_surface(VkInstance instance, VkSurfaceKHR* surface);
-void backend_window_size(int* w, int* h);
 
-/* vk_device.c */
+/* device.c */
 int vk_init(void);
 int vk_swapchain_create(void);
 void vk_swapchain_destroy(void);
@@ -68,7 +67,7 @@ int vk_ok_(VkResult r, const char* what, const char* file, int line);
 void vk_lock(void);
 void vk_unlock(void);
 
-/* vk_cmd.c */
+/* cmd.c */
 void vk_cmd_init(void);
 VkCommandBuffer vk_cmd(void); /* the current frame's command buffer, begun on first use */
 /* size bytes of the current frame's staging memory (host visible, coherent), valid until that frame's work is done */
@@ -94,7 +93,7 @@ u64 vk_hash(const void* p, u64 size);
 /* guest submits processed so far, and frames presented: what the caches check memory against */
 extern u32 g_vk_epoch, g_vk_present;
 
-/* vk_format.c */
+/* format.c */
 typedef struct {
     VkFormat vk;
     u8 bpp; /* bytes per pixel (per block for compressed formats) */
@@ -110,7 +109,7 @@ VkFmt vk_rt_format(u32 fmt);
 VkFmt vk_zt_format(u32 fmt);
 VkFmt vk_tic_format(u32 w0, int srgb); /* bpp 0: not supported */
 
-/* vk_surface.c: a render target or a texture */
+/* gpu/vk/surface.c: a render target or a texture */
 typedef struct {
     u64 key; /* view type | swizzle | format */
     VkImageView v;
@@ -134,7 +133,7 @@ typedef struct Surf {
     VkAccessFlags2 access;
     u64 last_used;
     u32 wgen; /* render targets: bumped when drawn to */
-    /* textures: views by type and swizzle, and the change check (vk_texture.c) */
+    /* textures: views by type and swizzle, and the change check (gpu/vk/texture.c) */
     SurfView sv[6];
     int nsv;
     u64 size, hash, shash;
@@ -160,11 +159,11 @@ Surf* vk_surf_first(u64 gva);
 void vk_surf_add(Surf* s);
 VkImageAspectFlags vk_aspect(const VkFmt* f);
 void vk_surf_evict(u32 before); /* textures last used before that present */
-int vk_blit2d(const void* s, const void* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
+int vk_blit2d(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
               double sdy);
 u64 vk_bl_size(u32 w_bytes, u32 h, u32 bh);
 
-/* vk_texture.c */
+/* texture.c */
 Surf* vk_tex_from_tic(const u32* tic);
 /* a view of s as the shader declares it, sRGB or linear (color formats that have both), with a component mapping;
    VK_NULL_HANDLE when the image can't be viewed that way */
@@ -174,7 +173,7 @@ VkImageView vk_null_view(VkImageViewType type, int num);
 VkSampler vk_sampler(const u32* tsc);
 void vk_tex_frame(void); /* a frame was presented: evicts what wasn't used for a while */
 
-/* vk_buffer.c: guest memory [gva, gva + len) as a buffer the GPU reads, valid until the next present */
+/* gpu/vk/buffer.c: guest memory [gva, gva + len) as a buffer the GPU reads, valid until the next present */
 int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off);
 /* a copy of len bytes made now (data that changes within a frame), or of zeros when gva is 0 */
 int vk_buf_copy(u64 gva, u64 len, VkBuffer* buf, u64* off);
@@ -184,7 +183,7 @@ void vk_buf_frame(void);
 int vk_written_since(const u8* host, u64 len, u32 since);
 u32 vk_ww_now(void);
 
-/* vk_pipeline.c */
+/* pipeline.c */
 typedef struct VkSh {
     u64 hash;
     u32 key2;
@@ -228,17 +227,21 @@ VkPipelineCache vk_pipeline_cache(void); /* for pipelines made elsewhere (comput
 void vk_pipeline_save(void);
 VkShaderModule vk_module(const char* glsl, int stage); /* a module from GLSL of our own, kept for good */
 
-/* vk_compute.c */
+/* compute.c */
 void vk_dispatch(GpuChannel* ch, const u32* q, u64 code);
 void vk_compute_land(void);                      /* pending compute results into guest memory, now */
 void vk_compute_before_write(u64 gva, u64 size); /* gpu.c's g_gpu_before_write */
 /* a pending compute result covering [gva, gva + len): the arena buffer and offset to read it from on the GPU */
 int vk_compute_gpu_src(u64 gva, u64 len, VkBuffer* buf, u64* off);
+extern VkSemaphore g_vk_csem;  /* timeline semaphore the compute queue signals */
+extern u64 g_vk_cs_wait_value; /* the value graphics work waits for before reading compute results */
+extern u64 g_vk_dispatches, g_vk_cs_batches, g_vk_cs_skipped, g_vk_cs_wait_ns; /* statistics */
 
-/* vk_render.c */
+/* render.c */
 void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
 void vk_render_clear(GpuChannel* ch, u32 v);
 void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 base_vertex, u32 base_instance,
                     u32 instances);
+extern u64 g_vk_drawn, g_vk_skipped; /* draws recorded, and draws skipped (unsupported topology, failed shader) */
 
 #endif

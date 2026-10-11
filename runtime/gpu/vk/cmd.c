@@ -2,6 +2,7 @@
    present or a readback), a staging ring for uploads and for data draws read directly (vertices, indices, constant
    buffers), descriptor pools, and the resources to destroy once its work is done. Starting to record a frame waits
    for its previous use to finish. */
+#include <stdlib.h>
 #include "gpu/vk/vk.h"
 
 typedef struct {
@@ -169,8 +170,6 @@ void vk_submit(VkSemaphore wait, VkPipelineStageFlags2 wait_stage, VkSemaphore s
     VkSemaphoreSubmitInfo w[2] = {
         {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = wait, .stageMask = wait_stage}};
     u32 nw = wait ? 1 : 0;
-    extern VkSemaphore g_vk_csem;
-    extern u64 g_vk_cs_wait_value;
     if (g_vk_cs_wait_value) { /* draws read compute results on the GPU: after that batch */
         w[nw++] = (VkSemaphoreSubmitInfo){.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                           .semaphore = g_vk_csem,
@@ -204,7 +203,7 @@ void vk_finish(void) {
 u64 vk_frame_number(void) { return g_frame_no; }
 
 static VkDescriptorPool desc_pool_new(void) {
-    /* sized for the per-stage set layout (vk_pipeline.c): a few thousand draws a frame */
+    /* sized for the per-stage set layout (gpu/vk/pipeline.c): a few thousand draws a frame */
     VkDescriptorPoolSize sz[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4096 * 6},
                                  {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4096},
                                  {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4096 * 6},

@@ -3,7 +3,12 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* Guest address space. One big host reservation, guest address == offset into it.
    The block list (kept sorted) is only there for svcQueryMemory and friends. */
-#include "core/rt.h"
+#include "kernel/mem.h"
+#include "gpu/gpu.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdlib.h>
+#include <string.h>
 
 u8* g_mem;
 u64 g_heap_size, g_heap_max = 0x180000000ull; /* heap cap: 6 GB */
@@ -105,7 +110,6 @@ int mem_unmap(u64 a, u64 s) {
     }
     plat_vm_decommit(GP(a), s);
     {
-        extern void (*g_ww_touch)(u64);
         if (g_ww_touch && s) {
             for (u64 o = 0; o < s; o += 0x10000) g_ww_touch(a + o);
             g_ww_touch(a + s - 1);

@@ -8,27 +8,23 @@
 
    Pass order, sizes, formats, samplers and constants are taken from lsfg-vk v1.0
    (https://github.com/PancakeTAS/lsfg-vk, MIT license, Copyright (c) 2025 lsfg-vk), ported to GL. */
-#include "gpu/gpu.h"
+#include "gpu/gl/lsfg.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include "abi/cpu.h"
 #include "gpu/gl/glfn.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct {
-    int img;
-    int smp;
-} LsfgUnit;
-extern char* lsfg_spv_to_glsl(const unsigned* words, size_t nwords, LsfgUnit* units, int* nunits, int maxunits,
-                              char* err, int errn);
-
 /* ------------------------------------------------------------ ini options */
-int g_lsfg_opt = 1;         /* lsfg=0 disables */
-char g_lsfg_dll[1024];      /* lsfg_dll=path */
-float g_lsfg_flow = 0.5f;   /* lsfg_flow: flow scale, 1 quality / 0.5 fast */
-int g_lsfg_quality = 0;     /* perf mode only for now */
-int g_lsfg_mult = 2;        /* lsfg_multiplier: 2 = x2, 3 = x3 */
-int g_lsfg_height = 720;    /* lsfg_resolution: internal height */
-float g_lsfg_target = 60.f; /* lsfg_target: only generate below this fps */
+static int g_lsfg_opt = 1;       /* lsfg=0 disables */
+static char g_lsfg_dll[1024];    /* lsfg_dll=path */
+static float g_lsfg_flow = 0.5f; /* lsfg_flow: flow scale, 1 quality / 0.5 fast */
+static int g_lsfg_quality = 0;   /* perf mode only for now */
+int g_lsfg_mult = 2;             /* lsfg_multiplier: 2 = x2, 3 = x3 */
+int g_lsfg_height = 720;         /* lsfg_resolution: internal height */
+float g_lsfg_target = 60.f;      /* lsfg_target: only generate below this fps */
 
 void lsfg_ini(const char* k, const char* v) {
     if (!strcmp(k, "lsfg"))

@@ -190,4 +190,5 @@ extern PFNGLPROGRAMBINARYPROC p_glProgramBinary; extern PFNGLGETPROGRAMBINARYPRO
 #define glClipControl p_glClipControl
 #endif
 int swr_gl_load(void* (*getproc)(const char*));
+int swr_gl_is_gles(void);
 #endif

@@ -62,7 +62,7 @@ by the build's deploy step. Game code (`_code.so`) only needs recompiling when `
 | --- | --- |
 | Recompiler (`switchrecomp/`, run as `python3 -m switchrecomp`) | `cli.py` (command line), `nxloader.py` (NSO/NRO, symbols), `codegen.py` + `a64.py` (ARM64 to C), `module.py` (the module's C files), `toolchain.py` (compiling the module, the runtime through CMake), `data.py` |
 | Generated-code ABI | `runtime/abi/`: `cpu.h` (with `SWR_ABI`), `cpu_helpers.c` |
-| Startup | `runtime/core/`: `main.c` (startup, ini, audren update), `loader.c`, `entry.c`, `rt.h` |
+| Startup | `runtime/core/`: `main.c` (startup, ini, audren update), `loader.c` (the game module), `entry.c`, `options.h` (ini settings) |
 | Kernel and memory | `runtime/kernel/`: `kernel.c` (threads, sync, SVCs), `mem.c`, `ipc.c` (helpers `in32`, `out32`, `buf_in`, `buf_out`, `out_obj`...) |
 | Services | `runtime/hle/`: `services.c` (most services, audio), `hid.c`, `fs.c`, `vi.c`, `nvdrv.c` (nvhost devices, syncpoints) |
 | GPU | `runtime/gpu/`: `gpu.c` (GPFIFO), `engines.c`, `maxwell3d.c`, `renderer.c` (picks a renderer at startup and forwards to it), `shader/shader.c` (Maxwell to GLSL), `texture/astc.c`, `null/` (headless); `third_party/bcn/` |
@@ -73,7 +73,9 @@ by the build's deploy step. Game code (`_code.so`) only needs recompiling when `
 | Platform | `runtime/platform/`: `plat.c` (threads, memory, files per OS), `backend/` (sdl3 is the Linux default, x11 the fallback, win32 Windows), `recorder_win32.c` |
 
 Each folder under `runtime/` is one CMake object library (`runtime/CMakeLists.txt`), and includes are written from `runtime/`
-(`#include "gpu/vk/vk.h"`).
+(`#include "gpu/vk/vk.h"`). A function or global that another file uses is declared once, in the header next to the file
+that defines it (`kernel/kernel.c` and `kernel/kernel.h`), and everything else is static. The build enforces it:
+`-Werror=missing-prototypes`, `missing-variable-declarations` and, with GCC, `nested-externs`.
 
 ## Skills and agents
 

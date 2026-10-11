@@ -3,7 +3,16 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* HLE kernel: handles, objects, guest threads (1:1 host threads), sync (events, mutex/condvar,
    address arbiter) and the SVCs games actually call. */
-#include "core/rt.h"
+#include "kernel/kernel.h"
+#include "core/loader.h"
+#include "core/main.h"
+#include "kernel/ipc.h"
+#include "kernel/mem.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 PMutex g_klock;
 u64 g_title_id = 0x0100000000001000ull;
@@ -225,7 +234,6 @@ KThread* kthread_create(u64 entry, u64 arg, u64 stack_top, int prio, int core) {
     return t;
 }
 
-void swr_fpcr_apply(CPU* c);
 static void thread_body(void* p) {
     KThread* t = p;
     kthread_set(t);
@@ -234,7 +242,6 @@ static void thread_body(void* p) {
     LOGV("[thread %llu] starts at %llx\n", (unsigned long long)t->id, (unsigned long long)c->pc);
     for (;;) {
         if (UNLIKELY(c->pc == 0)) { /* entry function returned */
-            extern void svc_exit_thread(KThread * t);
             svc_exit_thread(t);
         }
         GuestFn f = swr_lookup(c, c->pc);
@@ -1010,8 +1017,6 @@ void kernel_dump_regs(CPU* c) {
              (unsigned long long)r->a[1], (unsigned long long)r->a[2], (unsigned long long)r->a[3], r->res,
              (unsigned long long)r->o1, (unsigned long long)r->lr);
     }
-    extern char g_ipc_ring[32][80];
-    extern u32 g_ipc_ring_n;
     WARN("  last IPC calls:\n");
     for (u32 k = g_ipc_ring_n > 32 ? g_ipc_ring_n - 32 : 0; k < g_ipc_ring_n; k++) WARN("    %s\n", g_ipc_ring[k & 31]);
     /* code around the last svcs, usually the check that failed before an abort */
@@ -1055,8 +1060,6 @@ void kernel_dump_regs(CPU* c) {
         }
     }
 }
-
-extern KShmem* kshmem_new(u64 size, const char* name);
 
 static void swr_svc_(CPU* c, u32 imm);
 void swr_svc(CPU* c, u32 imm) {
@@ -1533,8 +1536,6 @@ void kernel_dump_threads(void) {
     }
     {
         {
-            extern char g_ipc_ring[32][80];
-            extern u32 g_ipc_ring_n;
             LOG("  last SVCs:\n");
             for (u32 q = g_svc_ring_n > 40 ? g_svc_ring_n - 40 : 0; q < g_svc_ring_n; q++) {
                 SvcRec* r = &g_svc_ring[q & 63];

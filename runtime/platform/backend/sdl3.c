@@ -2,10 +2,24 @@
    on X11 (SDL_VIDEO_DRIVER=x11 picks X11), and takes the same unattended-run options as the X11 backend (seconds,
    frames, shot, press, script). With the Vulkan renderer built in (SWR_VULKAN), renderer= picks one at startup, and
    OpenGL takes over when Vulkan can't start. */
-#include "core/rt.h"
+#include "core/main.h"
+#include "core/options.h"
+#include "hle/hid.h"
+#include "kernel/kernel.h"
+#include "platform/backend.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+#include "gpu/renderer.h"
 #ifdef SWR_VULKAN
 #include "gpu/vk/vk.h"
-#include "gpu/renderer.h"
 #include <SDL3/SDL_vulkan.h>
 #endif
 #include <SDL3/SDL.h>
@@ -109,7 +123,6 @@ void video_init(const char* title) {
 #endif
     if (!open_window(title, 0)) fatal("SDL could not open a window: %s", SDL_GetError());
     LOG("renderer: OpenGL\n");
-    extern void gpu_gl_start(void);
     gpu_gl_start();
 }
 
@@ -158,7 +171,6 @@ void backend_window_size(int* w, int* h) {
 }
 void video_present_rgba(const u32* px, int w, int h, int stride) {
     /* the Vulkan renderer presents from the game's buffer (gpu_gl_present_buffer) */
-    extern void gpu_gl_present_cpu(const u32*, int, int, int);
     if (!g_vkr) gpu_gl_present_cpu(px, w, h, stride);
 }
 
@@ -206,24 +218,24 @@ static void set_fullscreen(int on) {
     SDL_SetWindowFullscreen(g_win, on);
 }
 #ifdef _WIN32
-/* what the Windows-only parts of the runtime expect from a backend (plat.c, the F7 recorder and LSFG in gpu_gl.c).
+/* what the Windows-only parts of the runtime expect from a backend (plat.c, the F7 recorder and LSFG in gpu/gl/renderer.c).
    The GPU thread reports state changes; the window title follows on the main thread (video_poll) */
 void win_fatal_box(const char* msg) { SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "SwitchRecomp", msg, g_win); }
 volatile int g_rec_toggle;
-static volatile int g_rec_on, g_lsfg_mult, g_title_dirty;
+static volatile int g_rec_on, g_title_lsfg_mult, g_title_dirty;
 void backend_rec_state(int on) {
     g_rec_on = on;
     g_title_dirty = 1;
 }
 void backend_lsfg_state(int on, int mult) {
-    g_lsfg_mult = on ? mult : 0;
+    g_title_lsfg_mult = on ? mult : 0;
     g_title_dirty = 1;
 }
 static void title_update(void) {
     if (!g_title_dirty) return;
     g_title_dirty = 0;
     char t[300];
-    int m = g_lsfg_mult;
+    int m = g_title_lsfg_mult;
     snprintf(t, sizeof t, "%s%s%s", g_title, g_rec_on ? " [REC]" : "", m ? (m == 3 ? " [LSFG x3]" : " [LSFG x2]") : "");
     SDL_SetWindowTitle(g_win, t);
 }
@@ -240,15 +252,12 @@ static void hotkey(SDL_Keycode k) {
         }
         case SDLK_F3: g_shot_req = 1; break;
         case SDLK_F4: {
-            extern void ini_set(const char*, const char*);
             g_opt_fps = g_opt_fps == 0 ? 1 : 0;
             ini_set("fps_limit", g_opt_fps ? "1" : "0");
             LOG("FPS limit: %s\n", g_opt_fps ? "60" : "unlimited");
             break;
         }
         case SDLK_F5: {
-            extern void gpu_gl_dump_rts(void);
-            extern void kernel_dump_threads(void);
             kernel_dump_threads();
             gpu_gl_dump_rts();
             break;
@@ -259,7 +268,6 @@ static void hotkey(SDL_Keycode k) {
             break;
 #endif
         case SDLK_F8: {
-            extern volatile int g_shot8_req;
             if (!g_vkr) g_shot8_req = 1;
             break;
         }
@@ -370,7 +378,6 @@ void video_poll(void) {
 }
 
 void frontend_frame(void) {
-    extern u64 gpu_gl_screenshot(const char* path);
     if (g_shot_req) {
         g_shot_req = 0;
         char p[256];
@@ -390,7 +397,6 @@ void frontend_frame(void) {
     if ((g_maxframes >= 0 && g_frames >= g_maxframes) || (g_seconds && el >= (u64)g_seconds * 1000000000ull)) {
         u64 h = gpu_gl_screenshot(g_shot[0] ? g_shot : NULL);
         fprintf(stderr, "\nframes=%d hash=%016llx %dx%d\n", g_frames, (unsigned long long)h, g_ww, g_wh);
-        extern void save_hints(void);
         save_hints();
         fflush(NULL);
         _exit(0);

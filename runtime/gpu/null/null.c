@@ -2,6 +2,10 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* no-GL build used by the headless tests */
+#include "gpu/gl/lsfg.h"
+#include "gpu/renderer.h"
+#include "gpu/shader/shader.h"
+#include "hle/nvdrv.h"
 #include "gpu/gpu.h"
 int g_gl = 0;
 u64 g_draws;
@@ -46,7 +50,8 @@ void gpu_gl_rec_finish(void) {}
 void gpu_gl_rt_flush(u64 a) { (void)a; }
 void gpu_gl_rt_reload(u64 a) { (void)a; }
 void gpu_gl_trace(const char* s) { (void)s; }
-int r3d_blit_gl(void* s, void* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx, double sdy) {
+int r3d_blit_gl(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
+                double sdy) {
     (void)s;
     (void)d;
     (void)dx;
@@ -66,7 +71,7 @@ void lsfg_ini(const char* k, const char* v) {
     (void)v;
 }
 u64 gpu_busy_ns(void) { return 0; }
-void gpu_gl_dispatch(void* ch, const void* q, unsigned long long code) {
+void gpu_gl_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     (void)ch;
     (void)q;
     (void)code;
@@ -77,10 +82,7 @@ void cs_mem_need(u64 a, u64 n) {
     (void)n;
 }
 void gpu_gl_before_syncwait(void) {}
-void gpu_gl_stream_incr(u32 id) {
-    extern void syncpt_incr(u32);
-    syncpt_incr(id);
-}
+void gpu_gl_stream_incr(u32 id) { syncpt_incr(id); }
 
 /* set by vi QueueBuffer, only the GL presenter reads them */
 volatile i32 g_vi_crop[4];

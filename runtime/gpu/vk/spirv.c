@@ -1,5 +1,6 @@
 /* GLSL (from the Maxwell translator in Vulkan mode) to SPIR-V, with glslang. Shared by the Vulkan renderer and
    tools/swr_shaderc.c, so it depends on nothing else of the runtime. */
+#include "gpu/shader/shader.h"
 #include "gpu/vk/spirv.h"
 #include <glslang/Include/glslang_c_interface.h>
 #include <glslang/Public/resource_limits_c.h>
@@ -114,8 +115,8 @@ u32* vk_spirv_cached(const char* glsl, int stage, const char* cache_dir, size_t*
     return w;
 }
 
-/* gpu_gl.c's sh_post for Vulkan: the alpha test discards before every return of a fragment shader, and a vertex
-   shader for a guest in -1..1 depth mode moves z to Vulkan's 0..1 (the viewport handles y, see vk_render.c) */
+/* gpu/gl/renderer.c's sh_post for Vulkan: the alpha test discards before every return of a fragment shader, and a vertex
+   shader for a guest in -1..1 depth mode moves z to Vulkan's 0..1 (the viewport handles y, see gpu/vk/render.c) */
 char* vk_glsl_post(char* src, int stage) {
     if (!src) return src;
     const char* fn = NULL;

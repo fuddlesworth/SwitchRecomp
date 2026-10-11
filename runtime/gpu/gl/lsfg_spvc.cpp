@@ -3,6 +3,7 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* SPIR-V -> GLSL for the LSFG shaders via SPIRV-Cross (Apache 2.0, https://github.com/KhronosGroup/SPIRV-Cross).
    The shaders themselves aren't shipped, they come out of the user's own Lossless.dll at runtime. */
+#include "gpu/gl/lsfg.h"
 #include "spirv_glsl.hpp"
 #include <cstring>
 #include <cstdio>
@@ -10,12 +11,6 @@
 #include <string>
 
 extern "C" {
-typedef struct {
-    int img;
-    int smp;
-} LsfgUnit; /* original bindings: image 32+, sampler 16+ (-1 = none) */
-
-/* malloc'd GLSL or NULL. units[]: one entry per combined sampler, texture unit = index */
 char* lsfg_spv_to_glsl(const unsigned* words, size_t nwords, LsfgUnit* units, int* nunits, int maxunits, char* err,
                        int errn) {
     try {
