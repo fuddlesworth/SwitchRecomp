@@ -14,7 +14,7 @@ description: "Implement or fix a high-level-emulated Switch service or device (I
   the small ones), one `*_disp` per service and one per interface object. `services.c` registers them all with
   `svc_register("name", ctor)`, and `services_int.h` declares what the files share.
 - `hle/hid.c` (input and its shared memory), `hle/fs.c`, `hle/vi.c` (display, binder), `hle/nvdrv.c` (nvhost devices),
-  `video/host1x.c` (NVDEC, VIC), `hle/audren.c` (`audren_update`), `hle/pl.c` (shared fonts).
+  `video/` (host1x channels, NVDEC, VIC), `hle/audren.c` (`audren_update`), `hle/pl.c` (shared fonts).
 - `svcobj_new("IName", dispatch, sizeof(State))` gives an object with zeroed state in `o->data`.
 
 ## Procedure
