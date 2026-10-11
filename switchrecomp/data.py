@@ -1,0 +1,37 @@
+# SwitchRecomp - Copyright 2026 MZ Labs
+# Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+# any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
+"""The game's data folder next to the runtime: exefs (always refreshed) and romfs (copied once), and a first .ini."""
+
+import os
+import shutil
+
+from . import nxloader
+
+
+def copy_data(mods, npdm, romfs, entry, datadir, say):
+    ex = os.path.join(datadir, 'exefs')
+    os.makedirs(ex, exist_ok=True)
+    if os.path.isfile(entry) and entry.lower().endswith('.nro'):
+        shutil.copyfile(entry, os.path.join(ex, 'main.nro'))
+        if isinstance(romfs, (bytes, bytearray)):
+            open(os.path.join(datadir, 'romfs.bin'), 'wb').write(romfs)
+        return
+    src = nxloader.find_exefs(entry)
+    for n in os.listdir(src):
+        s = os.path.join(src, n)
+        d = os.path.join(ex, n)
+        if os.path.isfile(s) and not (os.path.exists(d) and os.path.getsize(d) == os.path.getsize(s)):
+            shutil.copyfile(s, d)
+    if isinstance(romfs, str):
+        dst = os.path.join(datadir, 'romfs')
+        if os.path.abspath(romfs) != os.path.abspath(dst) and not os.path.exists(dst):
+            say('Copying romfs (may take a while)...')
+            shutil.copytree(romfs, dst)
+
+
+INI = """; %(title)s - SwitchRecomp settings
+; This file is rewritten (organized, with every option explained) the first time the game starts.
+[Display]
+language=1
+"""

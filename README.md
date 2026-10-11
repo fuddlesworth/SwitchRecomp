@@ -144,7 +144,7 @@ The `upstream` branch holds the MZ Labs releases: each one as released (tagged `
 
 | Folder | What it holds |
 | --- | --- |
-| `switchrecomp.py`, `codegen.py`, `a64.py`, `nxloader.py` | The recompiler: loading, analysis, ARM64 to C |
+| `switchrecomp/` | The recompiler (`python3 -m switchrecomp`): loading, analysis, ARM64 to C, building the game module |
 | `runtime/` | The runtime: kernel, services, GPU, video, platform backends |
 | `scripts/` | Bootstrap (and the Windows toolchain download), extraction, recompiling, formatting, upstream imports |
 | `tools/` | Debugging tools |

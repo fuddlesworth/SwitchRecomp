@@ -13,7 +13,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, '..')]
-import nxloader  # noqa: E402
+from switchrecomp import nxloader  # noqa: E402
 
 # A symbol further away than this is not taken as the enclosing function
 MAX_DISTANCE = 0x4000

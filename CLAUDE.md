@@ -53,14 +53,14 @@ state. This file holds the rules sessions get wrong and points to the skills tha
 | Format / check | `scripts/format.sh` / `scripts/format.sh --check` |
 
 The runtime finds its game module by its own file name, so each game has a copy of the runtime named after it, made
-by the build's deploy step. Game code (`_code.so`) only needs recompiling when `codegen.py`, `a64.py`, `cpu.h` or
+by the build's deploy step. Game code (`_code.so`) only needs recompiling when `switchrecomp/codegen.py`, `a64.py`, `cpu.h` or
 `cpu_helpers.c` change (the ABI between generated code and runtime).
 
 ## Where things are
 
 | Area | Files |
 | --- | --- |
-| Recompiler | `switchrecomp.py` (driver, build), `nxloader.py` (NSO/NRO, symbols), `codegen.py` + `a64.py` (ARM64 to C) |
+| Recompiler (`switchrecomp/`, run as `python3 -m switchrecomp`) | `cli.py` (command line), `nxloader.py` (NSO/NRO, symbols), `codegen.py` + `a64.py` (ARM64 to C), `module.py` (the module's C files), `toolchain.py` (compiling the module, the runtime through CMake), `data.py` |
 | Generated-code ABI | `runtime/cpu.h`, `runtime/cpu_helpers.c` |
 | Kernel and memory | `runtime/kernel.c` (threads, sync, SVCs), `runtime/mem.c`, `runtime/loader.c`, `runtime/main.c` (startup, ini, audren update) |
 | IPC and services | `runtime/ipc.c` (helpers `in32`, `out32`, `buf_in`, `buf_out`, `out_obj`...), `runtime/svc_core.c` (most services, audio), `svc_hid.c`, `svc_fs.c`, `svc_vi.c` |
@@ -112,8 +112,8 @@ comments and developer docs under `.claude/` are out of scope.
 - Services that "do nothing" can still stall a game: CRI's movie player waits for released audio buffers.
 - NVN dual vertex programs: VertexA (slot 0) writes the position, VertexB the varyings. Missing A means a black
   screen with every draw call succeeding.
-- `switchrecomp.py` builds without OpenH264 silently when the library is missing, and movies then stay black. The
-  CMake build makes it an error.
+- The recompiler's old runtime build dropped OpenH264 silently when the library was missing, and movies stayed black.
+  The runtime is only built by CMake now, which makes it an error.
 - `git submodule add` records the default branch's tip. Checking out a tag inside the submodule changes nothing until
   `git add third_party/NAME`, and `scripts/bootstrap.py` (`git submodule update`) puts the submodule back on the
   recorded commit. Stage the tag first, then check `git ls-files -s third_party/NAME` against

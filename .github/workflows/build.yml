@@ -55,7 +55,8 @@ jobs:
           cmake --build build/x11
       - name: Check the Python scripts
         run: |
-          python -m compileall -q switchrecomp.py codegen.py a64.py nxloader.py scripts tools
+          python -m compileall -q switchrecomp scripts tools
+          python -m switchrecomp --help > /dev/null
           python scripts/extract.py --help > /dev/null
           python scripts/recomp.py --help > /dev/null
           python tools/run_game.py --help > /dev/null

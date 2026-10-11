@@ -7,7 +7,7 @@ should land. A phase can start before the previous one is finished where it says
 Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 
 Current order (2026-10-11): Phases 4, 5 and 6 are done, apart from trying a real controller (Phase 4), which needs
-someone with a pad. Next is Phase 2's remaining items, then sound (Phase 3).
+someone with a pad. Now Phase 8 (code layout), then Phase 2's remaining items and sound (Phase 3).
 
 ## Where things stand (2026-10-11)
 
@@ -19,7 +19,7 @@ screen.
 
 How the pieces fit:
 
-- **CPU**: the game's ARM64 code is translated to C once (`switchrecomp.py`, `codegen.py`, `a64.py`) and built as
+- **CPU**: the game's ARM64 code is translated to C once (the `switchrecomp` package) and built as
   `<Game>_code.so`. This part is a real recompilation.
 - **OS**: kernel, IPC and services are high-level emulation in `runtime/` (`kernel.c`, `ipc.c`, `svc_*.c`,
   `nvdrv.c`).
@@ -219,3 +219,25 @@ underneath. What can change is how much of the hardware is emulated and how well
 - [ ] The Western release with its update (TID 0100BF00112C0000). BKTR updates are supported by the extraction
       script. It needs a matching base game.
 - [ ] Other games, to keep the fixes general rather than tuned to Catherine.
+
+## Phase 8: code layout
+
+The release is a flat `runtime/` of 70 files, wired together with `extern` declarations inside functions (167 of
+them), a catch-all `rt.h`, files of up to 7900 lines, and the recompiler's modules loose at the top. This fork is a
+hard fork from here (decided 2026-10-11): upstream releases are ported by hand rather than merged (see the
+`import-upstream` skill), so files can be moved, split and renamed freely. Each step is its own PR, built in every
+variant and run on Catherine with both renderers.
+
+- [~] The recompiler as a package (`switchrecomp/`, run as `python3 -m switchrecomp`), split by job. The runtime is
+      built only by CMake, so its source list lives in one place, and `SWR_ABI` in `cpu.h` is the one ABI version
+      both sides check.
+- [ ] `runtime/` as a tree of components (`abi`, `core`, `kernel`, `hle`, `gpu` with `gl` and `vk`, `video`,
+      `platform`), each a CMake object library, with includes by path.
+- [ ] Headers per component: `rt.h` split up, every inline `extern` replaced by a declaration in the header that
+      owns it, and `-Wnested-externs -Wmissing-prototypes` to keep it that way.
+- [ ] The renderer interface as a table of operations that the OpenGL, Vulkan and null renderers fill in, in place of
+      the `gpu_gl_*` names, `renderer.c`'s macros and `gl_names.h`.
+- [ ] The big files split along their seams: `gpu_gl.c`, `shader.c`, `svc_core.c` (one file per service family),
+      `main.c`, `kernel.c`, `cpu_helpers.c`, `plat.c`, `host1x.c`, `gpu_engines.c`.
+- [ ] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.
+
