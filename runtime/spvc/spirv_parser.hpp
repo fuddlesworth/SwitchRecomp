@@ -27,76 +27,57 @@
 #include "spirv_cross_parsed_ir.hpp"
 #include <stdint.h>
 
-namespace SPIRV_CROSS_NAMESPACE
-{
-class Parser
-{
-public:
-	Parser(const uint32_t *spirv_data, size_t word_count);
-	Parser(std::vector<uint32_t> spirv);
+namespace SPIRV_CROSS_NAMESPACE {
+class Parser {
+  public:
+    Parser(const uint32_t* spirv_data, size_t word_count);
+    Parser(std::vector<uint32_t> spirv);
 
-	void parse();
+    void parse();
 
-	ParsedIR &get_parsed_ir()
-	{
-		return ir;
-	}
+    ParsedIR& get_parsed_ir() { return ir; }
 
-private:
-	ParsedIR ir;
-	SPIRFunction *current_function = nullptr;
-	SPIRBlock *current_block = nullptr;
-	// For workarounds.
-	bool ignore_trailing_block_opcodes = false;
+  private:
+    ParsedIR ir;
+    SPIRFunction* current_function = nullptr;
+    SPIRBlock* current_block = nullptr;
+    // For workarounds.
+    bool ignore_trailing_block_opcodes = false;
 
-	void parse(const Instruction &instr);
-	const uint32_t *stream(const Instruction &instr) const;
+    void parse(const Instruction& instr);
+    const uint32_t* stream(const Instruction& instr) const;
 
-	template <typename T, typename... P>
-	T &set(uint32_t id, P &&... args)
-	{
-		ir.add_typed_id(static_cast<Types>(T::type), id);
-		auto &var = variant_set<T>(ir.ids[id], std::forward<P>(args)...);
-		var.self = id;
-		return var;
-	}
+    template <typename T, typename... P> T& set(uint32_t id, P&&... args) {
+        ir.add_typed_id(static_cast<Types>(T::type), id);
+        auto& var = variant_set<T>(ir.ids[id], std::forward<P>(args)...);
+        var.self = id;
+        return var;
+    }
 
-	template <typename T>
-	T &get(uint32_t id)
-	{
-		return variant_get<T>(ir.ids[id]);
-	}
+    template <typename T> T& get(uint32_t id) { return variant_get<T>(ir.ids[id]); }
 
-	template <typename T>
-	T *maybe_get(uint32_t id)
-	{
-		if (ir.ids[id].get_type() == static_cast<Types>(T::type))
-			return &get<T>(id);
-		else
-			return nullptr;
-	}
+    template <typename T> T* maybe_get(uint32_t id) {
+        if (ir.ids[id].get_type() == static_cast<Types>(T::type))
+            return &get<T>(id);
+        else
+            return nullptr;
+    }
 
-	template <typename T>
-	const T &get(uint32_t id) const
-	{
-		return variant_get<T>(ir.ids[id]);
-	}
+    template <typename T> const T& get(uint32_t id) const { return variant_get<T>(ir.ids[id]); }
 
-	template <typename T>
-	const T *maybe_get(uint32_t id) const
-	{
-		if (ir.ids[id].get_type() == T::type)
-			return &get<T>(id);
-		else
-			return nullptr;
-	}
+    template <typename T> const T* maybe_get(uint32_t id) const {
+        if (ir.ids[id].get_type() == T::type)
+            return &get<T>(id);
+        else
+            return nullptr;
+    }
 
-	// This must be an ordered data structure so we always pick the same type aliases.
-	SmallVector<uint32_t> global_struct_cache;
-	SmallVector<std::pair<uint32_t, uint32_t>> forward_pointer_fixups;
+    // This must be an ordered data structure so we always pick the same type aliases.
+    SmallVector<uint32_t> global_struct_cache;
+    SmallVector<std::pair<uint32_t, uint32_t>> forward_pointer_fixups;
 
-	bool types_are_logically_equivalent(const SPIRType &a, const SPIRType &b) const;
-	bool variable_storage_is_aliased(const SPIRVariable &v) const;
+    bool types_are_logically_equivalent(const SPIRType& a, const SPIRType& b) const;
+    bool variable_storage_is_aliased(const SPIRVariable& v) const;
 };
 } // namespace SPIRV_CROSS_NAMESPACE
 

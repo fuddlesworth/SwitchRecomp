@@ -37,40 +37,30 @@
 #define SPIRV_CROSS_NAMESPACE spirv_cross
 #endif
 
-namespace SPIRV_CROSS_NAMESPACE
-{
+namespace SPIRV_CROSS_NAMESPACE {
 #ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
 #if !defined(_MSC_VER) || defined(__clang__)
 [[noreturn]]
 #elif defined(_MSC_VER)
 __declspec(noreturn)
 #endif
-inline void
-report_and_abort(const std::string &msg)
-{
+inline void report_and_abort(const std::string& msg) {
 #ifdef NDEBUG
-	(void)msg;
+    (void)msg;
 #else
-	fprintf(stderr, "There was a compiler error: %s\n", msg.c_str());
+    fprintf(stderr, "There was a compiler error: %s\n", msg.c_str());
 #endif
-	fflush(stderr);
-	abort();
+    fflush(stderr);
+    abort();
 }
 
 #define SPIRV_CROSS_THROW(x) report_and_abort(x)
 #else
-class CompilerError : public std::runtime_error
-{
-public:
-	explicit CompilerError(const std::string &str)
-	    : std::runtime_error(str)
-	{
-	}
+class CompilerError : public std::runtime_error {
+  public:
+    explicit CompilerError(const std::string& str) : std::runtime_error(str) {}
 
-	explicit CompilerError(const char *str)
-	    : std::runtime_error(str)
-	{
-	}
+    explicit CompilerError(const char* str) : std::runtime_error(str) {}
 };
 
 #define SPIRV_CROSS_THROW(x) throw CompilerError(x)

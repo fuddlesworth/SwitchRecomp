@@ -5,7 +5,7 @@
 int swr_main(int argc, char** argv);
 #if defined(_WIN32)
 #include <windows.h>
-int main(int argc, char** argv){ return swr_main(argc,argv); }
+int main(int argc, char** argv) { return swr_main(argc, argv); }
 #else
-int main(int argc, char** argv){ return swr_main(argc,argv); }
+int main(int argc, char** argv) { return swr_main(argc, argv); }
 #endif
