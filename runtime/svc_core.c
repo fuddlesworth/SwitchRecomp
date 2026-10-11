@@ -1038,17 +1038,71 @@ static int audren_disp(SvcObj* o, IpcCtx* c) {
     return quiet_ok(o, c);
 }
 static SvcObj* new_audren(void) { return svcobj_new("audren:u", audren_disp, 0); }
+/* IAudioOut: nothing is played, but appended buffers come back at 48 kHz stereo s16 speed like on the console.
+   Players time video against the released buffers (CRI movies): never releasing them stalls the video */
+typedef struct {
+    u64 tag[64], end[64], frames[64];
+    u32 head, n;
+    u64 last_end, played;
+    int started;
+    PMutex lk;
+} AudOut;
 static int audout_obj(SvcObj* o, IpcCtx* c) {
-    (void)o;
+    AudOut* q = (AudOut*)o->data;
     switch (c->cmd) {
-        case 0: out32(c, 1); return 0;
-        case 1:
-        case 2: return 0;
+        case 0: out32(c, q->started ? 0 : 1); return 0; /* GetAudioOutState: 0 started, 1 stopped */
+        case 1: q->started = 1; return 0;
+        case 2: q->started = 0; return 0;
+        case 3:
+        case 7: {
+            u64 tag = in64(c, 0), a, sz, bytes = 0; /* AppendAudioOutBuffer(Auto): AudioOutBuffer.data_size at +0x18 */
+            if (buf_in(c, 0, &a, &sz) && a && sz >= 0x20) memcpy(&bytes, GP(a + 0x18), 8);
+            u64 frames = bytes / 4, now = plat_ns();
+            pm_lock(&q->lk);
+            u64 st = q->last_end > now ? q->last_end : now;
+            q->last_end = st + frames * 1000000000ull / 48000;
+            if (q->n < 64) {
+                u32 k = (q->head + q->n) & 63;
+                q->tag[k] = tag;
+                q->end[k] = q->last_end;
+                q->frames[k] = frames;
+                q->n++;
+            }
+            pm_unlock(&q->lk);
+            return 0;
+        }
         case 4: out_copy_h(c, ev_handle(g_aud_ev)); return 0;
         case 5:
-        case 8: out32(c, 0); return 0;
-        case 6: out8(c, 0); return 0;
-        case 9: out64(c, 0); return 0;
+        case 8: {
+            u64 a = 0, sz = 0;
+            u32 cnt = 0;
+            buf_out(c, 0, &a, &sz);
+            if (a && sz) memset(GP(a), 0, sz); /* GetReleasedAudioOutBuffers(Auto): unused slots read as null */
+            u64 now = plat_ns();
+            pm_lock(&q->lk);
+            while (q->n && q->end[q->head] <= now && (u64)(cnt + 1) * 8 <= sz) {
+                if (a) memcpy(GP(a + (u64)cnt * 8), &q->tag[q->head], 8);
+                q->played += q->frames[q->head];
+                q->head = (q->head + 1) & 63;
+                q->n--;
+                cnt++;
+            }
+            pm_unlock(&q->lk);
+            out32(c, cnt);
+            return 0;
+        }
+        case 6: {
+            u64 tag = in64(c, 0);
+            int f = 0;
+            pm_lock(&q->lk);
+            for (u32 k = 0; k < q->n; k++)
+                if (q->tag[(q->head + k) & 63] == tag) f = 1;
+            pm_unlock(&q->lk);
+            out8(c, f);
+            return 0;
+        }
+        case 9: out32(c, q->n); return 0;       /* GetAudioOutBufferCount */
+        case 10: out64(c, q->played); return 0; /* GetAudioOutPlayedSampleCount */
     }
     return 0;
 }
@@ -1064,7 +1118,7 @@ static int audout_disp(SvcObj* o, IpcCtx* c) {
         out32(c, 2);
         out32(c, 2);
         out32(c, 1);
-        out_obj(c, svcobj_new("IAudioOut", audout_obj, 0));
+        out_obj(c, svcobj_new("IAudioOut", audout_obj, sizeof(AudOut)));
         return 0;
     }
     return quiet_ok(o, c);
