@@ -50,7 +50,8 @@ if(SWR_BACKEND STREQUAL "headless")
     swr_component(null gpu/null/null.c)
     list(APPEND components null)
 else()
-    swr_component(shader gpu/shader/shader.c gpu/texture/astc.c)
+    swr_component(shader gpu/shader/shader.c gpu/shader/decode.c gpu/shader/translate.c gpu/shader/corpus.c
+                  gpu/texture/astc.c)
     set(gl gpu/gl/renderer.c gpu/gl/formats.c gpu/gl/texture.c gpu/gl/programs.c gpu/gl/framebuffer.c gpu/gl/draw.c
            gpu/gl/trace.c gpu/gl/capture.c gpu/gl/framegen.c gpu/gl/compute.c gpu/gl/load.c gpu/gl/glq.c gpu/gl/glq_gen.c
            "${CMAKE_SOURCE_DIR}/third_party/bcn/bcn.cpp" "${CMAKE_SOURCE_DIR}/third_party/bcn/bcdec.cpp")
@@ -97,8 +98,9 @@ if(WIN32)
         target_link_options(swr-runtime PRIVATE -mconsole)
     endif()
 else()
+    # No -rdynamic: the game module gets the runtime through RtAPI and imports nothing from it, and exporting every
+    # global would let a library loaded later (a GL driver) bind its own symbols to ours by name
     target_link_libraries(swr-runtime PRIVATE pthread dl m)
-    target_link_options(swr-runtime PRIVATE -rdynamic)
 endif()
 if(SWR_H264)
     target_link_libraries(swr-runtime PRIVATE "${DEPS}/lib/libdecoder.a" "${DEPS}/lib/libcommon.a")

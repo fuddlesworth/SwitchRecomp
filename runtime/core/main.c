@@ -894,18 +894,6 @@ int swr_main(int argc, char** argv) {
     _exit(0);
 }
 
-#if !defined(_WIN32)
-#include <dlfcn.h>
-static int dladdr_name(void* pc, char* out, int n) {
-    Dl_info i;
-    if (dladdr(pc, &i) && i.dli_sname) {
-        snprintf(out, n, "%s+%lx", i.dli_sname, (unsigned long)((u8*)pc - (u8*)i.dli_saddr));
-        return 1;
-    }
-    return 0;
-}
-#endif
-
 /* ============================================================ audio (muted) */
 /* audren RequestUpdate, answered in the real format but no sound is produced */
 /* RequestUpdate layout as in yuzu's InfoUpdater.
