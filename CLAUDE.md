@@ -66,7 +66,7 @@ by the build's deploy step. Game code (`_code.so`) only needs recompiling when `
 | IPC and services | `runtime/ipc.c` (helpers `in32`, `out32`, `buf_in`, `buf_out`, `out_obj`...), `runtime/svc_core.c` (most services, audio), `svc_hid.c`, `svc_fs.c`, `svc_vi.c` |
 | GPU | `runtime/nvdrv.c` (nvhost devices, syncpoints), `gpu.c` (GPFIFO), `gpu_engines.c`, `gpu_3d.c`, `gpu_gl.c` (OpenGL backend, caches), `shader.c` (Maxwell to GLSL), `glq*.c` (the GL thread), `astc.c`, `runtime/bcn/` |
 | Video | `runtime/host1x.c` (NVDEC with OpenH264, VIC) |
-| Platform | `runtime/backend_*.c` (x11 is the Linux one), `runtime/plat.c` |
+| Platform | `runtime/backend_*.c` (sdl3 is the Linux default, x11 the fallback, win32 Windows), `runtime/plat.c` |
 
 ## Skills and agents
 

@@ -104,11 +104,15 @@ Catherine uses two audio paths, and both are silent today.
 
 ## Phase 4: Wayland and the platform layer
 
-- [ ] An SDL3 backend (`backend_sdl3.c`) next to `backend_x11.c`. It runs natively on Wayland and on X11, and adds
-      gamepads (with SDL's controller database), fullscreen, scaling and hotplug.
-- [ ] The GL context: SDL creates it on EGL under Wayland. The glq worker thread owns the context, so it needs
-      `SDL_GL_MakeCurrent` on that thread, with events still pumped on the main thread.
-- [ ] Keep `backend_x11.c` as a fallback until the SDL3 backend has run the smoke test on both Wayland and X11.
+- [x] An SDL3 backend (`backend_sdl3.c`), the Linux default. It runs natively on Wayland and on X11, with gamepads
+      (SDL's controller database, hotplug, buttons by position), fullscreen, and the Windows backend's keys and
+      hotkeys.
+- [x] The GL context: SDL creates it (EGL under Wayland) on the GPU thread. The GL worker's shared context is current
+      on a hidden helper window, since EGL won't make one surface current on two threads.
+- [x] `backend_x11.c` stays as a fallback (`-DSWR_BACKEND=x11`), and CI keeps building it.
+- [ ] The SDL3 backend on Windows too, for controllers other than XInput ones (the win32 backend stays the default
+      there until then).
+- [ ] Try a real controller: the mapping follows SDL's positional buttons, but no pad was at hand to test it.
 
 ## Phase 5: shaders
 

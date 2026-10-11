@@ -32,7 +32,7 @@ jobs:
         preset: [gcc, clang]
     steps:
       - name: Install tools
-        run: pacman -Syu --noconfirm --needed base-devel cmake ninja nasm python git clang libx11 mesa
+        run: pacman -Syu --noconfirm --needed base-devel cmake ninja nasm python git clang libx11 mesa sdl3
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -45,6 +45,10 @@ jobs:
         run: |
           cmake --preset ${{ matrix.preset }}
           cmake --build --preset ${{ matrix.preset }}
+      - name: Build the X11 backend too
+        run: |
+          cmake -B build/x11 -G Ninja -DSWR_BACKEND=x11 -DCMAKE_C_COMPILER=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} -DCMAKE_CXX_COMPILER=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }}
+          cmake --build build/x11
       - name: Check the Python scripts
         run: |
           python -m compileall -q switchrecomp.py codegen.py a64.py nxloader.py scripts tools
