@@ -16,7 +16,7 @@ Use only games and keys dumped from your own console. None are included, and non
 ### Requirements
 
 - GCC 16 or Clang 23, CMake 3.20 or newer, Ninja, Make, NASM, Python 3.12 or newer, Git
-- X11 and OpenGL 4.3 development files
+- SDL3 and OpenGL 4.3 development files (the X11 backend needs Xlib instead of SDL3)
 - `uv`, only to run the formatter
 
 ### Setup
@@ -48,9 +48,10 @@ that, a runtime change only needs a runtime build, which copies the new runtime 
 cmake --preset gcc && cmake --build --preset gcc
 ```
 
-Keyboard: arrows for the D-pad, X or Space for A, Z for B, S for X, A for Y, Q and E for L and R, 1 and 3 for ZL and
-ZR, Enter for Plus, Backspace for Minus and Escape to quit. The X11 backend has no sticks and no gamepad support yet
-(see ROADMAP.md, Phase 4).
+The window runs natively on Wayland, and on X11 (`SDL_VIDEO_DRIVER=x11` picks X11 on a Wayland desktop). Controls
+are the same as on Windows (below), with any controller SDL knows. The older X11-only backend is still there:
+configure with `-DSWR_BACKEND=x11`. It has no sticks and no gamepad support, and its keys differ (S for X, A for
+Y).
 
 ## Windows
 
@@ -95,8 +96,8 @@ Use `--preset clang` if you set up with `-Compiler clang`. A runtime change only
 Controls: an Xbox (XInput) controller works like a Switch controller, by position. Keyboard: arrows for the D-pad,
 WASD for the left stick, IJKL for the right stick, X or Space for A, Z for B, C for X, V for Y, Q and E for L and R,
 1 and 3 for ZL and ZR, Enter for Plus and Backspace for Minus. F1 shows help, F3 takes a screenshot, F4 switches the
-FPS limit, F5 writes a diagnostic trace, F7 records an .mp4, F8 saves a full-resolution PNG, F11 or Alt+Enter toggles
-fullscreen, and Escape quits.
+FPS limit, F5 writes a diagnostic trace, F7 records an .mp4 (Windows only), F8 saves a full-resolution PNG, F11 or
+Alt+Enter toggles fullscreen, and Escape quits.
 
 ## Settings and logs
 

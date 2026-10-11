@@ -27,6 +27,9 @@ The runtime options behind it, for a run by hand from `games/`:
 | `-v` | Log every IPC call (`<service> cmd N (in ...) -> rc`): huge, grep it |
 | `--fps_limit=0` | Unlimited frame rate |
 
+The SDL3 backend runs on Wayland when the desktop has it. `SDL_VIDEO_DRIVER=x11` runs it on X11 instead: test a
+platform change on both.
+
 Buttons (hex): A 1, B 2, X 4, Y 8, L 40, R 80, ZL 100, ZR 200, Plus 400, Minus 800, Left 1000, Up 2000, Right 4000,
 Down 8000. Combine by adding.
 
