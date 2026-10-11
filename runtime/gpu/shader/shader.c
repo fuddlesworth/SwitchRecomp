@@ -114,8 +114,9 @@ u32 cb_idx(u64 w) { return B(w, 34, 5); }
 u32 cb_off(u64 w) { return B(w, 20, 14) * 4; }
 /* is c0[0x110+16k] an NVN ssbo address? returns k+1 or 0 */
 u8 gbuf_tag(Ctx* c, u64 w) {
-    /* gfx ssbos live at c0[0x110..0x210], compute {addr,size} pairs at c0[0x210..0x410] */
-    u32 lo = 0x110, hi = c->stage == ST_CS ? 0x410 : 0x210; /* (NVN compute uses 0x310.., deko3d 0x110..) */
+    /* gfx ssbos live at c0[0x110..0x610] (Tears of the Kingdom's fragment shaders use 0x550), compute {addr,size}
+       pairs at c0[0x210..0x410] */
+    u32 lo = 0x110, hi = c->stage == ST_CS ? 0x410 : 0x610; /* (NVN compute uses 0x310.., deko3d 0x110..) */
     if (cb_idx(w) != 0) return 0;
     u32 off = cb_off(w);
     if (off < lo || off >= hi || (off & 15)) return 0;
@@ -753,6 +754,9 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     /* declarations */
     Sb* D = &c->decl;
     sb_put(D, "#version 450\n");
+    /* textureLod on array and cube shadow samplers (Tears of the Kingdom's shadow maps), which core GLSL leaves out; the
+       SPIR-V it becomes is core Vulkan */
+    sb_put(D, "#extension GL_EXT_texture_shadow_lod : enable\n");
     if (c->uses_draw_params) sb_put(D, "#extension GL_ARB_shader_draw_parameters : require\n");
     /* gl_Layer from a stage before the fragment shader */
     if (stage != ST_FS && si->writes_layer)

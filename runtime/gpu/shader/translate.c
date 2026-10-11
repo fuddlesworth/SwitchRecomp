@@ -613,6 +613,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 u8 tg = 0;
                 if (id == O_IADD_C) tg = gbuf_tag(c, w);
                 if (!tg) tg = c->gtag[a];
+                if (!tg && id == O_IADD_R) tg = c->gtag[B(w, 20, 8)];
                 c->gtag[d] = tg;
             }
             char* A = R(c, a);
@@ -620,7 +621,10 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             if (B(w, 49, 1)) A = T("(0u-%s)", A);
             if (B(w, 48, 1)) Bv = T("(0u-%s)", Bv);
             const char* e = T("(%s + %s)", A, Bv);
-            if (B(w, 43, 1)) e = T("(%s + (cc_c?1u:0u))", e);
+            if (B(w, 43, 1)) { /* .X: adds the carry of an earlier .CC */
+                c->uses_cc = 1;
+                e = T("(%s + (cc_c?1u:0u))", e);
+            }
             if (B(w, 47, 1)) {
                 c->uses_cc = 1;
                 emitl(
@@ -637,7 +641,10 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             char* A = R(c, a);
             if (B(w, 56, 1)) A = T("(0u-%s)", A);
             const char* e = T("(%s + %s)", A, imm32(w));
-            if (B(w, 53, 1)) e = T("(%s + (cc_c?1u:0u))", e);
+            if (B(w, 53, 1)) {
+                c->uses_cc = 1;
+                e = T("(%s + (cc_c?1u:0u))", e);
+            }
             if (B(w, 52, 1)) {
                 c->uses_cc = 1;
                 emitl(c, "{ uint c1_; uint s_ = uaddCarry(%s,%s,c1_); cc_c = c1_!=0u; cc_z = s_==0u; cc_s=int(s_)<0; }",
@@ -675,11 +682,24 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_ISCADD_R:
         case O_ISCADD_C:
         case O_ISCADD_I: {
+            /* a scaled index added to a global buffer's base keeps pointing into that buffer */
+            if (d != 255)
+                c->gtag[d] = B(w, 48, 1)        ? 0
+                             : id == O_ISCADD_C ? gbuf_tag(c, w)
+                             : id == O_ISCADD_R ? c->gtag[B(w, 20, 8)]
+                                                : 0;
             char* A = R(c, a);
             char* Bv = opB(c, w, id - O_ISCADD_R);
             if (B(w, 49, 1)) A = T("(0u-%s)", A);
             if (B(w, 48, 1)) Bv = T("(0u-%s)", Bv);
-            setr(c, d, T("((%s << %uu) + %s)", A, B(w, 39, 5), Bv));
+            A = T("(%s << %uu)", A, B(w, 39, 5));
+            if (B(w, 47, 1)) { /* .CC: the low half of a 64-bit address, IADD.X adds its carry to the high half */
+                c->uses_cc = 1;
+                emitl(c,
+                      "{ uint c1_; uint s_ = uaddCarry(%s,%s,c1_); cc_c = c1_!=0u; cc_z = s_==0u; cc_s = int(s_)<0; }",
+                      A, Bv);
+            }
+            setr(c, d, T("(%s + %s)", A, Bv));
             break;
         }
         case O_ISCADD32I: setr(c, d, T("((%s << %uu) + %s)", R(c, a), B(w, 53, 5), imm32(w))); break;
@@ -1258,7 +1278,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                     setr(c, d, v);
                 } else {
                     u32 n = sz == 5 ? 2 : sz >= 6 ? 4 : 1;
-                    for (u32 k = 0; k < n; k++) setr(c, d + k, T("g%d.d[(o_>>2u)+%uu]", gi, k));
+                    for (u32 k = 0; k < n && d != 255; k++) setr(c, d + k, T("g%d.d[(o_>>2u)+%uu]", gi, k));
                 }
                 c->indent--;
                 emitl(c, "}");
@@ -1284,7 +1304,9 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                         gi, m, gi, R(c, d), m);
                 } else {
                     u32 n = sz == 5 ? 2 : sz >= 6 ? 4 : 1;
-                    for (u32 k = 0; k < n; k++) emitl(c, "g%d.d[(o_>>2u)+%uu] = %s;", gi, k, R(c, d + k));
+                    /* RZ as the data of a wide store stores zeros in every word */
+                    for (u32 k = 0; k < n; k++)
+                        emitl(c, "g%d.d[(o_>>2u)+%uu] = %s;", gi, k, R(c, d == 255 ? 255 : d + k));
                 }
                 c->indent--;
                 emitl(c, "}");
