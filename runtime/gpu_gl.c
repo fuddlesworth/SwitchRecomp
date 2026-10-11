@@ -2315,6 +2315,7 @@ static PFN_BPP_ p_bpp;
 static void sh_uloc(Sh* s) {
     s->uloc = s->sp ? glGetUniformLocation(s->sp, s->stage == ST_VS ? "swr_vp" : "swr_at") : -1;
 }
+static int pk_has(u64 k);
 static int sh_sep_ready(Sh* s) {
     if (s->sps >= 2) return 1;
     if (s->sps == 1) {
@@ -2353,7 +2354,14 @@ static int sh_sep_ready(Sh* s) {
     if (s->failed || !s->src) return 1;
     u64 key = sh_key(s);
     pcache_init();
-    if (g_worker == 1) { /* disk binary or compile, both on the compile thread */
+    /* a program the shader pack has seen before has a binary on disk. Outside Windows it loads here, in well under a
+       millisecond, so its draws don't skip frames waiting for the compile thread (on Windows a file open can take tens
+       of ms with antivirus scanning, so it stays on that thread) */
+    int bin_here = 0;
+#ifndef _WIN32
+    bin_here = g_pcache > 0 && pk_has(key);
+#endif
+    if (g_worker == 1 && !bin_here) { /* disk binary or compile, both on the compile thread */
         struct WJob* j = calloc(1, sizeof *j);
         j->vs = s->src;
         j->key = key;

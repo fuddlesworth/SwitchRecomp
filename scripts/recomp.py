@@ -4,6 +4,7 @@
     games/NAME[.exe]               the runtime, built by CMake with the chosen preset
     games/NAME_code.so / .dll      the game's code translated to C and compiled with the preset's compiler
     games/NAME_data/               exefs, romfs and saves
+    games/shader_cache/spirv/      SPIR-V for the game's own shader files, when it ships them (Vulkan renderer)
 
     python3 scripts/recomp.py work/Catherine Catherine
     python3 scripts/recomp.py work/Catherine Catherine --preset clang -- --native
@@ -51,7 +52,32 @@ def main():
         '--runtime',
         runtime,
     ] + extra
-    return subprocess.run(cmd).returncode
+    rc = subprocess.run(cmd).returncode
+    if rc == 0:
+        prebuild_shaders(a.preset, os.path.join(REPO, 'games', a.name + '_data', 'romfs'))
+    return rc
+
+
+NVN_SHADER_MAGIC = b'\x91\x68\x86\x19'
+
+
+def prebuild_shaders(preset, romfs):
+    """Fills the Vulkan renderer's SPIR-V cache from the NVN shader files a game ships in its romfs (Catherine has
+    them in data/shaders_binary), so the first run compiles fewer shaders while playing."""
+    shaderc = os.path.join(REPO, 'build', preset, 'swr-shaderc' + ('.exe' if WINDOWS else ''))
+    if not os.path.isfile(shaderc) or not os.path.isdir(romfs):
+        return
+    cache = os.path.join(REPO, 'games', 'shader_cache', 'spirv')
+    for root, _dirs, files in os.walk(romfs):
+        for f in files:
+            with open(os.path.join(root, f), 'rb') as fh:
+                if fh.read(4) == NVN_SHADER_MAGIC:
+                    break
+        else:
+            continue
+        os.makedirs(cache, exist_ok=True)
+        print('Translating the shaders in %s' % os.path.relpath(root, romfs), flush=True)
+        subprocess.run([shaderc, '--nvn', root, '--cache', cache])
 
 
 if __name__ == '__main__':
