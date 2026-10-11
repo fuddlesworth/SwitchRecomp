@@ -7257,8 +7257,15 @@ void gpu_gl_dump_rts(void) {
    QMD -> compute GLSL, bind cbufs, textures and ssbos ({addr,size} in c0), and copy whatever got written
    back to guest memory afterwards. */
 /* compute output goes GPU-side into a staging buffer and is read back in one go: before the next draw,
-   at the end of the submit, or earlier if another dispatch reads that memory */
-static GLuint g_cs_stage;
+   at the end of the submit, or earlier if another dispatch reads that memory.
+   g_cs_orig mirrors it with each SSBO's contents from before the dispatch, at the same offsets, so a result lands
+   the way it would have on the console, where the GPU stores while it runs, long before the result gets here:
+   - a byte the shader didn't change isn't written (the GPU writes only what it stores)
+   - a byte that changed in guest memory since the dispatch keeps its new value: on the console that write came
+     after the GPU's. The game reuses memory as soon as a semaphore says the GPU is done, which here can be before
+     the result lands (Catherine allocates job nodes in its compute output ranges, and the late write-back put
+     vertex data over them) */
+static GLuint g_cs_stage, g_cs_orig;
 static u32 g_cs_stage_cap, g_cs_stage_used;
 static int g_cs_npend;
 static struct {
@@ -7272,7 +7279,7 @@ typedef struct {
     u32 off, size;
 } CsPend;
 static struct {
-    GLuint buf;
+    GLuint buf, orig;
     u32 cap, used;
     GLsync fence;
     int n;
@@ -7285,30 +7292,78 @@ static struct {
     u32 id, n;
 } g_cs_incs[64];
 static int g_cs_nincs; /* g_cs_any: anything pending/in flight (gmem_ptr/gmem_read check it) */
-static void cs_apply(const u8* tmp, const CsPend* p, int n) {
+static inline u64 cs_ld64(const u8* p) {
+    u64 v;
+    memcpy(&v, p, 8);
+    return v;
+}
+/* a byte of the result lands when the shader changed it (res != org) and guest memory still holds what the shader
+   started from (cur == org) */
+static inline int cs_lands(const u8* res, const u8* org, const u8* cur, u32 i) {
+    return res[i] != org[i] && cur[i] == org[i];
+}
+/* all 8 bytes at p land: none of res equals org, and cur equals org */
+static inline int cs_lands8(const u8* res, const u8* org, const u8* cur) {
+    u64 x = cs_ld64(res) ^ cs_ld64(org);
+    u64 zero_byte = (x - 0x0101010101010101ull) & ~x & 0x8080808080808080ull;
+    return !zero_byte && cs_ld64(cur) == cs_ld64(org);
+}
+/* writes the runs of the result that land, found 8 bytes at a time where they can be. dst is guest memory when the
+   range is contiguous, else NULL */
+static void cs_write_changed(u64 addr, u8* dst, const u8* res, const u8* org, u32 size) {
+    u8* tmp = NULL;
+    const u8* cur = dst;
+    if (!cur) {
+        tmp = malloc(size);
+        gmem_read(addr, tmp, size);
+        cur = tmp;
+    }
+    u32 i = 0;
+    while (i < size) {
+        if (i + 8 <= size && cs_ld64(res + i) == cs_ld64(org + i)) {
+            i += 8;
+            continue;
+        }
+        if (!cs_lands(res, org, cur, i)) {
+            i++;
+            continue;
+        }
+        u32 s = i;
+        while (i + 8 <= size && cs_lands8(res + i, org + i, cur + i)) i += 8;
+        while (i < size && cs_lands(res, org, cur, i)) i++;
+        if (dst) {
+            memcpy(dst + s, res + s, i - s);
+            for (u64 o = (u64)(dst - g_mem) + s, e = o + (i - s); o < e; o = (o | 0xFFFF) + 1) ww_touch(o);
+        } else
+            gmem_write(addr + s, res + s, i - s);
+    }
+    free(tmp);
+}
+static void cs_apply(const u8* res, const u8* org, const CsPend* p, int n) {
     g_cs_busy = 1;
     /* cached vertex/storage buffers on this range are stale */
     g_csgen++;
     for (int i = 0; i < n; i++)
         for (u64 b = p[i].addr >> 16, e = (p[i].addr + p[i].size - 1) >> 16; b <= e; b++) g_csblk[b & 0xFFFF] = g_csgen;
-    for (int i = 0; i < n; i++) {
-        u8* dst = gmem_ptr(p[i].addr, p[i].size);
-        if (dst) {
-            memcpy(dst, tmp + p[i].off, p[i].size);
-            ww_touch((u64)(dst - g_mem));
-        } else
-            gmem_write(p[i].addr, tmp + p[i].off, p[i].size);
-    }
+    for (int i = 0; i < n; i++)
+        cs_write_changed(p[i].addr, gmem_ptr(p[i].addr, p[i].size), res + p[i].off, org + p[i].off, p[i].size);
     g_cs_busy = 0;
 }
-static u8* cs_tmp(u32 n) {
-    static u8* tmp;
+/* the results and the pre-dispatch contents of a staging pair, read back */
+static void cs_readback(GLuint stage, GLuint orig, u32 used, u8** res, u8** org) {
+    static u8 *r, *o;
     static u32 cap;
-    if (cap < n) {
-        tmp = realloc(tmp, n);
-        cap = n;
+    if (cap < used) {
+        r = realloc(r, used);
+        o = realloc(o, used);
+        cap = used;
     }
-    return tmp;
+    glBindBuffer(GL_COPY_READ_BUFFER, stage);
+    glGetBufferSubData(GL_COPY_READ_BUFFER, 0, used, r);
+    glBindBuffer(GL_COPY_READ_BUFFER, orig);
+    glGetBufferSubData(GL_COPY_READ_BUFFER, 0, used, o);
+    *res = r;
+    *org = o;
 }
 /* wait=0: only if the GPU is already done */
 static void cs_complete(int wait) {
@@ -7317,10 +7372,9 @@ static void cs_complete(int wait) {
     if (r == GL_TIMEOUT_EXPIRED) return;
     if (p_ds) p_ds(g_cs_fl.fence);
     g_cs_fl.fence = 0;
-    u8* tmp = cs_tmp(g_cs_fl.used);
-    glBindBuffer(GL_COPY_READ_BUFFER, g_cs_fl.buf);
-    glGetBufferSubData(GL_COPY_READ_BUFFER, 0, g_cs_fl.used, tmp);
-    cs_apply(tmp, g_cs_fl.p, g_cs_fl.n);
+    u8 *res, *org;
+    cs_readback(g_cs_fl.buf, g_cs_fl.orig, g_cs_fl.used, &res, &org);
+    cs_apply(res, org, g_cs_fl.p, g_cs_fl.n);
     g_cs_fl.n = 0;
     g_cs_fl.used = 0;
     g_cs_any = g_cs_npend > 0;
@@ -7371,10 +7425,9 @@ void cs_flush_pending(void) {
         return;
     }
     glMemoryBarrier(0x00000200 /* GL_BUFFER_UPDATE_BARRIER_BIT */);
-    glBindBuffer(GL_COPY_READ_BUFFER, g_cs_stage);
-    u8* tmp = cs_tmp(g_cs_stage_used);
-    glGetBufferSubData(GL_COPY_READ_BUFFER, 0, g_cs_stage_used, tmp);
-    cs_apply(tmp, (const CsPend*)g_cs_pend, g_cs_npend);
+    u8 *res, *org;
+    cs_readback(g_cs_stage, g_cs_orig, g_cs_stage_used, &res, &org);
+    cs_apply(res, org, (const CsPend*)g_cs_pend, g_cs_npend);
     g_cs_npend = 0;
     g_cs_stage_used = 0;
     g_cs_any = 0;
@@ -7392,9 +7445,10 @@ static void cs_kick_async(void) {
     }
     cs_complete(1); /* one in flight at a time */
     glMemoryBarrier(0x00000200);
-    GLuint b = g_cs_fl.buf;
+    GLuint b = g_cs_fl.buf, bo = g_cs_fl.orig;
     u32 c = g_cs_fl.cap;
     g_cs_fl.buf = g_cs_stage;
+    g_cs_fl.orig = g_cs_orig;
     g_cs_fl.cap = g_cs_stage_cap;
     g_cs_fl.used = g_cs_stage_used;
     g_cs_fl.n = g_cs_npend;
@@ -7402,7 +7456,8 @@ static void cs_kick_async(void) {
     g_cs_fl.fence = p_fs(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     glFlush();
     g_cs_stage = b;
-    g_cs_stage_cap = c; /* the other staging buffer (0 = create on next use) */
+    g_cs_orig = bo;
+    g_cs_stage_cap = c; /* the other staging pair (0 = create on next use) */
     g_cs_npend = 0;
     g_cs_stage_used = 0;
     g_cs_any = 1;
@@ -7782,6 +7837,39 @@ void gpu_gl_dispatch(GpuChannel* ch, const u32* q, u64 code) {
         glBufferData(GL_SHADER_STORAGE_BUFFER, ss[i], tmp, GL_DYNAMIC_COPY);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, i, sb[i]);
     }
+    /* staging space for what this dispatch writes, reserved now so the SSBOs' contents from before the dispatch can
+       go into g_cs_orig at the offsets their results will take in g_cs_stage */
+    u32 cs_off[16];
+    if (p->si.gbuf_wmask) {
+        u32 need = 0;
+        int nw = 0;
+        for (int i = 0; i < p->si.ngbuf && i < 16; i++)
+            if (((p->si.gbuf_wmask >> i) & 1) && sa[i]) {
+                need += (ss[i] + 255) & ~255u;
+                nw++;
+            }
+        if (g_cs_npend + nw > 256 || g_cs_stage_used + need > (32u << 20)) cs_flush_pending();
+        if (!g_cs_stage || g_cs_stage_used + need > g_cs_stage_cap) { /* growing: read back what's pending first */
+            cs_flush_pending();
+            u32 nc = g_cs_stage_cap ? g_cs_stage_cap * 2 : (1u << 20);
+            while (nc < need) nc *= 2;
+            if (!g_cs_stage) glGenBuffers(1, &g_cs_stage);
+            if (!g_cs_orig) glGenBuffers(1, &g_cs_orig);
+            glBindBuffer(GL_COPY_WRITE_BUFFER, g_cs_stage);
+            glBufferData(GL_COPY_WRITE_BUFFER, nc, NULL, GL_DYNAMIC_READ);
+            glBindBuffer(GL_COPY_WRITE_BUFFER, g_cs_orig);
+            glBufferData(GL_COPY_WRITE_BUFFER, nc, NULL, GL_DYNAMIC_READ);
+            g_cs_stage_cap = nc;
+        }
+        for (int i = 0; i < p->si.ngbuf && i < 16; i++)
+            if (((p->si.gbuf_wmask >> i) & 1) && sa[i]) {
+                cs_off[i] = g_cs_stage_used;
+                g_cs_stage_used = (g_cs_stage_used + ss[i] + 255) & ~255u;
+                glBindBuffer(GL_COPY_READ_BUFFER, sb[i]);
+                glBindBuffer(GL_COPY_WRITE_BUFFER, g_cs_orig);
+                glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, cs_off[i], ss[i]);
+            }
+    }
     glDispatchCompute(gx, gy, gz);
     st_cs_run++;
     if (nimg_ok) glMemoryBarrier(0x20 | 0x08 | 0x100 | 0x400 | 0x80); /* images -> textures, copies, fbos */
@@ -7791,28 +7879,16 @@ void gpu_gl_dispatch(GpuChannel* ch, const u32* q, u64 code) {
         glMemoryBarrier(0x00000200 | 0x00002000 /* BUFFER_UPDATE | SHADER_STORAGE */);
         for (int i = 0; i < p->si.ngbuf && i < 16; i++)
             if (((p->si.gbuf_wmask >> i) & 1) && sa[i]) {
-                if (g_cs_npend >= 256 || g_cs_stage_used + ss[i] > (32u << 20)) cs_flush_pending();
-                u32 need = g_cs_stage_used + ss[i];
-                if (!g_cs_stage || need > g_cs_stage_cap) { /* growing: read back what's pending first */
-                    cs_flush_pending();
-                    u32 nc = g_cs_stage_cap ? g_cs_stage_cap * 2 : (1u << 20);
-                    while (nc < ss[i]) nc *= 2;
-                    if (!g_cs_stage) glGenBuffers(1, &g_cs_stage);
-                    glBindBuffer(GL_COPY_WRITE_BUFFER, g_cs_stage);
-                    glBufferData(GL_COPY_WRITE_BUFFER, nc, NULL, GL_DYNAMIC_READ);
-                    g_cs_stage_cap = nc;
-                }
                 glBindBuffer(GL_COPY_READ_BUFFER, sb[i]);
                 glBindBuffer(GL_COPY_WRITE_BUFFER, g_cs_stage);
-                glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, g_cs_stage_used, ss[i]);
+                glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, cs_off[i], ss[i]);
                 g_cs_pend[g_cs_npend].addr = sa[i];
-                g_cs_pend[g_cs_npend].off = g_cs_stage_used;
+                g_cs_pend[g_cs_npend].off = cs_off[i];
                 g_cs_pend[g_cs_npend].size = ss[i];
                 g_cs_npend++;
                 g_cs_any = 1;
                 if (sa[i] < g_cs_lo) g_cs_lo = sa[i];
                 if (sa[i] + ss[i] > g_cs_hi) g_cs_hi = sa[i] + ss[i];
-                g_cs_stage_used = (g_cs_stage_used + ss[i] + 255) & ~255u;
             }
         /* fresh SSBOs for the next dispatch so it doesn't wait on these */
         for (int i = 0; i < p->si.ngbuf && i < 16; i++)
