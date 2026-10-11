@@ -30,7 +30,15 @@ int gmem_read(u64 gva, void* dst, u64 size) {
     return 0;
 }
 void (*g_ww_touch)(u64 cpu); /* GPU wrote guest memory, record it for write tracking */
+/* the renderer lands work it is holding (compute results) before the stream goes on past it: before a write of
+   memory those results overlap (size > 0), and before anything the game can observe, like a semaphore release or a
+   syncpoint (gpu_signal_point, size 0) */
+void (*g_gpu_before_write)(u64 gva, u64 size);
+void gpu_signal_point(void) {
+    if (g_gpu_before_write) g_gpu_before_write(0, 0);
+}
 int gmem_write(u64 gva, const void* src, u64 size) {
+    if (g_gpu_before_write && size) g_gpu_before_write(gva, size);
     const u8* s = src;
     u64 g0 = gva, s0 = size;
     while (size) {
@@ -113,6 +121,7 @@ static void puller_method(GpuChannel* ch, u32 m, u32 v) {
             u64 addr = ((u64)(r[4] & 0xFF) << 32) | r[5];
             u32 op = v & 0x1F;
             if (op == 2) { /* release */
+                gpu_signal_point();
                 if (v & (1u << 24)) {
                     gmem_w32(addr, r[6]);
                 } /* 4 bytes only */
@@ -352,5 +361,6 @@ void gpu_submit(u64* e, u32 n, u32 channel, u32 incs) {
     extern int gpu_async_submit(u64 * e, u32 n, u32 syncpt, u32 incs);
     if (gpu_async_submit(e, n, channel, incs)) return;
     gpu_submit_now(e, n, channel);
+    gpu_signal_point();
     for (u32 i = 0; i < incs; i++) syncpt_incr(channel);
 }

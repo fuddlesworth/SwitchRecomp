@@ -54,5 +54,6 @@ void fermi2d_method(GpuChannel* ch, u32 m, u32 v);
 void dma_method(GpuChannel* ch, u32 m, u32 v);
 void gpu_flush(GpuChannel* ch);
 void gpu_mem_written(u64 gva, u64 size);
+void gpu_signal_point(void); /* the GPU is about to do something the game can observe */
 void gpu3d_init(void);
 #endif

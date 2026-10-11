@@ -6,6 +6,9 @@
 #include "vk.h"
 #include "vk_shader.h"
 
+#define PCACHE_PATH "shader_cache/vk_pipelines.bin"
+static int g_pcache_dirty; /* pipelines made since the cache was last written */
+
 VkPipelineLayout g_vk_playout;
 VkDescriptorSetLayout g_vk_dslayout;
 static VkPipelineCache g_pcache;
@@ -48,10 +51,30 @@ void vk_pipeline_init(void) {
                                      .pushConstantRangeCount = 1,
                                      .pPushConstantRanges = &pc};
     VK_OK(vkCreatePipelineLayout(g_vk.dev, &pl, NULL, &g_vk_playout));
-    VkPipelineCacheCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-    VK_OK(vkCreatePipelineCache(g_vk.dev, &ci, NULL, &g_pcache));
     plat_mkdir("shader_cache");
     plat_mkdir("shader_cache/spirv");
+    /* the driver's compiled pipelines from earlier runs; it ignores data from another device or driver version */
+    VkPipelineCacheCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    void* data = NULL;
+    FILE* f = fopen(PCACHE_PATH, "rb");
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        data = n > 0 ? malloc((size_t)n) : NULL;
+        if (data && fread(data, 1, (size_t)n, f) == (size_t)n) {
+            ci.initialDataSize = (size_t)n;
+            ci.pInitialData = data;
+        }
+        fclose(f);
+    }
+    if (!VK_OK(vkCreatePipelineCache(g_vk.dev, &ci, NULL, &g_pcache)) && ci.initialDataSize) {
+        ci.initialDataSize = 0;
+        ci.pInitialData = NULL;
+        VK_OK(vkCreatePipelineCache(g_vk.dev, &ci, NULL, &g_pcache));
+    }
+    if (ci.initialDataSize) LOG("vulkan: pipeline cache loaded (%zu KB)\n", ci.initialDataSize >> 10);
+    free(data);
     g_shader_vulkan = 1;
 }
 
@@ -218,18 +241,25 @@ VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, 
     return s;
 }
 
+VkShaderModule vk_module(const char* glsl, int stage) {
+    size_t nw = 0;
+    char err[1024] = "";
+    u32* spv = vk_spirv_cached(glsl, stage, "shader_cache/spirv", &nw, err, sizeof err);
+    if (!spv) {
+        WARN("vulkan: an internal shader didn't compile: %s\n", err);
+        return VK_NULL_HANDLE;
+    }
+    VkShaderModuleCreateInfo mi = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = nw * 4, .pCode = spv};
+    VkShaderModule m = VK_NULL_HANDLE;
+    VK_OK(vkCreateShaderModule(g_vk.dev, &mi, NULL, &m));
+    free(spv);
+    return m;
+}
 /* an empty fragment shader for depth-only passes */
 static VkShaderModule null_fs(void) {
     static VkShaderModule m;
-    if (m) return m;
-    size_t nw = 0;
-    char err[512];
-    u32* spv = vk_spirv_cached("#version 450\nvoid main(){}\n", ST_FS, "shader_cache/spirv", &nw, err, sizeof err);
-    if (!spv) return VK_NULL_HANDLE;
-    VkShaderModuleCreateInfo mi = {
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = nw * 4, .pCode = spv};
-    VK_OK(vkCreateShaderModule(g_vk.dev, &mi, NULL, &m));
-    free(spv);
+    if (!m) m = vk_module("#version 450\nvoid main(){}\n", ST_FS);
     return m;
 }
 
@@ -358,7 +388,34 @@ VkPipeline vk_pipeline_get(const PipeKey* k) {
     p->k = *k;
     p->h = h;
     p->p = pipe_create(k);
+    g_pcache_dirty = 1;
     p->next = g_pipeh[b];
     g_pipeh[b] = p;
     return p->p;
+}
+
+VkPipelineCache vk_pipeline_cache(void) {
+    g_pcache_dirty = 1;
+    return g_pcache;
+}
+/* writes the pipeline cache when pipelines were made since the last write (called every few seconds) */
+void vk_pipeline_save(void) {
+    if (!g_pcache_dirty || !g_pcache) return;
+    g_pcache_dirty = 0;
+    size_t n = 0;
+    if (vkGetPipelineCacheData(g_vk.dev, g_pcache, &n, NULL) != VK_SUCCESS || !n) return;
+    void* d = malloc(n);
+    if (d && vkGetPipelineCacheData(g_vk.dev, g_pcache, &n, d) == VK_SUCCESS) {
+        FILE* f = fopen(PCACHE_PATH ".tmp", "wb");
+        if (f) {
+            int ok = fwrite(d, 1, n, f) == n;
+            fclose(f);
+            if (ok) {
+                remove(PCACHE_PATH); /* rename doesn't replace on Windows */
+                rename(PCACHE_PATH ".tmp", PCACHE_PATH);
+            } else
+                remove(PCACHE_PATH ".tmp");
+        }
+    }
+    free(d);
 }

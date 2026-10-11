@@ -9,6 +9,7 @@
    vk_buffer.c   vertex, index, constant and storage buffers from guest memory
    vk_pipeline.c translated shaders, the pipeline layout and pipelines by state
    vk_render.c   the render target set (dynamic rendering), clears and draws
+   vk_compute.c  compute dispatches on the compute queue, and landing their results in guest memory
    vk_shader.c   GLSL to SPIR-V
    gpu_vk.c      the renderer interface the GPU front end calls (gpu_gl_*, r3d_*_gl) and presenting
 
@@ -153,6 +154,8 @@ Surf* vk_surf_first(u64 gva);
 void vk_surf_add(Surf* s);
 VkImageAspectFlags vk_aspect(const VkFmt* f);
 void vk_surf_evict(u32 before); /* textures last used before that present */
+int vk_blit2d(const void* s, const void* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
+              double sdy);
 u64 vk_bl_size(u32 w_bytes, u32 h, u32 bh);
 
 /* vk_texture.c */
@@ -211,6 +214,14 @@ typedef struct {
     } blend[8];
 } PipeKey;
 VkPipeline vk_pipeline_get(const PipeKey* k);
+VkPipelineCache vk_pipeline_cache(void); /* for pipelines made elsewhere (compute) */
+void vk_pipeline_save(void);
+VkShaderModule vk_module(const char* glsl, int stage); /* a module from GLSL of our own, kept for good */
+
+/* vk_compute.c */
+void vk_dispatch(GpuChannel* ch, const u32* q, u64 code);
+void vk_compute_land(void);                      /* pending compute results into guest memory, now */
+void vk_compute_before_write(u64 gva, u64 size); /* gpu.c's g_gpu_before_write */
 
 /* vk_render.c */
 void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */

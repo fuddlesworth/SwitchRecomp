@@ -225,3 +225,49 @@ void vk_surf_evict(u32 before) {
             free(s);
         }
 }
+
+/* the 2D engine's blit between render targets, on the GPU (gpu_gl.c's r3d_blit_gl). The surfaces are gpu_engines.c's
+   Surf2D. 0 when it can't be done there: the front end then copies through guest memory */
+typedef struct {
+    u32 format, linear, bh, depth, layer, pitch, width, height;
+    u64 addr;
+} Surf2D;
+static int blit_ok(VkFormat f, VkFormatFeatureFlags need) {
+    VkFormatProperties p;
+    vkGetPhysicalDeviceFormatProperties(g_vk.phys, f, &p);
+    return (p.optimalTilingFeatures & need) == need;
+}
+int vk_blit2d(const void* sp, const void* dp, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
+              double sdy) {
+    const Surf2D *s = sp, *d = dp;
+    Surf* st = vk_rt_find(s->addr);
+    if (!st || st->f.depth || dw <= 0 || dh <= 0) return 0;
+    u32 tile = (d->linear ? 0x1000u : 0) | (d->bh << 4);
+    Surf* dt = vk_rt(d->addr, d->width, d->height, d->format, tile, 0);
+    if (!dt || dt == st || dt->f.depth || st->f.is_int != dt->f.is_int) return 0;
+    if (!blit_ok(st->f.vk, VK_FORMAT_FEATURE_BLIT_SRC_BIT) || !blit_ok(dt->f.vk, VK_FORMAT_FEATURE_BLIT_DST_BIT))
+        return 0;
+    i32 x0 = (i32)sx, y0 = (i32)sy, x1 = (i32)(sx + sdx * dw + 0.5), y1 = (i32)(sy + sdy * dh + 0.5);
+    i32 X1 = dx + dw, Y1 = dy + dh;
+    if (x1 > (i32)st->w) x1 = (i32)st->w;
+    if (y1 > (i32)st->h) y1 = (i32)st->h;
+    if (X1 > (i32)dt->w) X1 = (i32)dt->w;
+    if (Y1 > (i32)dt->h) Y1 = (i32)dt->h;
+    if (x1 <= x0 || y1 <= y0 || X1 <= dx || Y1 <= dy || dx < 0 || dy < 0) return 0;
+    int scaled = x1 - x0 != X1 - dx || y1 - y0 != Y1 - dy;
+    VkCommandBuffer cb = vk_cmd();
+    vk_surf_use(cb, st, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                VK_ACCESS_2_TRANSFER_READ_BIT);
+    vk_surf_use(cb, dt, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    VkImageBlit b = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                     .srcOffsets = {{x0, y0, 0}, {x1, y1, 1}},
+                     .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                     .dstOffsets = {{dx, dy, 0}, {X1, Y1, 1}}};
+    int linear = scaled && !st->f.is_int && blit_ok(st->f.vk, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
+    vkCmdBlitImage(cb, st->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dt->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                   &b, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+    dt->wgen++;
+    dt->last_used = vk_frame_number();
+    return 1;
+}

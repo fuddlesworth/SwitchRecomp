@@ -42,9 +42,9 @@ cd games && ./Catherine
 ```
 
 `--preset clang` builds with Clang instead of GCC. A Vulkan renderer is in progress (`-DSWR_GPU=vulkan`): it draws
-menus, movies and static 3D, but not yet compute (which skinned models need), so OpenGL stays the default. The first
-recompile of a big game takes several minutes. After that, a runtime change only needs a runtime build, which copies the new
-runtime next to every game in `games/`:
+Catherine's menus, movies and 3D scenes like OpenGL does, without the title-screen crash, and becomes the default
+once it matches OpenGL everywhere. The first recompile of a big game takes several minutes. After that, a runtime
+change only needs a runtime build, which copies the new runtime next to every game in `games/`:
 
 ```bash
 cmake --preset gcc && cmake --build --preset gcc

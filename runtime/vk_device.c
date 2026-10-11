@@ -3,9 +3,15 @@
 #include "vk.h"
 
 VkState g_vk;
+/* reentrant on the thread that holds it: landing compute results writes guest memory, which can come back here */
 static PMutex g_vklock;
-void vk_lock(void) { pm_lock(&g_vklock); }
-void vk_unlock(void) { pm_unlock(&g_vklock); }
+static _Thread_local int t_vkdepth;
+void vk_lock(void) {
+    if (!t_vkdepth++) pm_lock(&g_vklock);
+}
+void vk_unlock(void) {
+    if (!--t_vkdepth) pm_unlock(&g_vklock);
+}
 
 const char* vk_result_str(VkResult r) {
     switch (r) {
