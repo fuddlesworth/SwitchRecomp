@@ -628,8 +628,8 @@ static u32 svc_wait_sync(KThread* t, u64 hptr, u32 n, i64 timeout, u32* out_idx)
         }
         t->woken = 0;
         t->wait_kind = 1;
-        t->wait_name = objs[0]->name;
-        t->wait_timeout = timeout;
+        t->wait_name = n ? objs[0]->name : "no handles";
+        t->wait_timeout = timeout; /* n==0 is legal: sleep until timeout/cancel */
         for (u32 i = 0; i < n; i++) waiter_add(objs[i], t);
         sleep_nl(t, rem);
         for (u32 i = 0; i < n; i++) waiter_del(objs[i], t);
