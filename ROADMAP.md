@@ -246,7 +246,8 @@ variant and run on Catherine with both renderers.
       null renderers each fill in completely, and `g_renderer` pointing at the active one. It replaces the
       `gpu_gl_*` names, `gpu/renderer.c`'s forwarding macros and `gpu/gl/names.h`, and each renderer's functions are
       now static to its own files.
-- [ ] The big files split along their seams: `gpu/gl/renderer.c`, `shader.c`, `hle/services.c` (one file per service
-      family), `main.c`, `kernel.c`, `cpu_helpers.c`, `plat.c`, `host1x.c`, `gpu/engines.c`.
+- [~] The big files split along their seams: `gpu/gl/renderer.c`, `shader.c`, `hle/services.c` (one file per service
+      family), `main.c`, `kernel.c`, `cpu_helpers.c`, `plat.c`, `host1x.c`, `gpu/engines.c`. Done: the OpenGL
+      renderer (7900 lines) is ten files by job, sharing `gpu/gl/gl.h`.
 - [ ] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.
 
