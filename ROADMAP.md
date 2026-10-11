@@ -251,5 +251,6 @@ variant and run on Catherine with both renderers.
       family), `main.c`, `kernel.c`, `cpu_helpers.c`, `plat.c`, `host1x.c`, `gpu/engines.c`. Done: the OpenGL
       renderer (7900 lines) is ten files by job, sharing `gpu/gl/gl.h`, and the shader translator
       is four (`shader.c`, `decode.c`, `translate.c`, `corpus.c`), sharing `gpu/shader/translator.h`.
+      The services are one file per family in `hle/`, sharing `hle/services_int.h`.
 - [ ] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.
 
