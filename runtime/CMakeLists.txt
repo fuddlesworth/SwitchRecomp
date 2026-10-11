@@ -43,6 +43,11 @@ swr_component(video video/host1x.c)
 swr_component(gpu gpu/gpu.c gpu/engines.c gpu/maxwell3d.c $<$<BOOL:${SWR_VULKAN}>:gpu/renderer.c>)
 
 set(platform platform/plat.c platform/backend/${SWR_BACKEND}.c)
+if(WIN32)
+    list(APPEND platform platform/plat_win32.c platform/profiler_win32.c)
+else()
+    list(APPEND platform platform/plat_posix.c)
+endif()
 if(WIN32 AND SWR_BACKEND MATCHES "^(win32|sdl3)$")
     list(APPEND platform platform/recorder_win32.c) # F7 video recorder, Media Foundation
 endif()
