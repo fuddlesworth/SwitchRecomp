@@ -26,14 +26,21 @@ quick-sharun /usr/bin/swr-runtime
 quick-sharun --make-appimage
 
 # Without a game the runtime says which module it looked for. Under another name, it must look next to the AppImage
-# for that name's module: that shows the libraries load and the name and folder come from $APPIMAGE
+# for that name's module, which shows the libraries load and the name and folder come from $APPIMAGE. With --game it
+# must look for the module that names
 probe=$(mktemp -d)
 trap 'rm -rf "$probe"' EXIT
 cp "$OUTPATH/$OUTNAME" "$probe/Probe.AppImage"
-out=$(cd "$probe" && APPIMAGE_EXTRACT_AND_RUN=1 ./Probe.AppImage 2>&1 || true)
-if ! grep -qF "$probe/Probe_code.so" <<<"$out"; then
-    echo "The AppImage did not look for $probe/Probe_code.so. It printed:" >&2
-    echo "$out" >&2
-    exit 1
-fi
-echo "AppImage checked: it looks for its game module next to itself"
+check() { # expected module, then the AppImage's arguments
+    local want=$1 out
+    shift
+    out=$(cd "$probe" && APPIMAGE_EXTRACT_AND_RUN=1 ./Probe.AppImage "$@" 2>&1 || true)
+    if ! grep -qF "$want" <<<"$out"; then
+        echo "The AppImage did not look for $want. It printed:" >&2
+        echo "$out" >&2
+        exit 1
+    fi
+}
+check "$probe/Probe_code.so"
+check "$probe/games/Other_code.so" --game="$probe/games/Other"
+echo "AppImage checked: it looks for its game module next to itself, or where --game says"

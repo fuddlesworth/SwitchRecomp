@@ -307,7 +307,7 @@ static CsPipe* cs_pipe(const u8* code, u32 lx, u32 ly, u32 lz, u32 shm) {
     }
     size_t nw = 0;
     char err[2048] = "";
-    u32* spv = vk_spirv_cached(src, ST_CS, "shader_cache/spirv", &nw, err, sizeof err);
+    u32* spv = vk_spirv_cached(src, ST_CS, g_vk_spirv_dir, &nw, err, sizeof err);
     free(src);
     if (!spv) {
         p->failed = 1;

@@ -27,10 +27,12 @@ void compute_method(GpuChannel* ch, u32 m, u32 v, int last) {
                 if (seen[i] == prog) known = 1;
             if (!known && ns < 32 && g_opt_diag) {
                 seen[ns++] = prog;
-                plat_mkdir("captures");
-                plat_mkdir("captures/compute");
-                char p[160];
-                snprintf(p, sizeof p, "captures/compute/c%02d_qmd.bin", ns);
+                char p[1200]; /* captures/ next to the games, like the rest of what the runtime writes */
+                snprintf(p, sizeof p, "%scaptures", g_exedir);
+                plat_mkdir(p);
+                snprintf(p, sizeof p, "%scaptures/compute", g_exedir);
+                plat_mkdir(p);
+                snprintf(p, sizeof p, "%scaptures/compute/c%02d_qmd.bin", g_exedir, ns);
                 FILE* f = fopen(p, "wb");
                 if (f) {
                     fwrite(q, 1, 256, f);
@@ -38,7 +40,7 @@ void compute_method(GpuChannel* ch, u32 m, u32 v, int last) {
                 }
                 u8* b = malloc(0x10000);
                 gmem_read(prog, b, 0x10000);
-                snprintf(p, sizeof p, "captures/compute/c%02d_cs.bin", ns);
+                snprintf(p, sizeof p, "%scaptures/compute/c%02d_cs.bin", g_exedir, ns);
                 f = fopen(p, "wb");
                 if (f) {
                     fwrite(b, 1, 0x10000, f);
@@ -52,7 +54,7 @@ void compute_method(GpuChannel* ch, u32 m, u32 v, int last) {
                         if (!sz || sz > 0x10000) sz = 0x10000;
                         u8* cb = malloc(sz);
                         gmem_read(a, cb, sz);
-                        snprintf(p, sizeof p, "captures/compute/c%02d_cb%d.bin", ns, i);
+                        snprintf(p, sizeof p, "%scaptures/compute/c%02d_cb%d.bin", g_exedir, ns, i);
                         f = fopen(p, "wb");
                         if (f) {
                             fwrite(cb, 1, sz, f);

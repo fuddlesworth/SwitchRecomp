@@ -38,9 +38,11 @@ Windows runtime with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw).
 Every commit on `main` that builds everywhere is released as `SwitchRecomp-x86_64.AppImage` under the
 [nightly](https://github.com/fuddlesworth/SwitchRecomp/releases/tag/nightly) prerelease. It is the runtime with every
 library it needs, made with [pkgforge's tools](https://github.com/pkgforge-dev/Anylinux-AppImages), and runs on any
-Linux. Like the runtime the build makes, it finds a game by its own name: copy it next to the game's code as
-`games/Catherine.AppImage` (or just `games/Catherine`) to run `games/Catherine_code.so`. Recompiling the game still
-takes a clone of this repository and Clang. `scripts/make-appimage.sh` is what makes it.
+Linux. Point it at a game with `--game`, as in `./SwitchRecomp-x86_64.AppImage --game=games/Catherine`, which runs
+`games/Catherine_code.so` with `games/Catherine_data/`. Or copy it next to the game's code as
+`games/Catherine.AppImage` (or just `games/Catherine`): like the runtime the build makes, it then runs the game it is
+named after. Recompiling the game still takes a clone of this repository and Clang. `scripts/make-appimage.sh` is what
+makes it.
 
 ### Recompiling a game
 
