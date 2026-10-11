@@ -142,7 +142,7 @@ Common audit-time patterns in this repo (C runtime, Python recompiler):
 | Find a guest address squeezed into 32 bits | `ast-grep --pattern '(u32)$X' --lang c runtime`, then check whether `$X` is a guest address or pointer |
 | Find a direct GL call that bypasses the GL thread | `grep -rn 'r_gl[A-Z]' runtime --include='*.c' \| grep -v glq_gen.c`, and check that every `gl*` name `gpu/gl/renderer.c` uses is in `gpu/gl/glfn.h` and `gpu/gl/glq_gen.c` |
 | Find every syncpoint id not from `syncpt_alloc()` | `grep -rn 'syncpt' runtime/video/host1x.c runtime/hle/nvdrv.c runtime/gpu*.c` |
-| Find every service command a file answers | `grep -n 'case [0-9]*:' runtime/hle/services.c` (each answer must match what the SDK caller reads, see the `swr-service` skill) |
+| Find every service command a file answers | `grep -n 'case [0-9]*:' runtime/hle/am.c` (or the service's file) (each answer must match what the SDK caller reads, see the `swr-service` skill) |
 | Find every TODO/FIXME/HACK marker | `grep -rn 'TODO\|FIXME\|HACK\|XXX' runtime *.py tools scripts` |
 | Find a stale comment claim (e.g. "below 192") | `grep -rn "below 192" runtime` |
 | Find AI-ism punctuation in user-facing text | `grep -rn '—' README.md ROADMAP.md <changed user-facing files>`; then check for clause-joining `;` and stand-in ` - ` (exclude code comments and backticked code) |
