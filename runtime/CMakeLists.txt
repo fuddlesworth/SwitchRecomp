@@ -97,8 +97,9 @@ if(WIN32)
         target_link_options(swr-runtime PRIVATE -mconsole)
     endif()
 else()
+    # No -rdynamic: the game module gets the runtime through RtAPI and imports nothing from it, and exporting every
+    # global would let a library loaded later (a GL driver) bind its own symbols to ours by name
     target_link_libraries(swr-runtime PRIVATE pthread dl m)
-    target_link_options(swr-runtime PRIVATE -rdynamic)
 endif()
 if(SWR_H264)
     target_link_libraries(swr-runtime PRIVATE "${DEPS}/lib/libdecoder.a" "${DEPS}/lib/libcommon.a")
