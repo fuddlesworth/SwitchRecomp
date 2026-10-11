@@ -6,6 +6,7 @@ prebuilt binaries:
     deps/<target>/lib/libspvc.a                   SPIRV-Cross core + GLSL (LSFG shaders)
     deps/<target>/lib/libglslang-all.a            glslang, GLSL to SPIR-V (the Vulkan renderer's shaders)
     deps/<target>/include/{wels,spirv_cross,glslang}/  their headers
+    deps/win64/sdl3/                              SDL3, static (Windows only: Linux uses the system's SDL3)
     deps/host/bin/hactool[.exe]                   extracts game dumps (scripts/extract.py)
 
     python3 scripts/bootstrap.py                  for this machine (linux, or win64 on Windows)
@@ -108,6 +109,7 @@ def main():
         'third_party/SPIRV-Cross',
         'third_party/hactool',
         'third_party/glslang',
+        *(['third_party/SDL'] if a.target == 'win64' else []),
     )
 
     # OpenH264: only the decoder and the common code, the runtime never encodes
@@ -245,6 +247,45 @@ def main():
             os.path.join(REPO, 'third_party', 'glslang', 'LICENSE.txt'), os.path.join(out, 'LICENSE-glslang.txt')
         )
         stamp.write()
+
+    # SDL3 for the sdl3 backend on Windows, static so the runtime needs no DLL next to it. On Linux the system's SDL3
+    # comes with the Wayland, X11 and input libraries it loads
+    if a.target == 'win64':
+        stamp = Stamp(os.path.join(out, '.sdl3'), 'SDL', cc)
+        if stamp.current():
+            print('SDL3 is up to date')
+        else:
+            print('Building SDL3 (%s)' % a.target, flush=True)
+            bld, inst = os.path.join(work, 'sdl3'), os.path.join(out, 'sdl3')
+            shutil.rmtree(bld, ignore_errors=True)
+            shutil.rmtree(inst, ignore_errors=True)
+            run(
+                [
+                    'cmake',
+                    '-S',
+                    os.path.join(REPO, 'third_party', 'SDL'),
+                    '-B',
+                    bld,
+                    '-G',
+                    'Ninja',
+                    *cmake_cross,
+                    '-DCMAKE_C_COMPILER=' + cc,
+                    '-DCMAKE_CXX_COMPILER=' + cxx,
+                    '-DCMAKE_AR=' + ar_path,
+                    '-DCMAKE_BUILD_TYPE=Release',
+                    '-DCMAKE_INSTALL_PREFIX=' + inst,
+                    '-DSDL_SHARED=OFF',
+                    '-DSDL_STATIC=ON',
+                    '-DSDL_TEST_LIBRARY=OFF',
+                    '-DSDL_TESTS=OFF',
+                    '-DSDL_EXAMPLES=OFF',
+                ],
+                log,
+            )
+            run(['cmake', '--build', bld, '-j%d' % a.jobs], log)
+            run(['cmake', '--install', bld], log)
+            shutil.copy(os.path.join(REPO, 'third_party', 'SDL', 'LICENSE.txt'), os.path.join(out, 'LICENSE-SDL3.txt'))
+            stamp.write()
 
     # hactool runs on the machine doing the extraction, so only a native bootstrap builds it
     host = os.path.join(REPO, 'deps', 'host')

@@ -112,8 +112,10 @@ Catherine uses two audio paths, and both are silent today.
 - [x] The GL context: SDL creates it (EGL under Wayland) on the GPU thread. The GL worker's shared context is current
       on a hidden helper window, since EGL won't make one surface current on two threads.
 - [x] `backend_x11.c` stays as a fallback (`-DSWR_BACKEND=x11`), and CI keeps building it.
-- [ ] The SDL3 backend on Windows too, for controllers other than XInput ones (the win32 backend stays the default
-      there until then).
+- [x] The SDL3 backend on Windows too (`-DSWR_BACKEND=sdl3`), for controllers other than XInput ones and for the
+      Vulkan renderer. The bootstrap builds SDL3 statically from `third_party/SDL`, and CI builds both variants. The
+      Vulkan build runs Catherine under Wine. The win32 backend stays the default until the SDL3 one has run on real
+      Windows: under Wine, SDL3 can't open an OpenGL window at all, so that combination is only built.
 - [ ] Try a real controller: the mapping follows SDL's positional buttons, but no pad was at hand to test it.
 
 ## Phase 5: shaders

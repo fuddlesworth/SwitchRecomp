@@ -82,6 +82,12 @@ jobs:
         run: |
           cmake --preset mingw-cross
           cmake --build --preset mingw-cross
+      - name: Build the SDL3 backend and the Vulkan renderer too
+        run: |
+          cmake --preset mingw-cross -B build/mingw-sdl3 -DSWR_BACKEND=sdl3
+          cmake --build build/mingw-sdl3
+          cmake --preset mingw-cross -B build/mingw-vulkan -DSWR_BACKEND=sdl3 -DSWR_GPU=vulkan
+          cmake --build build/mingw-vulkan
 
   windows:
     name: Windows (${{ matrix.compiler }})
@@ -105,6 +111,17 @@ jobs:
           cmake --preset ${{ matrix.compiler }}
           if ($LASTEXITCODE) { exit 1 }
           cmake --build --preset ${{ matrix.compiler }}
+          if ($LASTEXITCODE) { exit 1 }
+      - name: Build the SDL3 backend and the Vulkan renderer too
+        run: |
+          . .\scripts\env.ps1 -Isolated
+          cmake --preset ${{ matrix.compiler }} -B build/sdl3 -DSWR_BACKEND=sdl3
+          if ($LASTEXITCODE) { exit 1 }
+          cmake --build build/sdl3
+          if ($LASTEXITCODE) { exit 1 }
+          cmake --preset ${{ matrix.compiler }} -B build/vulkan -DSWR_BACKEND=sdl3 -DSWR_GPU=vulkan
+          if ($LASTEXITCODE) { exit 1 }
+          cmake --build build/vulkan
           if ($LASTEXITCODE) { exit 1 }
       - name: Check the Python scripts
         run: |

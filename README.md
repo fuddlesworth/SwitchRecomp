@@ -101,6 +101,14 @@ WASD for the left stick, IJKL for the right stick, X or Space for A, Z for B, C 
 FPS limit, F5 writes a diagnostic trace, F7 records an .mp4 (Windows only), F8 saves a full-resolution PNG, F11 or
 Alt+Enter toggles fullscreen, and Escape quits.
 
+The SDL3 backend, the Linux default, also builds on Windows (the bootstrap builds SDL3 for it). It supports any
+controller SDL knows, not just XInput ones, and the Vulkan renderer needs it:
+
+```powershell
+cmake --preset gcc -B build\sdl3 -DSWR_BACKEND=sdl3; cmake --build build\sdl3                    # OpenGL
+cmake --preset gcc -B build\vulkan -DSWR_BACKEND=sdl3 -DSWR_GPU=vulkan; cmake --build build\vulkan
+```
+
 ## Settings and logs
 
 An update is applied when extracting, with `--update update.nsp`. It must be for the same title as the base game.
@@ -162,6 +170,7 @@ The Apache license covers only the SwitchRecomp code. Third-party components kee
 | Vulkan-Headers (Khronos) | Vulkan definitions | Apache 2.0, `third_party/Vulkan-Headers/LICENSE.md` |
 | volk (Arseny Kapoulkine) | Loading Vulkan | MIT, `third_party/volk/LICENSE.md` |
 | Vulkan Memory Allocator (AMD) | GPU memory for the Vulkan renderer | MIT, `third_party/VulkanMemoryAllocator/LICENSE.txt` |
+| SDL3 | Window and input (the sdl3 backend): the system's on Linux, built from the submodule on Windows | zlib, `third_party/SDL/LICENSE.txt` |
 | texture2ddecoder | BCn textures on GPUs without them | MIT, `runtime/bcn/LICENSE_texture2ddecoder.txt` |
 | lsfg-vk | LSFG pass layout, ported to GL in `runtime/lsfg.c` | MIT |
 | DejaVu Sans Mono | The on-screen overlay font (`runtime/overlay_font.h`) | Bitstream Vera / DejaVu license |
