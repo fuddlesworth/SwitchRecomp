@@ -33,6 +33,15 @@ in `cmake/dependencies.cmake`, and kept in `.cache/cpm` for every build folder a
 runtime. Only Clang is supported: a plain `cmake -B build` picks it too. `cmake --preset windows-cross` builds the
 Windows runtime with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw).
 
+### The nightly AppImage
+
+Every commit on `main` that builds everywhere is released as `SwitchRecomp-x86_64.AppImage` under the
+[nightly](https://github.com/fuddlesworth/SwitchRecomp/releases/tag/nightly) prerelease. It is the runtime with every
+library it needs, made with [pkgforge's tools](https://github.com/pkgforge-dev/Anylinux-AppImages), and runs on any
+Linux. Like the runtime the build makes, it finds a game by its own name: copy it next to the game's code as
+`games/Catherine.AppImage` (or just `games/Catherine`) to run `games/Catherine_code.so`. Recompiling the game still
+takes a clone of this repository and Clang. `scripts/make-appimage.sh` is what makes it.
+
 ### Recompiling a game
 
 Put `prod.keys` (and `title.keys`, for NSPs) in the repository root, or pass them with `--keys` and `--title-keys`.

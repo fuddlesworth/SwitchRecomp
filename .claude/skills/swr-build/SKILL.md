@@ -102,6 +102,16 @@ with a CMake too old for CMake 4, `EXCLUDE_FROM_ALL YES SYSTEM YES` for the rest
 builds. `OPTIONS` are cache variables of the whole build, not just that package. Then the license in README.md's
 table, and the version in the commit message. CI caches `.cache/cpm` on the file's hash.
 
+## The AppImage
+
+CI's `appimage` job installs the build into `/usr` in pkgforge's Arch container and runs `scripts/make-appimage.sh`,
+which bundles `swr-runtime` with quick-sharun and checks that a copy named `Probe.AppImage` looks for
+`Probe_code.so` next to itself. The `release` job replaces the `nightly` prerelease with it on every push to `main`
+that passed every other job. Locally, quick-sharun works from the host's libraries (it wants patchelf on PATH) and
+bundles the full Mesa, so the AppImage comes out several times bigger than CI's, which uses pkgforge's debloated
+packages. Inside an AppImage argv[0] points into its mount: anything that finds files next to the runtime goes
+through `g_exedir`, which `main.c` takes from `$APPIMAGE`.
+
 ## Formatting
 
 `scripts/format.sh` before committing, `--check` to see what is off. It needs clang-format 23 exactly (another

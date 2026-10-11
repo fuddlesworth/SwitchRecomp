@@ -39,6 +39,9 @@ How the pieces fit:
 - [x] CMake build with Clang only (23 in development), C23 and C++23. GCC was dropped: one compiler for the runtime,
       the game code and the libraries. Presets `default` and `windows-cross`.
 - [x] FreeBSD builds (`plat.c`'s mmap flags and crash handler), and CI builds it in a FreeBSD 15.1 VM.
+- [x] A nightly AppImage of the runtime that runs on any Linux, made with pkgforge's quick-sharun in CI and released
+      under the rolling `nightly` tag after every green push to `main`. The runtime takes its name and folder from
+      `$APPIMAGE`, so a copy named after a game finds the game's code as the bare runtime does.
 - [x] Scripts for the whole pipeline: extract a dump, recompile, deploy the runtime into `games/`.
 - [x] Formatting: clang-format 23 and ruff through `scripts/format.sh`, applied to the whole history.
 - [x] Windows: `scripts/bootstrap.ps1` downloads a pinned, checksummed toolchain (llvm-mingw, CMake, Ninja, NASM and

@@ -119,7 +119,7 @@ static void split_path(const char* argv0) {
     const char* base = s ? s + 1 : p;
     strncpy(g_exename, base, 255);
     char* dot = strrchr(g_exename, '.');
-    if (dot && (!strcmp(dot, ".exe") || !strcmp(dot, ".EXE"))) *dot = 0;
+    if (dot && (!strcmp(dot, ".exe") || !strcmp(dot, ".EXE") || !strcmp(dot, ".AppImage"))) *dot = 0;
     if (s) {
         s[1] = 0;
         strncpy(g_exedir, p, 1023);
@@ -128,7 +128,13 @@ static void split_path(const char* argv0) {
 }
 
 int swr_main(int argc, char** argv) {
-    split_path(argv[0]);
+    /* In an AppImage argv[0] points into its mount (APPDIR). APPIMAGE is the file that was run, so a copy named after
+       the game (games/Catherine or games/Catherine.AppImage) finds games/Catherine_code.so like the bare runtime does.
+       Both variables are inherited, so they only count when this runtime is the one inside the mount */
+    const char *appimage = getenv("APPIMAGE"), *appdir = getenv("APPDIR");
+    int in_appimage =
+        appimage && *appimage && appdir && *appdir && argv[0] && !strncmp(argv[0], appdir, strlen(appdir));
+    split_path(in_appimage ? appimage : argv[0]);
     char ini[1400];
     snprintf(ini, sizeof ini, "%s%s.ini", g_exedir, g_exename);
     ini_open(ini);
