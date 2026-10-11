@@ -4,7 +4,7 @@ A Linux-first fork of SwitchRecomp by MZ Labs, a static recompiler for Switch ga
 and compiled into `<Game>_code.so`, and the runtime in `runtime/` emulates the OS (kernel, IPC, services) and the GPU
 (Maxwell command buffers and shaders, drawn with OpenGL). Catherine: Full Body (Asian release, 0100BC4010896000) is
 the game every change is checked against. `README.md` has setup and commands, `ROADMAP.md` the plan and current
-state. This file holds the rules sessions get wrong and points to the skills that carry the procedures.
+state, `docs/ARCHITECTURE.md` how the parts fit together. This file holds the rules sessions get wrong and points to the skills that carry the procedures.
 
 ## Rules
 

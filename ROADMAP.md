@@ -256,5 +256,5 @@ variant and run on Catherine with both renderers.
       is six files (`kernel.c`, `thread.c`, `sync.c`, `svc.c`, `svc_mem.c`, `debug.c`), sharing
       `kernel/kernel_int.h`. The platform layer is a file per OS (`plat_posix.c`, `plat_win32.c` with
       `profiler_win32.c`), and `plat.c` keeps logging.
-- [ ] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.
+- [x] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.
 
