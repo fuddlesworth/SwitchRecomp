@@ -1,4 +1,4 @@
-/* Compute: the compute class's launches (QMD), as gpu/gl/renderer.c's gpu_gl_dispatch reads them, on the separate compute
+/* Compute: the compute class's launches (QMD), as gpu/gl/renderer.c's glr_dispatch reads them, on the separate compute
    queue. Each dispatch gets copies of its constant and storage buffers in a host-visible arena and is recorded into
    a batch. The batch is submitted and its results land in guest memory before anything could observe them: a read
    of that memory (gmem_read and gmem_ptr call cs_mem_need), anything after it in the stream
@@ -265,10 +265,10 @@ void vk_compute_before_write(u64 gva, u64 size) {
     if (!size)
         vk_compute_land();
     else if (g_cs_any)
-        vkr_cs_mem_need(gva, size);
+        vk_compute_mem_need(gva, size);
 }
 /* a read of guest memory: results for it have to be there first */
-void vkr_cs_mem_need(u64 a, u64 n) {
+void vk_compute_mem_need(u64 a, u64 n) {
     if (g_landing || a >= g_out_hi || a + n <= g_out_lo) return;
     for (int i = 0; i < g_nout; i++)
         if (a < g_out[i].addr + g_out[i].size && g_out[i].addr < a + n) {

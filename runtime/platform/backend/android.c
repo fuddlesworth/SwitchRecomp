@@ -51,9 +51,9 @@ void backend_ini(const char* k, const char* v) {
 int video_has_gl(void) { return 1; }
 void video_init(const char* title) {
     (void)title;
-    gpu_gl_start();
+    g_renderer->start();
 }
-void video_present_rgba(const u32* px, int w, int h, int stride) { gpu_gl_present_cpu(px, w, h, stride); }
+void video_present_rgba(const u32* px, int w, int h, int stride) { g_renderer->present_cpu(px, w, h, stride); }
 void frontend_frame(void) {}
 
 /* ---------------- EGL, GPU thread */

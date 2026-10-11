@@ -33,7 +33,7 @@ The orchestrator applies your fixes without re-deriving them. A confident causal
 - **Shaders**: SPH header (80 bytes), instruction bundles (a scheduling word every 4 words), dual vertex programs (VertexA in slot 0 writes the position, VertexB in slot 1 the varyings; `shader_merge_dual`), attribute and render-target integer types in the cache key. A translated shader that compiles can still be wrong: compare with the Maxwell semantics of each opcode.
 - **GL thread**: every GL call goes through the glq queue (`gpu/gl/glq_gen.c` wrappers); a call made directly from another thread has no context. Queued calls that return data are synchronous (`glq_sync`).
 - **Caches and write-back**: textures and buffers are cached by guest address; guest writes from the CPU must invalidate them, and GPU writes (render targets, compute output, DMA copies) must reach guest memory before the game reads it, and never after the game has reused that memory.
-- **Performance**: per-draw work in `r3d_draw_gl` runs thousands of times per frame; flag per-draw allocation, hashing of whole programs, or redundant GL state changes.
+- **Performance**: per-draw work in `glr_draw` and `vkr_draw` runs thousands of times per frame; flag per-draw allocation, hashing of whole programs, or redundant GL state changes.
 
 ## Known past-bug shapes to check for
 - Only VertexB was translated, so every vertex sat at the origin and the screen stayed black while every draw "succeeded".

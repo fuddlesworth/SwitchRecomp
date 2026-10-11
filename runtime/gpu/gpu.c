@@ -18,7 +18,7 @@ static PMutex g_gpulock;
 /* ============================================================ GPU memory */
 int gmem_read(u64 gva, void* dst, u64 size) {
     u8* d = dst;
-    if (g_cs_any) cs_mem_need(gva, size);
+    if (g_cs_any) g_renderer->cs_mem_need(gva, size);
     while (size) {
         u64 cpu = gmmu_translate(gva);
         u64 n = 0x1000 - (gva & 0xFFF);
@@ -62,7 +62,7 @@ int gmem_write(u64 gva, const void* src, u64 size) {
 }
 u8* gmem_ptr(u64 gva, u64 size) {
     /* host pointer, only if the whole range is contiguous */
-    if (g_cs_any) cs_mem_need(gva, size);
+    if (g_cs_any) g_renderer->cs_mem_need(gva, size);
     u64 c0 = gmmu_translate(gva);
     if (!c0) return NULL;
     for (u64 o = (0x1000 - (gva & 0xFFF)); o < size; o += 0x1000) {
@@ -152,9 +152,9 @@ static void puller_method(GpuChannel* ch, u32 m, u32 v) {
         case 0x1D: { /* Syncpoint */
             u32 id = (v >> 8) & 0xFFF;
             if (v & 1) {
-                gpu_gl_stream_incr(id);
+                g_renderer->stream_incr(id);
             } else {
-                gpu_gl_before_syncwait();
+                g_renderer->before_syncwait();
                 syncpt_wait(id, r[0x1C], 2000000000);
             }
             break;
@@ -357,7 +357,7 @@ void gpu_init(void) {
 volatile u64 g_gpu_submits;
 void gpu_submit(u64* e, u32 n, u32 channel, u32 incs) {
     g_gpu_submits++;
-    if (gpu_async_submit(e, n, channel, incs)) return;
+    if (g_renderer->async_submit(e, n, channel, incs)) return;
     gpu_submit_now(e, n, channel);
     gpu_signal_point();
     for (u32 i = 0; i < incs; i++) syncpt_incr(channel);

@@ -161,7 +161,7 @@ static void vt_frame(void) {
     /* cost per frame = GPU thread busy time. don't use full frame time, the game's own waits
      would feed back and slow the clock further */
     {
-        u64 b = gpu_busy_ns();
+        u64 b = g_renderer->busy_ns();
         static u64 lb;
         if (g_vt_lastfr) {
             double d = (double)(b - lb);
@@ -609,7 +609,7 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     }
     a += offset;
     if (g_gl) {
-        gpu_gl_present_buffer(a, w, h, pitch, layout, bhl, fmt);
+        g_renderer->present_buffer(a, w, h, pitch, layout, bhl, fmt);
     } else {
         pm_lock(&g_flock);
         if (g_fw != (int)w || g_fh != (int)h) {
@@ -862,7 +862,7 @@ int swr_main(int argc, char** argv) {
         }
         /* auto diag only with diag=1, F5 always works */
         {
-            if (g_opt_diag && (tick == 60 * 20 || tick == 60 * 40)) { gpu_gl_dump_rts(); }
+            if (g_opt_diag && (tick == 60 * 20 || tick == 60 * 40)) { g_renderer->dump_rts(); }
         }
         {
             static int last_frames = -1, still = 0, dumps = 0;
@@ -885,7 +885,7 @@ int swr_main(int argc, char** argv) {
             next = now;
     }
     save_hints();
-    { gpu_gl_rec_finish(); }
+    { g_renderer->rec_finish(); }
     LOG("Exit.\n");
     fflush(NULL);
 #if defined(_WIN32)

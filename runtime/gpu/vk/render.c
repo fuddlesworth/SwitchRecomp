@@ -3,7 +3,7 @@
    at 0x54E, address at 0x3F8, size at 0x48A, format and tiling at 0x3FA). A dynamic rendering pass stays open while
    draws and clears keep the same set, and ends before anything that copies or transitions images.
 
-   A draw reads the same registers gpu/gl/renderer.c's r3d_draw_gl and apply_state do. The viewport maps the guest's
+   A draw reads the same registers gpu/gl/renderer.c's glr_draw and apply_state do. The viewport maps the guest's
    transform as is (y down, like the hardware), so no shader flips y; facing follows from that (see the raster
    state below). */
 #include <string.h>

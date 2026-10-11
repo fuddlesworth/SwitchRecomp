@@ -25,7 +25,7 @@ How the pieces fit:
 - **GPU**: emulated at the hardware level. The game's own NVN driver is recompiled with the game and writes Maxwell
   command buffers. `runtime/gpu/` decodes them (`gpu.c`, `engines.c`, `maxwell3d.c`), `gpu/shader/` translates
   Maxwell shader binaries to GLSL, and a renderer draws: `gpu/vk/` with Vulkan or `gpu/gl/` with OpenGL.
-  `gpu/renderer.c` calls the active one through the interface `gpu/null/null.c` shows (about 20 functions).
+  The front end reaches the active one through `g_renderer`, a table of about 20 operations (`gpu/renderer.h`).
 - **Video**: `runtime/video/host1x.c` emulates NVDEC and VIC, with OpenH264 doing the H.264 decode.
 
 ## Phase 0: repository and build
@@ -242,8 +242,10 @@ variant and run on Catherine with both renderers.
       `missing-variable-declarations` and `nested-externs` keep it that way. It turned up three copies of the 2D
       blit surface struct passed as `void*`, renderer functions whose definitions didn't match the interface's types,
       a backend static shadowing an LSFG global, and declarations of functions that no longer exist.
-- [ ] The renderer interface as a table of operations that the OpenGL, Vulkan and null renderers fill in, in place of
-      the `gpu_gl_*` names, `gpu/renderer.c`'s macros and `gpu/gl/names.h`.
+- [x] The renderer interface as a table of operations (`Renderer` in `gpu/renderer.h`) that the OpenGL, Vulkan and
+      null renderers each fill in completely, and `g_renderer` pointing at the active one. It replaces the
+      `gpu_gl_*` names, `gpu/renderer.c`'s forwarding macros and `gpu/gl/names.h`, and each renderer's functions are
+      now static to its own files.
 - [ ] The big files split along their seams: `gpu/gl/renderer.c`, `shader.c`, `hle/services.c` (one file per service
       family), `main.c`, `kernel.c`, `cpu_helpers.c`, `plat.c`, `host1x.c`, `gpu/engines.c`.
 - [ ] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.

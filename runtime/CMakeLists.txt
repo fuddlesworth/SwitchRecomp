@@ -68,9 +68,6 @@ else()
 endif()
 if(SWR_VULKAN)
     swr_require_dep(lib/libglslang-all.a SWR_VULKAN)
-    # gpu/gl/renderer.c's side of the renderer interface takes glr_ names, gpu/renderer.c calls the active renderer
-    set_source_files_properties(gpu/gl/renderer.c PROPERTIES COMPILE_OPTIONS
-                                "-include;${CMAKE_CURRENT_SOURCE_DIR}/gpu/gl/names.h")
     swr_component(spirv gpu/vk/spirv.c)
     # volk loads Vulkan through the window backend's loader, so nothing links against libvulkan
     swr_component(vk gpu/vk/renderer.c gpu/vk/device.c gpu/vk/cmd.c gpu/vk/format.c gpu/vk/surface.c gpu/vk/texture.c

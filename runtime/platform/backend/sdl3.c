@@ -31,9 +31,6 @@ static char g_title[256]; /* the window title without the status the Windows-onl
 static SDL_Window* g_win;
 static SDL_Window* g_helper; /* hidden, for the GL worker's context: EGL won't make one surface current twice */
 static SDL_GLContext g_ctx, g_wctx;
-#ifndef SWR_VULKAN
-static const int g_vkr = 0; /* only OpenGL in this build */
-#endif
 static volatile int g_ww = 1280, g_wh = 720;
 static int g_seconds = 0, g_maxframes = -1;
 static char g_shot[1024];
@@ -109,12 +106,12 @@ void video_init(const char* title) {
 #ifdef SWR_VULKAN
     if (renderer_wants_vulkan()) {
         if (open_window(title, 1)) {
-            g_vkr = 1;
-            if (vkr_start()) {
+            g_renderer = &vk_renderer;
+            if (g_renderer->start()) {
                 LOG("renderer: Vulkan (renderer=opengl in the .ini for OpenGL)\n");
                 return;
             }
-            g_vkr = 0;
+            g_renderer = &gl_renderer;
             SDL_DestroyWindow(g_win);
             g_win = NULL;
         }
@@ -123,7 +120,7 @@ void video_init(const char* title) {
 #endif
     if (!open_window(title, 0)) fatal("SDL could not open a window: %s", SDL_GetError());
     LOG("renderer: OpenGL\n");
-    gpu_gl_start();
+    g_renderer->start();
 }
 
 #ifdef SWR_VULKAN
@@ -170,8 +167,8 @@ void backend_window_size(int* w, int* h) {
     *h = g_wh;
 }
 void video_present_rgba(const u32* px, int w, int h, int stride) {
-    /* the Vulkan renderer presents from the game's buffer (gpu_gl_present_buffer) */
-    if (!g_vkr) gpu_gl_present_cpu(px, w, h, stride);
+    /* the Vulkan renderer presents from the game's buffer (present_buffer) */
+    g_renderer->present_cpu(px, w, h, stride);
 }
 
 static const char* HELP = "Controller: like a Switch controller, buttons by position.\n\n"
@@ -259,16 +256,16 @@ static void hotkey(SDL_Keycode k) {
         }
         case SDLK_F5: {
             kernel_dump_threads();
-            gpu_gl_dump_rts();
+            g_renderer->dump_rts();
             break;
         }
 #ifdef _WIN32
         case SDLK_F7: /* the recorder and the full-resolution screenshot are OpenGL's */
-            if (!g_vkr) g_rec_toggle = 1;
+            if (g_renderer == &gl_renderer) g_rec_toggle = 1;
             break;
 #endif
         case SDLK_F8: {
-            if (!g_vkr) g_shot8_req = 1;
+            if (g_renderer == &gl_renderer) g_shot8_req = 1;
             break;
         }
         case SDLK_F11: set_fullscreen(!g_fullscreen); break;
@@ -391,11 +388,11 @@ void frontend_frame(void) {
         plat_mkdir("captures");
         snprintf(p, sizeof p, "captures/screenshot_%04d%02d%02d_%02d%02d%02d", t.tm_year + 1900, t.tm_mon + 1,
                  t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
-        gpu_gl_screenshot(p);
+        g_renderer->screenshot(p);
     }
     u64 el = plat_ns() - g_start;
     if ((g_maxframes >= 0 && g_frames >= g_maxframes) || (g_seconds && el >= (u64)g_seconds * 1000000000ull)) {
-        u64 h = gpu_gl_screenshot(g_shot[0] ? g_shot : NULL);
+        u64 h = g_renderer->screenshot(g_shot[0] ? g_shot : NULL);
         fprintf(stderr, "\nframes=%d hash=%016llx %dx%d\n", g_frames, (unsigned long long)h, g_ww, g_wh);
         save_hints();
         fflush(NULL);

@@ -32,9 +32,9 @@ The sdl3 backend builds both renderers into one runtime (`SWR_VULKAN`, on by def
 headless have only OpenGL). `renderer=auto|vulkan|opengl` in the game's .ini, or `--renderer=opengl` on the command
 line (`run_game.py Catherine -- --renderer=opengl`), picks one at startup, and the log says which ran
 (`renderer: ...`). auto means Vulkan, falling back to OpenGL when Vulkan can't start (no driver, no Vulkan 1.3) or
-when LSFG frame generation is set up. `gpu/renderer.c` holds the interface names and calls the active renderer:
-`gpu/gl/renderer.c`'s side gets `glr_` names from `gpu/gl/names.h` (force-included by CMake, so upstream's file is unchanged),
-`gpu/vk/renderer.c`'s side is `vkr_`.
+when LSFG frame generation is set up. The interface is the `Renderer` table in `gpu/renderer.h`: the OpenGL, Vulkan
+and null renderers each fill in every operation (`gl_renderer`, `vk_renderer`, `null_renderer`), the backend points
+`g_renderer` at the one it started, and everything else calls `g_renderer->draw(...)` and so on.
 
 The build also makes `swr-shaderc`. `swr-shaderc --nvn DIR --cache games/shader_cache/spirv` pre-translates a game's
 NVN shader files into the SPIR-V cache (`scripts/recomp.py` runs it on any romfs folder holding them); to measure what
