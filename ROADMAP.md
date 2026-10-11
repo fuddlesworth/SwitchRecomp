@@ -253,6 +253,8 @@ variant and run on Catherine with both renderers.
       is four (`shader.c`, `decode.c`, `translate.c`, `corpus.c`), sharing `gpu/shader/translator.h`.
       The services are one file per family in `hle/`, sharing `hle/services_int.h`. `core/main.c` is split
       by job: options, the guest clock, RtAPI, the crash report and the CPU-side present stay in `core/`, and
-      the audio renderer update and the shared fonts moved to `hle/audren.c` and `hle/pl.c`.
+      the audio renderer update and the shared fonts moved to `hle/audren.c` and `hle/pl.c`. The kernel
+      is six files (`kernel.c`, `thread.c`, `sync.c`, `svc.c`, `svc_mem.c`, `debug.c`), sharing
+      `kernel/kernel_int.h`.
 - [ ] `docs/ARCHITECTURE.md`: the components, what each owns, and how a frame flows through them.
 
