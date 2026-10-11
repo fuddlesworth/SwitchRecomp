@@ -32,7 +32,7 @@ jobs:
         preset: [gcc, clang]
     steps:
       - name: Install tools
-        run: pacman -Syu --noconfirm --needed base-devel cmake ninja nasm python git clang mesa sdl3
+        run: pacman -Syu --noconfirm --needed base-devel cmake ninja nasm python git clang sdl3
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -45,10 +45,10 @@ jobs:
         run: |
           cmake --preset ${{ matrix.preset }}
           cmake --build --preset ${{ matrix.preset }}
-      - name: Build without the Vulkan renderer too
+      - name: Build the headless backend too
         run: |
-          cmake -B build/novulkan -G Ninja -DSWR_VULKAN=OFF -DCMAKE_C_COMPILER=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} -DCMAKE_CXX_COMPILER=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }}
-          cmake --build build/novulkan
+          cmake -B build/headless -G Ninja -DSWR_BACKEND=headless -DSWR_DEPLOY=OFF -DCMAKE_C_COMPILER=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} -DCMAKE_CXX_COMPILER=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }}
+          cmake --build build/headless
       - name: Check the Python scripts
         run: |
           python -m compileall -q switchrecomp scripts tools

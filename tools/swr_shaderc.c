@@ -19,7 +19,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-int g_texoff_emul; /* gpu/gl/renderer.c's, read by the translator */
 
 static int write_file(const char* path, const void* p, size_t n) {
     FILE* f = fopen(path, "wb");

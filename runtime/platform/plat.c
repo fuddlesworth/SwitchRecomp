@@ -6,7 +6,6 @@
    plat_posix.c or plat_win32.c (with profiler_win32.c) */
 #include "platform/plat.h"
 #include "core/main.h"
-#include "gpu/gl/overlay.h"
 #include "gpu/renderer.h"
 #include "platform/backend.h"
 #include "platform/log.h"
@@ -63,12 +62,7 @@ void logf_(int lvl, const char* fmt, ...) {
         bol = L && buf[L - 1] == '\n';
         fflush(g_logf);
     }
-    if (lvl <= 1 || g_verbose >= 2) {
-        fputs(buf, stderr);
-#if defined(__ANDROID__)
-        android_log(buf);
-#endif
-    }
+    if (lvl <= 1 || g_verbose >= 2) { fputs(buf, stderr); }
     pm_unlock(&g_logm);
 }
 void fatal(const char* fmt, ...) {
@@ -80,18 +74,6 @@ void fatal(const char* fmt, ...) {
     logf_(0, "FATAL: %s\n", buf);
 #if defined(_WIN32)
     { win_fatal_box(buf); }
-#endif
-#if defined(__ANDROID__)
-    {
-        char m[600];
-        snprintf(m, sizeof m, "Error: %.500s\n(see %s.log)", buf, g_exename);
-        overlay_message(m);
-        static u32 black[64 * 36];
-        for (int i = 0; i < 150; i++) {
-            g_renderer->present_cpu(black, 64, 36, 64 * 4);
-            plat_sleep_ns(200000000);
-        }
-    }
 #endif
     fflush(NULL);
     _exit(1);

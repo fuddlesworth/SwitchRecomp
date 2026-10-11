@@ -42,7 +42,7 @@ from it.
 | `core/` | Startup (`main.c`): loading the module, the settings in `<Game>.ini` (`options.c`), the guest clock (`clock.c`), the `RtAPI` functions (`rtapi.c`), crash reports (`crash.c`) |
 | `kernel/` | The Horizon kernel, emulated at a high level: handles and kernel objects, threads, synchronization and address arbitration, the SVC dispatch, the guest address space (`mem.c`) and IPC (`ipc.c`) |
 | `hle/` | The system services the game talks to over IPC, one file per family (am, set, time, acc, audio, hid, fs, vi...), and nvdrv, the GPU driver's device files |
-| `gpu/` | The GPU front end (GPFIFO, the 3D, compute, 2D, DMA and inline-to-memory engines), the shader translator (`shader/`), the renderer interface and the renderers (`gl/`, `vk/`, `null/`) |
+| `gpu/` | The GPU front end (GPFIFO, the 3D, compute, 2D, DMA and inline-to-memory engines), the shader translator (`shader/`), the renderer interface and the renderers (`vk/`, and `null/` for the headless build) |
 | `video/` | host1x: the video decoder (NVDEC, with OpenH264) and the video image compositor (VIC) |
 | `platform/` | The operating system layer (`plat_posix.c`, `plat_win32.c`) and the window backend (`backend/sdl3.c`, or `headless.c` for tests) |
 
@@ -69,13 +69,12 @@ the console would, since the game's SDK code checks the replies and asserts when
    memory, exactly as on the console.
 2. It submits them through nvdrv: an ioctl on `/dev/nvhost-gpu` reaches `hle/nvdrv.c`, which hands the GPFIFO entries
    to `gpu_submit` (`gpu/gpu.c`).
-3. The renderer decides where that runs. OpenGL queues it for its own GPU thread, and Vulkan runs it on the
-   submitting thread. Either way, `gpu.c` reads the command stream and sends each method to its engine: the 3D engine
+3. The Vulkan renderer runs it on the submitting thread: `gpu.c` reads the command stream and sends each method to its engine: the 3D engine
    (`engines.c`, `maxwell3d.c`), the macro engine (`mme.c`), compute (`compute.c`), the 2D blitter (`fermi2d.c`),
    DMA copies (`dma.c`).
 4. When the 3D engine sees a draw, it calls the active renderer through `g_renderer` (`gpu/renderer.h`). The renderer
-   reads the GPU's state registers, finds or translates the shaders (`gpu/shader/`, Maxwell SASS to GLSL, then SPIR-V
-   for Vulkan), finds or uploads the textures and buffers from guest memory, and draws.
+   reads the GPU's state registers, finds or translates the shaders (`gpu/shader/`, Maxwell SASS to GLSL, then
+   SPIR-V with glslang), finds or uploads the textures and buffers from guest memory, and draws.
 5. Syncpoint increments in the stream tell the game the GPU got past a point. They go through the renderer
    (`stream_incr`), so that results the game can observe, like compute output, are in guest memory first.
 6. The game presents by queuing a buffer to vi (`hle/vi.c`), which calls the renderer's `present_buffer`. The
@@ -87,13 +86,10 @@ the console would, since the game's SDK code checks the replies and asserts when
 `Renderer` in `gpu/renderer.h` is the table of operations the front end calls: draws, clears, blits, compute
 dispatches, render target flushes and reloads, syncpoints, presenting. Each renderer fills in all of them.
 
-- **Vulkan** (`gpu/vk/`), the default: dynamic rendering, pipelines keyed by state, guest memory mirrored in buffers
-  with write tracking, and compute on its own queue, with results landing in guest memory before anything the game
-  can observe.
-- **OpenGL** (`gpu/gl/`): the original renderer. It runs on its own GPU thread, with GL calls queued to that thread
-  (`glq`). It also has the features Vulkan doesn't have yet: LSFG frame generation, the F7 recorder, the F5 trace and
-  F8 screenshots.
+- **Vulkan** (`gpu/vk/`): dynamic rendering, pipelines keyed by state, guest memory mirrored in buffers with write
+  tracking, and compute on its own queue, with results landing in guest memory before anything the game can observe.
+  It needs Vulkan 1.3, and the runtime stops with a message when the GPU or driver doesn't have it.
 - **null** (`gpu/null/`), for the headless build: draws nothing, and finishes each submission at once.
 
-The window backend picks the renderer at startup (`renderer=` in the `.ini`), and falls back to OpenGL when Vulkan
-can't start.
+The release's OpenGL renderer was removed on 2026-10-11, with what only it had: LSFG frame generation, the F7
+recorder, the F5 frame trace, F8 full-resolution screenshots and dynamic resolution.

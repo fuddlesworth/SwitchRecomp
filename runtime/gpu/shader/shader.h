@@ -60,7 +60,7 @@ extern int g_glsl_version, g_glsl_es;
 extern int
     g_vs_layer_ext; /* 1 ARB_shader_viewport_layer_array, 2 AMD_vertex_shader_layer, 3 NV_viewport_array2, 0 none */
 extern int g_rs_binding;  /* binding of the resolution-scale UBO */
-extern int g_texoff_emul; /* texture offsets emulated (the GL renderer owns it) */
+extern int g_texoff_emul; /* texture offsets emulated in GL mode, for drivers that refused them */
 int shader_vk_set(int stage);
 /* malloc'd GLSL, or NULL */
 char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si);

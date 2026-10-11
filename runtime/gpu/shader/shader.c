@@ -15,6 +15,7 @@ int g_vs_layer_ext = 1; /* 1 ARB_shader_viewport_layer_array, 2 AMD_vertex_shade
 int g_glsl_es = 0;
 int g_rs_binding = 83; /* binding of the res-scale UBO, set by gpu_gl */ /* GLSL ES 3.20 (Android) */
 int g_shader_vulkan; /* emit GLSL 4.50 for Vulkan (gpu/vk/spirv.c compiles it to SPIR-V), with the bindings in shader.h */
+int g_texoff_emul;
 
 void sb_put(Sb* s, const char* t) {
     size_t l = strlen(t);

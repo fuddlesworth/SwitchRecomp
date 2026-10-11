@@ -75,7 +75,7 @@ void fermi2d_method(GpuChannel* ch, u32 m, u32 v) {
             if (sy < 0) sy = 0;
         }
         if (r3d_blit(&src, &dst, dx0, dy0, dw, dh, sx, sy, sdx, sdy)) return;
-        if (g_gl) {
+        if (g_renderer_up) {
             g_renderer->rt_flush(src.addr);
             g_renderer->rt_flush(dst.addr);
         }
@@ -94,6 +94,6 @@ void fermi2d_method(GpuChannel* ch, u32 m, u32 v) {
                 gmem_write(dst.addr + dof, px, bpp);
             }
         }
-        if (g_gl) g_renderer->rt_reload(dst.addr);
+        if (g_renderer_up) g_renderer->rt_reload(dst.addr);
     }
 }

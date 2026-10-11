@@ -1,5 +1,5 @@
 /* Shaders and pipelines. A guest shader is translated to GLSL in the translator's Vulkan mode (shader.c), patched
-   like gpu/gl/renderer.c's sh_post (alpha test, depth range) with push constants instead of uniforms, compiled to SPIR-V
+   for what Vulkan does differently (vk_glsl_post: the alpha test and the depth range, with push constants), compiled to SPIR-V
    through the on-disk cache and kept as a module. Every stage uses the same descriptor set layout, one set per
    stage (shader_vk_set). Pipelines are made per PipeKey: the shaders, vertex layout, attachment formats and blend
    state; everything else is dynamic state. */

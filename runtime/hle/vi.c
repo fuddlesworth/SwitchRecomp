@@ -198,17 +198,18 @@ static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
                 }
             }
             if (len >= 0x28) {
+                /* the buffer's crop and transform. The renderer presents the whole buffer and ignores them */
                 i32 cr[4];
+                u32 tr;
                 memcpy(cr, qi + 0x0C, 16);
-                for (int i = 0; i < 4; i++) g_vi_crop[i] = cr[i];
-                memcpy((void*)&g_vi_transform, qi + 0x20, 4);
+                memcpy(&tr, qi + 0x20, 4);
                 {
                     static u32 lt = 0xFFFFFFFFu;
                     static i32 lc[4];
-                    if (lt != g_vi_transform || memcmp(lc, cr, 16)) {
-                        lt = g_vi_transform;
+                    if (lt != tr || memcmp(lc, cr, 16)) {
+                        lt = tr;
                         memcpy(lc, cr, 16);
-                        LOG("vi: crop (%d,%d)-(%d,%d) transform %x\n", cr[0], cr[1], cr[2], cr[3], lt);
+                        LOG("vi: crop (%d,%d)-(%d,%d) transform %x (not applied)\n", cr[0], cr[1], cr[2], cr[3], lt);
                     }
                 }
             }

@@ -1,6 +1,6 @@
 # Builds the SwitchRecomp runtime for Linux, or for Windows with MinGW-w64 (natively, or cross-built). The
 # game module (<Game>_code.so or .dll) comes from the recompiler (python3 -m switchrecomp), see scripts/recomp.py. Run scripts/bootstrap.py
-# once first: it builds OpenH264 and SPIRV-Cross into deps/linux or deps/win64.
+# once first: it builds OpenH264 and glslang (and SDL3 for Windows) into deps/linux or deps/win64.
 #
 #   cmake --preset gcc && cmake --build --preset gcc        (or clang, or mingw-cross; see CMakePresets.json)
 #
@@ -30,14 +30,13 @@ if(NOT SWR_BACKEND MATCHES "^(sdl3|headless)$")
     message(FATAL_ERROR "SWR_BACKEND=${SWR_BACKEND}: the x11, x11es and win32 backends were removed, sdl3 covers them. "
                         "Configure a new build folder, or pass -DSWR_BACKEND=sdl3.")
 endif()
-# OpenGL is always built in. The sdl3 backend can also have Vulkan, picked at startup (renderer= in the game's .ini)
+# The renderer is Vulkan (1.3), which the sdl3 backend draws with. The headless backend has none.
 if(SWR_BACKEND STREQUAL "sdl3")
-    option(SWR_VULKAN "Build the Vulkan renderer in too (Vulkan 1.3, the default renderer when the GPU has it)" ON)
+    set(SWR_VULKAN ON)
 else()
     set(SWR_VULKAN OFF)
 endif()
 option(SWR_H264 "Decode NVDEC video with OpenH264 (deps/)" ON)
-option(SWR_LSFG "LSFG frame generation, needs SPIRV-Cross (deps/)" ON)
 option(SWR_DEPLOY "Copy the runtime next to every recompiled game in SWR_GAMES_DIR after building" ON)
 set(SWR_GAMES_DIR "${CMAKE_SOURCE_DIR}/games" CACHE PATH "Folder holding the recompiled games")
 

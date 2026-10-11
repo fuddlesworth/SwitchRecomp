@@ -1,7 +1,6 @@
-/* SDL3 backend, the window backend on Linux and Windows: window, OpenGL 4.3+ context or Vulkan surface, keyboard and
-   gamepads. Runs natively on Wayland and on X11 (SDL_VIDEO_DRIVER=x11 picks X11), and takes the unattended-run options
-   (seconds, frames, shot, press, script). With the Vulkan renderer built in (SWR_VULKAN), renderer= picks one at startup, and
-   OpenGL takes over when Vulkan can't start. */
+/* SDL3 backend, the window backend on Linux and Windows: the window and its Vulkan surface, keyboard and gamepads. Runs
+   natively on Wayland and on X11 (SDL_VIDEO_DRIVER=x11 picks X11), and takes the unattended-run options (seconds,
+   frames, shot, press, script). */
 #include "core/main.h"
 #include "core/options.h"
 #include "core/rtapi.h"
@@ -19,19 +18,12 @@
 #include <unistd.h>
 #endif
 #include "gpu/renderer.h"
-#ifdef SWR_VULKAN
 #include "gpu/vk/vk.h"
 #include <SDL3/SDL_vulkan.h>
-#endif
 #include <SDL3/SDL.h>
 #include <time.h>
-#ifdef _WIN32
-static char g_title[256]; /* the window title without the status the Windows-only parts add to it */
-#endif
 
 static SDL_Window* g_win;
-static SDL_Window* g_helper; /* hidden, for the GL worker's context: EGL won't make one surface current twice */
-static SDL_GLContext g_ctx, g_wctx;
 static volatile int g_ww = 1280, g_wh = 720;
 static int g_seconds = 0, g_maxframes = -1;
 static char g_shot[1024];
@@ -58,29 +50,13 @@ void backend_ini(const char* k, const char* v) {
         g_press_len = strtoull(v, NULL, 10);
     else if (!strcmp(k, "script"))
         strncpy(g_script, v, 1023);
-#ifdef SWR_VULKAN
-    else
-        renderer_ini(k, v);
-#endif
 }
-int video_has_gl(void) { return 1; }
 
-/* the window, for Vulkan or for OpenGL, and its size in pixels */
-static int open_window(const char* title, int vulkan) {
-    if (vulkan)
-        g_win = SDL_CreateWindow(title, g_ww, g_wh, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
-    else {
-        SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
-        SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
-        SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
-        SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
-        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-        g_win = SDL_CreateWindow(title, g_ww, g_wh, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
-        if (g_win) g_helper = SDL_CreateWindow("SwitchRecomp GL worker", 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
-    }
+/* the window and its size in pixels */
+static int open_window(const char* title) {
+    g_win = SDL_CreateWindow(title, g_ww, g_wh, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
     if (!g_win) {
-        LOG("video: SDL could not open a%s window: %s\n", vulkan ? " Vulkan" : "", SDL_GetError());
+        LOG("video: SDL could not open a Vulkan window: %s\n", SDL_GetError());
         return 0;
     }
     int w = 0, h = 0;
@@ -93,38 +69,16 @@ static int open_window(const char* title, int vulkan) {
 }
 
 void video_init(const char* title) {
-#ifdef _WIN32
-    snprintf(g_title, sizeof g_title, "%s", title);
-#endif
-    /* let Mesa run its own glthread so driver work isn't on our GPU thread (Deck, AMD/Intel on Linux) */
-#ifndef _WIN32
-    if (!getenv("SWR_NO_GLTHREAD")) setenv("mesa_glthread", "true", 0);
-#endif
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) fatal("SDL could not start its video: %s", SDL_GetError());
     LOG("video: SDL %d.%d.%d on %s\n", SDL_VERSIONNUM_MAJOR(SDL_GetVersion()), SDL_VERSIONNUM_MINOR(SDL_GetVersion()),
         SDL_VERSIONNUM_MICRO(SDL_GetVersion()), SDL_GetCurrentVideoDriver());
     g_start = plat_ns();
-#ifdef SWR_VULKAN
-    if (renderer_wants_vulkan()) {
-        if (open_window(title, 1)) {
-            g_renderer = &vk_renderer;
-            if (g_renderer->start()) {
-                LOG("renderer: Vulkan (renderer=opengl in the .ini for OpenGL)\n");
-                return;
-            }
-            g_renderer = &gl_renderer;
-            SDL_DestroyWindow(g_win);
-            g_win = NULL;
-        }
-        LOG("renderer: Vulkan can't start here (see above), using OpenGL\n");
-    }
-#endif
-    if (!open_window(title, 0)) fatal("SDL could not open a window: %s", SDL_GetError());
-    LOG("renderer: OpenGL\n");
-    g_renderer->start();
+    if (!open_window(title)) fatal("SDL could not open a window: %s", SDL_GetError());
+    if (!g_renderer->start())
+        fatal("Vulkan could not start (see the log). SwitchRecomp needs a GPU and driver with Vulkan 1.3.");
+    LOG("renderer: Vulkan\n");
 }
 
-#ifdef SWR_VULKAN
 void* backend_vk_loader(void) { return (void*)SDL_Vulkan_GetVkGetInstanceProcAddr(); }
 const char* const* backend_vk_extensions(u32* n) {
     Uint32 c = 0;
@@ -137,39 +91,16 @@ int backend_vk_surface(VkInstance instance, VkSurfaceKHR* surface) {
     LOG("video: no Vulkan surface: %s\n", SDL_GetError());
     return 0;
 }
-#endif
-/* GPU thread: the window's context, and a second one sharing it for the GL worker */
-int backend_gl_create(void) {
-    static const int vers[4][2] = {{4, 6}, {4, 5}, {4, 4}, {4, 3}};
-    for (int i = 0; i < 4 && !g_ctx; i++) {
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, vers[i][0]);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, vers[i][1]);
-        SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 0);
-        g_ctx = SDL_GL_CreateContext(g_win);
-    }
-    if (!g_ctx) {
-        LOG("video: no OpenGL 4.3 context: %s\n", SDL_GetError());
-        return 0;
-    }
-    SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
-    g_wctx = SDL_GL_CreateContext(g_helper ? g_helper : g_win); /* also makes it current */
-    SDL_GL_MakeCurrent(g_win, g_ctx);
-    SDL_GL_SetSwapInterval(0);
-    return 1;
-}
-void* backend_gl_proc(const char* n) { return (void*)SDL_GL_GetProcAddress(n); }
-void backend_gl_swap(void) { SDL_GL_SwapWindow(g_win); }
-int backend_gl_worker_current(void) {
-    if (!g_wctx) return 0;
-    return SDL_GL_MakeCurrent(g_helper ? g_helper : g_win, g_wctx) ? 1 : 0;
-}
 void backend_window_size(int* w, int* h) {
     *w = g_ww;
     *h = g_wh;
 }
 void video_present_rgba(const u32* px, int w, int h, int stride) {
-    /* the Vulkan renderer presents from the game's buffer (present_buffer) */
-    g_renderer->present_cpu(px, w, h, stride);
+    /* the renderer presents from the game's buffers (present_buffer), so a frame made on the CPU isn't shown */
+    (void)px;
+    (void)w;
+    (void)h;
+    (void)stride;
 }
 
 static const char* HELP = "Controller: like a Switch controller, buttons by position.\n\n"
@@ -177,8 +108,7 @@ static const char* HELP = "Controller: like a Switch controller, buttons by posi
                           "  Arrows = D-Pad     W A S D = left stick    I J K L = right stick\n"
                           "  X / Space = A    Z = B    C = X    V = Y\n"
                           "  Q = L   E = R   1 = ZL   3 = ZR   Enter = +   Backspace = -\n\n"
-                          "F1 = this help   F3 = screenshot   F4 = FPS limit 60 / unlimited   F5 = diagnostic dump\n"
-                          "F8 = full-resolution screenshot (PNG in the captures folder)\n"
+                          "F1 = this help   F3 = screenshot   F4 = FPS limit 60 / unlimited   F5 = thread dump\n"
                           "F11 / Alt+Enter = fullscreen   Esc = quit";
 
 /* keys -> HidNpadButton bits; 40..47 are the stick keys, turned into axes in video_poll */
@@ -216,27 +146,8 @@ static void set_fullscreen(int on) {
     SDL_SetWindowFullscreen(g_win, on);
 }
 #ifdef _WIN32
-/* what the Windows-only parts of the runtime expect from a backend (plat.c, the F7 recorder and LSFG in gpu/gl/renderer.c).
-   The GPU thread reports state changes; the window title follows on the main thread (video_poll) */
+/* plat.c's fatal error box */
 void win_fatal_box(const char* msg) { SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "SwitchRecomp", msg, g_win); }
-volatile int g_rec_toggle;
-static volatile int g_rec_on, g_title_lsfg_mult, g_title_dirty;
-void backend_rec_state(int on) {
-    g_rec_on = on;
-    g_title_dirty = 1;
-}
-void backend_lsfg_state(int on, int mult) {
-    g_title_lsfg_mult = on ? mult : 0;
-    g_title_dirty = 1;
-}
-static void title_update(void) {
-    if (!g_title_dirty) return;
-    g_title_dirty = 0;
-    char t[300];
-    int m = g_title_lsfg_mult;
-    snprintf(t, sizeof t, "%s%s%s", g_title, g_rec_on ? " [REC]" : "", m ? (m == 3 ? " [LSFG x3]" : " [LSFG x2]") : "");
-    SDL_SetWindowTitle(g_win, t);
-}
 #endif
 
 static void hotkey(SDL_Keycode k) {
@@ -255,20 +166,7 @@ static void hotkey(SDL_Keycode k) {
             LOG("FPS limit: %s\n", g_opt_fps ? "60" : "unlimited");
             break;
         }
-        case SDLK_F5: {
-            kernel_dump_threads();
-            g_renderer->dump_rts();
-            break;
-        }
-#ifdef _WIN32
-        case SDLK_F7: /* the recorder and the full-resolution screenshot are OpenGL's */
-            if (g_renderer == &gl_renderer) g_rec_toggle = 1;
-            break;
-#endif
-        case SDLK_F8: {
-            if (g_renderer == &gl_renderer) g_shot8_req = 1;
-            break;
-        }
+        case SDLK_F5: kernel_dump_threads(); break;
         case SDLK_F11: set_fullscreen(!g_fullscreen); break;
     }
 }
@@ -296,9 +194,6 @@ static i32 up(i32 v) { return v == -32768 ? 32767 : -v; }
 
 void video_poll(void) {
     SDL_Event e;
-#ifdef _WIN32
-    title_update();
-#endif
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
             case SDL_EVENT_QUIT: g_quit = 1; break;
@@ -400,5 +295,3 @@ void frontend_frame(void) {
         _exit(0);
     }
 }
-
-int backend_glq_ok(void) { return 1; } /* GL calls go through glq */

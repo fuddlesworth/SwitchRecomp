@@ -3,9 +3,8 @@
 prebuilt binaries:
 
     deps/<target>/lib/libdecoder.a, libcommon.a   OpenH264 decoder (NVDEC video)
-    deps/<target>/lib/libspvc.a                   SPIRV-Cross core + GLSL (LSFG shaders)
     deps/<target>/lib/libglslang-all.a            glslang, GLSL to SPIR-V (the Vulkan renderer's shaders)
-    deps/<target>/include/{wels,spirv_cross,glslang}/  their headers
+    deps/<target>/include/{wels,glslang}/         their headers
     deps/win64/sdl3/                              SDL3, static (Windows only: Linux uses the system's SDL3)
     deps/host/bin/hactool[.exe]                   extracts game dumps (scripts/extract.py)
 
@@ -106,7 +105,6 @@ def main():
         'update',
         '--init',
         'third_party/openh264',
-        'third_party/SPIRV-Cross',
         'third_party/hactool',
         'third_party/glslang',
         *(['third_party/SDL'] if a.target == 'win64' else []),
@@ -143,58 +141,6 @@ def main():
         shutil.rmtree(os.path.join(out, 'include', 'wels'), ignore_errors=True)
         shutil.copytree(os.path.join(src, 'codec', 'api', 'wels'), os.path.join(out, 'include', 'wels'))
         shutil.copy(os.path.join(src, 'LICENSE'), os.path.join(out, 'LICENSE-OpenH264.txt'))
-        stamp.write()
-
-    # SPIRV-Cross: core and GLSL merged into the one libspvc.a the runtime links
-    stamp = Stamp(os.path.join(out, '.spirv-cross'), 'SPIRV-Cross', cxx)
-    if stamp.current():
-        print('SPIRV-Cross is up to date')
-    else:
-        print('Building SPIRV-Cross (%s)' % a.target, flush=True)
-        bld, inst = os.path.join(work, 'spirv-cross'), os.path.join(work, 'spirv-cross-install')
-        shutil.rmtree(bld, ignore_errors=True)
-        shutil.rmtree(inst, ignore_errors=True)
-        run(
-            [
-                'cmake',
-                '-S',
-                os.path.join(REPO, 'third_party', 'SPIRV-Cross'),
-                '-B',
-                bld,
-                '-G',
-                'Ninja',
-                *cmake_cross,
-                '-DCMAKE_C_COMPILER=' + cc,
-                '-DCMAKE_CXX_COMPILER=' + cxx,
-                '-DCMAKE_AR=' + ar_path,
-                '-DCMAKE_BUILD_TYPE=Release',
-                '-DCMAKE_POSITION_INDEPENDENT_CODE=ON',
-                '-DCMAKE_INSTALL_PREFIX=' + inst,
-                '-DSPIRV_CROSS_STATIC=ON',
-                '-DSPIRV_CROSS_SHARED=OFF',
-                '-DSPIRV_CROSS_CLI=OFF',
-                '-DSPIRV_CROSS_ENABLE_TESTS=OFF',
-                '-DSPIRV_CROSS_ENABLE_HLSL=OFF',
-                '-DSPIRV_CROSS_ENABLE_MSL=OFF',
-                '-DSPIRV_CROSS_ENABLE_CPP=OFF',
-                '-DSPIRV_CROSS_ENABLE_REFLECT=OFF',
-                '-DSPIRV_CROSS_ENABLE_C_API=OFF',
-                '-DSPIRV_CROSS_ENABLE_UTIL=OFF',
-            ],
-            log,
-        )
-        run(['cmake', '--build', bld, '-j%d' % a.jobs], log)
-        run(['cmake', '--install', bld], log)
-        lib = os.path.join(inst, 'lib')
-        # ar's MRI script takes paths relative to the current folder, which keeps Windows drive letters out of it
-        mri = 'create libspvc.a\naddlib libspirv-cross-glsl.a\naddlib libspirv-cross-core.a\nsave\nend\n'
-        subprocess.run([ar_path, '-M'], input=mri, text=True, cwd=lib, check=True)
-        shutil.move(os.path.join(lib, 'libspvc.a'), os.path.join(out, 'lib', 'libspvc.a'))
-        shutil.rmtree(os.path.join(out, 'include', 'spirv_cross'), ignore_errors=True)
-        shutil.copytree(os.path.join(inst, 'include', 'spirv_cross'), os.path.join(out, 'include', 'spirv_cross'))
-        shutil.copy(
-            os.path.join(REPO, 'third_party', 'SPIRV-Cross', 'LICENSE'), os.path.join(out, 'LICENSE-SPIRV-Cross.txt')
-        )
         stamp.write()
 
     # glslang: the GLSL front end and SPIR-V back end, without the optimizer (SPIRV-Tools) or HLSL. Its static

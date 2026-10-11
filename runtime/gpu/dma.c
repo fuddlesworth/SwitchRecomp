@@ -91,11 +91,7 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
                 sbh, sw, sh, r[0x1CF], v);
         }
     }
-    if (g_gl) {
-        char tb[256];
-        snprintf(tb, sizeof tb, "DMA %s %llx -> %s %llx len=%u lines=%u remap=%d\n", src_linear ? "lin" : "bl",
-                 (unsigned long long)src, dst_linear ? "lin" : "bl", (unsigned long long)dst, line_len, lines, remap);
-        g_renderer->trace(tb);
+    if (g_renderer_up) {
         g_renderer->rt_flush(src);
         g_renderer->rt_flush(dst);
     }
@@ -203,7 +199,7 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
                 x += n;
             }
     }
-    if (g_gl) g_renderer->rt_reload(dst);
+    if (g_renderer_up) g_renderer->rt_reload(dst);
     /* completion semaphore */
     u32 sem = (v >> 3) & 3;
     if (sem) {

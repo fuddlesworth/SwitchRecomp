@@ -115,7 +115,7 @@ u32* vk_spirv_cached(const char* glsl, int stage, const char* cache_dir, size_t*
     return w;
 }
 
-/* gpu/gl/renderer.c's sh_post for Vulkan: the alpha test discards before every return of a fragment shader, and a vertex
+/* what the translated GLSL needs on Vulkan: the alpha test discards before every return of a fragment shader, and a vertex
    shader for a guest in -1..1 depth mode moves z to Vulkan's 0..1 (the viewport handles y, see gpu/vk/render.c) */
 char* vk_glsl_post(char* src, int stage) {
     if (!src) return src;
