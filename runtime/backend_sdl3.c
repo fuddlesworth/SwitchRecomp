@@ -1,13 +1,20 @@
-/* SDL3 backend: window, OpenGL 4.3+ context, keyboard and gamepads. Runs natively on Wayland and on X11
-   (SDL_VIDEO_DRIVER=x11 picks X11), and takes the same unattended-run options as the X11 backend (seconds, frames,
-   shot, press, script). */
+/* SDL3 backend: window, OpenGL 4.3+ context or Vulkan surface (SWR_VULKAN), keyboard and gamepads. Runs natively
+   on Wayland and on X11 (SDL_VIDEO_DRIVER=x11 picks X11), and takes the same unattended-run options as the X11
+   backend (seconds, frames, shot, press, script). */
+#ifdef SWR_VULKAN
+#include "vk.h"
+#include <SDL3/SDL_vulkan.h>
+#else
 #include "rt.h"
+#endif
 #include <SDL3/SDL.h>
 #include <time.h>
 
 static SDL_Window* g_win;
+#ifndef SWR_VULKAN
 static SDL_Window* g_helper; /* hidden, for the GL worker's context: EGL won't make one surface current twice */
 static SDL_GLContext g_ctx, g_wctx;
+#endif
 static volatile int g_ww = 1280, g_wh = 720;
 static int g_seconds = 0, g_maxframes = -1;
 static char g_shot[1024];
@@ -35,12 +42,20 @@ void backend_ini(const char* k, const char* v) {
     else if (!strcmp(k, "script"))
         strncpy(g_script, v, 1023);
 }
+#ifdef SWR_VULKAN
+int video_has_gl(void) { return 0; }
+#else
 int video_has_gl(void) { return 1; }
+#endif
 
 void video_init(const char* title) {
     /* let Mesa run its own glthread so driver work isn't on our GPU thread (Deck, AMD/Intel on Linux) */
     if (!getenv("SWR_NO_GLTHREAD")) setenv("mesa_glthread", "true", 0);
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) fatal("SDL could not start its video: %s", SDL_GetError());
+#ifdef SWR_VULKAN
+    g_win = SDL_CreateWindow(title, g_ww, g_wh, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+    if (!g_win) fatal("SDL could not open a Vulkan window: %s", SDL_GetError());
+#else
     SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
@@ -50,6 +65,7 @@ void video_init(const char* title) {
     g_win = SDL_CreateWindow(title, g_ww, g_wh, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
     if (!g_win) fatal("SDL could not open a window: %s", SDL_GetError());
     g_helper = SDL_CreateWindow("SwitchRecomp GL worker", 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+#endif
     {
         int w = 0, h = 0;
         SDL_GetWindowSizeInPixels(g_win, &w, &h);
@@ -61,10 +77,29 @@ void video_init(const char* title) {
     LOG("video: SDL %d.%d.%d on %s\n", SDL_VERSIONNUM_MAJOR(SDL_GetVersion()), SDL_VERSIONNUM_MINOR(SDL_GetVersion()),
         SDL_VERSIONNUM_MICRO(SDL_GetVersion()), SDL_GetCurrentVideoDriver());
     g_start = plat_ns();
+#ifdef SWR_VULKAN
+    extern void gpu_vk_start(void);
+    gpu_vk_start();
+#else
     extern void gpu_gl_start(void);
     gpu_gl_start();
+#endif
 }
 
+#ifdef SWR_VULKAN
+void* backend_vk_loader(void) { return (void*)SDL_Vulkan_GetVkGetInstanceProcAddr(); }
+const char* const* backend_vk_extensions(u32* n) {
+    Uint32 c = 0;
+    const char* const* e = SDL_Vulkan_GetInstanceExtensions(&c);
+    *n = c;
+    return e;
+}
+int backend_vk_surface(VkInstance instance, VkSurfaceKHR* surface) {
+    if (SDL_Vulkan_CreateSurface(g_win, instance, NULL, surface)) return 1;
+    LOG("video: no Vulkan surface: %s\n", SDL_GetError());
+    return 0;
+}
+#else
 /* GPU thread: the window's context, and a second one sharing it for the GL worker */
 int backend_gl_create(void) {
     static const int vers[4][2] = {{4, 6}, {4, 5}, {4, 4}, {4, 3}};
@@ -90,13 +125,19 @@ int backend_gl_worker_current(void) {
     if (!g_wctx) return 0;
     return SDL_GL_MakeCurrent(g_helper ? g_helper : g_win, g_wctx) ? 1 : 0;
 }
+#endif
 void backend_window_size(int* w, int* h) {
     *w = g_ww;
     *h = g_wh;
 }
 void video_present_rgba(const u32* px, int w, int h, int stride) {
+#ifdef SWR_VULKAN
+    extern void vk_present_rgba(const u32*, int, int, int);
+    vk_present_rgba(px, w, h, stride);
+#else
     extern void gpu_gl_present_cpu(const u32*, int, int, int);
     gpu_gl_present_cpu(px, w, h, stride);
+#endif
 }
 
 static const char* HELP = "Controller: like a Switch controller, buttons by position.\n\n"
@@ -166,11 +207,13 @@ static void hotkey(SDL_Keycode k) {
             gpu_gl_dump_rts();
             break;
         }
+#ifndef SWR_VULKAN
         case SDLK_F8: {
             extern volatile int g_shot8_req;
             g_shot8_req = 1;
             break;
         }
+#endif
         case SDLK_F11: set_fullscreen(!g_fullscreen); break;
     }
 }
