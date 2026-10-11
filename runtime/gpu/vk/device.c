@@ -1,5 +1,10 @@
 /* Vulkan instance, device, queues and swapchain. Vulkan 1.3 is required: timeline semaphores (1.2),
    synchronization2 and dynamic rendering (1.3) are what the renderer is built on. */
+#include <stdlib.h>
+#include <string.h>
+#include "platform/backend.h"
+#include "platform/log.h"
+#include "platform/plat.h"
 #include "gpu/vk/vk.h"
 
 VkState g_vk;

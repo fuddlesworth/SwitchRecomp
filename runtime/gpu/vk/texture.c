@@ -1,10 +1,13 @@
 /* Textures from the guest's texture headers (TIC, 32 bytes each), and samplers from its sampler headers (TSC), as
-   gpu_gl.c's tex_from_tic and sampler_get read them. A texture whose address holds a render target is that render
+   gpu/gl/renderer.c's tex_from_tic and sampler_get read them. A texture whose address holds a render target is that render
    target (a copy of its top-left corner when the header is smaller). Others are loaded from guest memory, deswizzled
    on the CPU, and checked for changes now and then: often at first, rarely once they have stayed the same. */
+#include <stdlib.h>
+#include <string.h>
+#include "gpu/gpu.h"
+#include "gpu/texture/astc.h"
+#include "platform/log.h"
 #include "gpu/vk/vk.h"
-
-extern void astc_decode_image(const u8* src, u32 w, u32 h, u32 bw, u32 bh, u8* dst);
 
 /* bytes of one mip level of a block-linear texture, block height and depth shrunk for small levels as the hardware
    does; out_bh gets the level's block height */
@@ -557,8 +560,8 @@ static VkSamplerAddressMode wrap(u32 m) {
     return VK_SAMPLER_ADDRESS_MODE_REPEAT;
 }
 
-/* tsc[0] bit 9 compare, bits 10-12 the compare function; tsc[1] filters (vk_render.c forces nearest for integer
-   textures and the compare mode the shader declares, as gpu_gl.c does) */
+/* tsc[0] bit 9 compare, bits 10-12 the compare function; tsc[1] filters (gpu/vk/render.c forces nearest for integer
+   textures and the compare mode the shader declares, as gpu/gl/renderer.c does) */
 VkSampler vk_sampler(const u32* tsc) {
     static struct {
         u32 tsc[8];

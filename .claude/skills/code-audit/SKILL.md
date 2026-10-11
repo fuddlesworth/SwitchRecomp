@@ -257,7 +257,7 @@ Before an edit that calls a function, method, constant, enumerator, logging cate
 
 ```
 grep -rnw 'syncpt_alloc' runtime                       # does this function exist?
-grep -nE '^[A-Za-z_].*\(' runtime/core/rt.h                  # what IS the API surface?
+grep -nE '^[A-Za-z_].*\(' runtime/kernel/ipc.h               # a module's API surface is its header
 ```
 
 Then check the SEMANTICS, not just the spelling: `buf_in` and `buf_a` both return an input buffer, but `buf_in` also takes the pointer (X) buffer the SDK uses for small inputs. Picking the wrong one compiles and reads nothing.

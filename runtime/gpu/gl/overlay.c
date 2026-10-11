@@ -3,12 +3,16 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* touch controls overlay (Android, or the GLES backend on PC).
    drawn right before present. each finger sticks to one control; you can slide between buttons. */
-#include "core/rt.h"
+#include "gpu/gl/overlay.h"
+#include "gpu/renderer.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdio.h>
+#include <string.h>
 #include "gpu/gl/glfn.h"
 #include "gpu/gl/overlay_font.h"
 #include <math.h>
 
-extern int g_gles;
 int g_overlay_visible = 1;
 static float g_opacity = 0.5f;
 

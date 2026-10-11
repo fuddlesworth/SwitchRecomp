@@ -2,7 +2,18 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* headless backend for the test runner, writes screenshots to ppm/png */
-#include "core/rt.h"
+#include "core/main.h"
+#include "hle/hid.h"
+#include "platform/backend.h"
+#include "platform/plat.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 static int g_maxframes = -1, g_shot_every = 0;
 static char g_shot[1024];
 static int g_shots;
@@ -81,7 +92,6 @@ void frontend_frame(void) {
             }
         fprintf(stderr, "\nframes=%d hash=%016llx %dx%d\n", g_frames, (unsigned long long)h, g_lw, g_lh);
         pm_unlock(&g_hl);
-        extern void save_hints(void);
         save_hints();
         fflush(NULL);
         _exit(0);

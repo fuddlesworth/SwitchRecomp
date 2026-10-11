@@ -2,10 +2,16 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* sm, am, set, time, acc, apm, plus a bunch of stub services that just say ok (nifm, shop, prepo...) */
-#include "core/rt.h"
-
-KShmem* kshmem_new(u64 size, const char* name);
-u8* kshmem_ptr(KShmem* s);
+#include "hle/services.h"
+#include "core/main.h"
+#include "core/options.h"
+#include "kernel/ipc.h"
+#include "kernel/kernel.h"
+#include "kernel/mem.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdlib.h>
+#include <string.h>
 
 /* ================================================================ sm */
 static int sm_disp(SvcObj* o, IpcCtx* c) {
@@ -17,7 +23,6 @@ static int sm_disp(SvcObj* o, IpcCtx* c) {
             SvcObj* s = svc_open(name);
             if (!s) {
                 WARN("sm: service '%s' does not exist in SwitchRecomp: using a stub\n", name);
-                extern SvcObj* svc_generic(const char* n);
                 s = svc_generic(name);
             }
             LOG("sm: GetServiceHandle(%s)\n", name);
@@ -37,7 +42,6 @@ typedef struct {
     char name[16];
 } GenData;
 static int generic_disp(SvcObj* o, IpcCtx* c) {
-    extern int ipc_warn_once(const char*, u32);
     if (ipc_warn_once(((GenData*)o->data)->name, c->cmd))
         WARN("  [not implemented] %s cmd %u -> ok\n", ((GenData*)o->data)->name, c->cmd);
     return 0;
@@ -110,7 +114,7 @@ static int storage_disp(SvcObj* o, IpcCtx* c) {
     }
     return stub_ok(o, c);
 }
-SvcObj* am_storage_new(u64 size, const void* init) {
+static SvcObj* am_storage_new(u64 size, const void* init) {
     SvcObj* o = svcobj_new("IStorage", storage_disp, sizeof(StorageData));
     StorageData* s = o->data;
     s->d = calloc(1, size ? size : 1);
@@ -640,7 +644,6 @@ static void time_shm_update(void) {
         memcpy(p + 8 + k * 0x18, &base, 8);
         memcpy(p + 8 + k * 0x18 + 8, g_clock_id, 16);
     }
-    extern u64 g_t0_ns(void);
     i64 elapsed = (i64)((plat_ns() - g_t0_ns()) / 1000000000ull);
     i64 off = plat_unix_time() - elapsed;
     for (int c2 = 0; c2 < 2; c2++) {
@@ -957,7 +960,6 @@ static void audio_clock(void* arg) {
     }
 }
 static int audren_obj(SvcObj* o, IpcCtx* c) {
-    extern int audren_update(SvcObj * o, IpcCtx * c);
     switch (c->cmd) {
         case 0: out32(c, (u32)o->u[0]); return 0;
         case 1: out32(c, (u32)o->u[1]); return 0;

@@ -3,15 +3,19 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* GM20B front end: GPFIFO, puller, semaphores/syncpoints, I2M, DMA, 2D and the bits of 3D that
    write memory (clears, reports). Actual drawing is the renderer's job. */
-#include "core/rt.h"
+#include "gpu/renderer.h"
+#include "hle/nvdrv.h"
+#include "kernel/mem.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdlib.h>
+#include <string.h>
 #include "gpu/gpu.h"
 
 GpuState g_gpu;
 static PMutex g_gpulock;
 
 /* ============================================================ GPU memory */
-extern volatile int g_cs_any;
-void cs_mem_need(u64 a, u64 n);
 int gmem_read(u64 gva, void* dst, u64 size) {
     u8* d = dst;
     if (g_cs_any) cs_mem_need(gva, size);
@@ -126,7 +130,6 @@ static void puller_method(GpuChannel* ch, u32 m, u32 v) {
                     gmem_w32(addr, r[6]);
                 } /* 4 bytes only */
                 else {
-                    extern u64 gpu_ticks(void);
                     u32 q[4] = {r[6], 0, 0, 0};
                     u64 t = gpu_ticks();
                     memcpy(&q[2], &t, 8);
@@ -149,10 +152,8 @@ static void puller_method(GpuChannel* ch, u32 m, u32 v) {
         case 0x1D: { /* Syncpoint */
             u32 id = (v >> 8) & 0xFFF;
             if (v & 1) {
-                extern void gpu_gl_stream_incr(u32);
                 gpu_gl_stream_incr(id);
             } else {
-                extern void gpu_gl_before_syncwait(void);
                 gpu_gl_before_syncwait();
                 syncpt_wait(id, r[0x1C], 2000000000);
             }
@@ -222,8 +223,6 @@ void i2m_data(GpuChannel* ch, u32 v) {
 }
 
 /* ============================================================ dispatch */
-extern void r3d_pending_flush(void);
-extern int r3d_pending_on(void);
 static void call_method(GpuChannel* ch, u32 sub, u32 m, u32 v, int last) {
     if (m < 0x40) {
         if (r3d_pending_on()) r3d_pending_flush();
@@ -358,7 +357,6 @@ void gpu_init(void) {
 volatile u64 g_gpu_submits;
 void gpu_submit(u64* e, u32 n, u32 channel, u32 incs) {
     g_gpu_submits++;
-    extern int gpu_async_submit(u64 * e, u32 n, u32 syncpt, u32 incs);
     if (gpu_async_submit(e, n, channel, incs)) return;
     gpu_submit_now(e, n, channel);
     gpu_signal_point();

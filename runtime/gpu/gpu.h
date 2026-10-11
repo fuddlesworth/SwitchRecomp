@@ -4,7 +4,7 @@
 /* GPU state shared between the engines and the backends */
 #ifndef SWR_GPU_H
 #define SWR_GPU_H
-#include "core/rt.h"
+#include "abi/cpu.h"
 typedef struct GpuChannel {
     u32 id;
     u32 sub_class[8];
@@ -36,6 +36,11 @@ typedef struct {
     int nchan;
 } GpuState;
 extern GpuState g_gpu;
+/* a 2D engine surface, the source or destination of a blit */
+typedef struct {
+    u32 format, linear, bh, depth, layer, pitch, width, height;
+    u64 addr;
+} Surf2D;
 int gmem_read(u64 gva, void* dst, u64 size);
 int gmem_write(u64 gva, const void* src, u64 size);
 u8* gmem_ptr(u64 gva, u64 size);
@@ -56,4 +61,34 @@ void gpu_flush(GpuChannel* ch);
 void gpu_mem_written(u64 gva, u64 size);
 void gpu_signal_point(void); /* the GPU is about to do something the game can observe */
 void gpu3d_init(void);
+
+/* gpu.c: GPFIFO submission */
+void gpu_init(void);
+void gpu_submit(u64* entries, u32 n, u32 channel, u32 incs);
+void gpu_submit_now(u64* e, u32 n, u32 channel);
+extern volatile u64 g_gpu_submits;
+extern void (*g_ww_touch)(u64 cpu); /* GPU wrote guest memory, record it for write tracking */
+/* the renderer lands work it is holding (compute results) before the stream goes on past it: before a write of
+   memory those results overlap (size > 0), and before anything the game can observe (gpu_signal_point, size 0) */
+extern void (*g_gpu_before_write)(u64 gva, u64 size);
+
+/* engines.c */
+u32 fmt_bpp_2d(u32 f); /* bytes per pixel of a 2D engine format */
+u64 gpu_ticks(void);
+void r3d_pending_flush(void); /* instanced draws are merged into one while they come in, this sends it now */
+int r3d_pending_on(void);
+extern u64 g_draws_merged;
+extern volatile u64 g_compute_launches, g_dma_copies, g_gpu_sub_ns;
+
+/* maxwell3d.c: the 3D engine's side of the renderer */
+void r3d_clear(GpuChannel* ch, u32 v);
+void r3d_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 base_vertex, u32 base_instance,
+              u32 instances);
+void r3d_cb_bind(GpuChannel* ch, int stage, u32 v);
+void r3d_const_upload(GpuChannel* ch, u32 v);
+int r3d_blit(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
+             double sdy);
+void r3d_flush(GpuChannel* ch);
+extern u64 g_gw_gen; /* the GPU-side write log: entries so far, a generation to compare against */
+int gpu_mem_dirty_since(u64 since, u64 a, u64 sz);
 #endif

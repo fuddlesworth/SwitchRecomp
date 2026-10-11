@@ -2,6 +2,11 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* software 3D fallback, only does clears for now */
+#include <stdlib.h>
+#include <string.h>
+#include "gpu/renderer.h"
+#include "hle/nvdrv.h"
+#include "kernel/mem.h"
 #include "gpu/gpu.h"
 static u32 bpp_of_rt(u32 f) {
     switch (f) {
@@ -23,10 +28,6 @@ static u32 bpp_of_rt(u32 f) {
         default: return 4;
     }
 }
-extern int g_gl;
-extern void r3d_clear_gl(GpuChannel*, u32);
-extern void r3d_draw_gl(GpuChannel*, int, u32, u32, u32, u32, u32, u32);
-extern void r3d_cb_bind_gl(GpuChannel*, int, u32);
 void r3d_clear(GpuChannel* ch, u32 v) {
     if (g_gl) {
         r3d_clear_gl(ch, v);
@@ -78,7 +79,6 @@ void r3d_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u
         r3d_draw_gl(ch, indexed, topology, first, count, base_vertex, base_instance, instances);
         return;
     }
-    extern u64 g_draws;
     (void)ch;
     (void)indexed;
     (void)topology;
@@ -99,8 +99,8 @@ void r3d_const_upload(GpuChannel* ch, u32 v) {
 void r3d_cb_bind(GpuChannel* ch, int stage, u32 v) {
     if (g_gl) r3d_cb_bind_gl(ch, stage, v);
 }
-extern int r3d_blit_gl(void* s, void* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx, double sdy);
-int r3d_blit(void* s, void* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx, double sdy) {
+int r3d_blit(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
+             double sdy) {
     if (g_gl) return r3d_blit_gl(s, d, dx, dy, dw, dh, sx, sy, sdx, sdy);
     return 0;
 }

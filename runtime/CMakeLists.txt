@@ -8,14 +8,19 @@
 #   gl / vk / null   the renderers                                    platform  the OS layer and a window backend
 
 add_library(swr_common INTERFACE)
-target_include_directories(swr_common INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}" "${DEPS}/include")
-# Upstream's flags. -w hides the warnings for now; turning them back on is in ROADMAP.md (Phase 2)
-target_compile_options(swr_common INTERFACE -w -fno-strict-aliasing)
+target_include_directories(swr_common INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(swr_common SYSTEM INTERFACE "${DEPS}/include")
+# Every function and global used across files is declared once, in the header of the file that defines it, and
+# everything else is static: a declaration that disagrees with the definition is then a compile error instead of a
+# miscompile. Third-party sources (third_party/) keep their own warnings off.
+target_compile_options(swr_common INTERFACE -fno-strict-aliasing
+                       $<$<COMPILE_LANGUAGE:C>:-Werror=missing-prototypes -Werror=missing-variable-declarations>
+                       $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:GNU>>:-Werror=nested-externs>)
 if(SWR_VULKAN)
     target_compile_definitions(swr_common INTERFACE SWR_VULKAN VK_NO_PROTOTYPES)
-    target_include_directories(swr_common INTERFACE "${CMAKE_SOURCE_DIR}/third_party/Vulkan-Headers/include"
-                                                    "${CMAKE_SOURCE_DIR}/third_party/volk"
-                                                    "${CMAKE_SOURCE_DIR}/third_party/VulkanMemoryAllocator/include")
+    target_include_directories(swr_common SYSTEM INTERFACE "${CMAKE_SOURCE_DIR}/third_party/Vulkan-Headers/include"
+                                                           "${CMAKE_SOURCE_DIR}/third_party/volk"
+                                                           "${CMAKE_SOURCE_DIR}/third_party/VulkanMemoryAllocator/include")
 endif()
 if(SWR_H264)
     swr_require_dep(lib/libdecoder.a SWR_H264)
@@ -58,7 +63,7 @@ else()
         list(APPEND gl gpu/gl/lsfg_stub.c)
     endif()
     swr_component(gl ${gl})
-    target_include_directories(swr_gl PRIVATE "${CMAKE_SOURCE_DIR}/third_party/bcn" "${DEPS}/include/spirv_cross")
+    target_include_directories(swr_gl SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/third_party/bcn" "${DEPS}/include/spirv_cross")
     list(APPEND components shader gl)
 endif()
 if(SWR_VULKAN)
@@ -73,6 +78,9 @@ if(SWR_VULKAN)
                   "${CMAKE_SOURCE_DIR}/third_party/volk/volk.c")
     list(APPEND components spirv vk)
 endif()
+# third-party code (vma.cpp is VMA's implementation)
+set_source_files_properties("${CMAKE_SOURCE_DIR}/third_party/bcn/bcn.cpp" "${CMAKE_SOURCE_DIR}/third_party/bcn/bcdec.cpp"
+                            "${CMAKE_SOURCE_DIR}/third_party/volk/volk.c" gpu/vk/vma.cpp PROPERTIES COMPILE_OPTIONS -w)
 
 add_executable(swr-runtime)
 list(TRANSFORM components PREPEND swr_)

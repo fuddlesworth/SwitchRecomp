@@ -5,15 +5,17 @@
    We parse the host1x stream, decode NVDEC H.264 jobs with OpenH264 (SPS/PPS get rebuilt from the
    picture setup the game fills in) and VIC jobs copy the last decoded picture into the output surface.
    Struct layouts / method offsets come from NVIDIA's open-gpu-doc (nvdec_drv.h, clc5b0.h, VIC). */
-#include "core/rt.h"
+#include "video/host1x.h"
+#include "gpu/gpu.h"
+#include "hle/nvdrv.h"
+#include "kernel/mem.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdlib.h>
+#include <string.h>
 #ifndef SWR_NO_H264
 #include "wels/codec_api.h"
 #endif
-
-u64 nvmap_addr(u32 h);
-u64 nvmap_addr_by_id(u32 id);
-u32 syncpt_read(u32 id);
-void syncpt_incr(u32 id);
 
 /* ------------------------------------------------------------ IOVA (what the video engines see through the SMMU) */
 typedef struct {
@@ -38,7 +40,6 @@ static u32 iova_map(u32 h) {
     if (!a) return 0;
     for (int i = 0; i < g_niom; i++)
         if (g_iom[i].h == h && g_iom[i].addr == a) return g_iom[i].iova;
-    extern u32 nvmap_size(u32 h);
     u32 sz = nvmap_size(h);
     if (!sz) sz = 0x100000;
     if (g_niom >= 1024) return 0;
@@ -399,7 +400,6 @@ static void nvdec_execute(u32* r) {
 /* VIC output surface config, u64 at config(0x708)+0x20:
    0-6 format (0x1F A8B8G8R8, 0x20 A8R8G8B8, 0x44 NV12), 11-14 bl kind, 15-18 block height log2,
    32-45 width-1, 46-59 height-1 */
-u64 bl_offset(u32 x_bytes, u32 y, u32 z, u32 width_bytes, u32 height, u32 bh_log2, u32 bd_log2);
 static u8 clamp8(int v) { return v < 0 ? 0 : v > 255 ? 255 : (u8)v; }
 static void vic_put(u8* base, u64 off, const u8* src, u32 n, u64 lim) {
     if (off + n <= lim) memcpy(base + off, src, n);

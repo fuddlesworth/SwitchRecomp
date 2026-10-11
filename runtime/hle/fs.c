@@ -3,11 +3,22 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* fs: RomFS (built on the fly from an extracted romfs/ folder, or a romfs.bin), plus save data
    and SD card mapped to normal folders. */
-#include "core/rt.h"
+#include "hle/fs.h"
+#include "core/main.h"
+#include "hle/services.h"
+#include "kernel/ipc.h"
+#include "kernel/mem.h"
+#include "platform/backend.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <ctype.h>
 
 #define FS_NOTFOUND RC(2, 1)
 #define FS_EXISTS   RC(2, 2)
+static void rm_rf(const char* p, int keep);
 
 /* ============================================================ RomFS virtual */
 typedef struct {
@@ -295,7 +306,6 @@ void romfs_init(void) {
             "Extract it with hactool (--romfsdir=romfs) and copy the folder to:\n%s\n\nThe game will close when it tries to read its data.",
             p);
 #if defined(_WIN32)
-        extern void win_fatal_box(const char*);
         win_fatal_box(m);
 #endif
         LOG("%s\n", m);
@@ -614,7 +624,6 @@ static int fs_disp(SvcObj* o, IpcCtx* c) {
             read_path(c, 0, p, sizeof p);
             host_path(fs, p, hp, sizeof hp);
             /* simple recursive delete */
-            extern void rm_rf(const char*, int keep);
             rm_rf(hp, c->cmd == 13);
             return 0;
         }
@@ -681,7 +690,7 @@ static int fs_disp(SvcObj* o, IpcCtx* c) {
     }
     return stub_ok(o, c);
 }
-SvcObj* hostfs_new(const char* root) {
+static SvcObj* hostfs_new(const char* root) {
     SvcObj* o = svcobj_new("IFileSystem", fs_disp, sizeof(FsData));
     FsData* d = o->data;
     strncpy(d->root, root, 1023);
@@ -692,7 +701,7 @@ SvcObj* hostfs_new(const char* root) {
 }
 
 #if defined(_WIN32)
-void rm_rf(const char* p, int keep) {
+static void rm_rf(const char* p, int keep) {
     PDir d;
     if (!plat_dir_open(&d, p)) {
         while (plat_dir_next(&d)) {
@@ -709,7 +718,7 @@ void rm_rf(const char* p, int keep) {
 }
 #else
 #include <unistd.h>
-void rm_rf(const char* p, int keep) {
+static void rm_rf(const char* p, int keep) {
     PDir d;
     if (!plat_dir_open(&d, p)) {
         while (plat_dir_next(&d)) {

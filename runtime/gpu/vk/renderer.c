@@ -1,9 +1,17 @@
 /* Vulkan renderer: its side of the renderer interface (renderer.c calls these vkr_ functions when the Vulkan
    renderer is the active one, the GL names otherwise), and presenting.
 
-   Render targets, clears, draws (vk_render.c), compute (vk_compute.c), write-backs to and reloads from guest memory,
+   Render targets, clears, draws (gpu/vk/render.c), compute (gpu/vk/compute.c), write-backs to and reloads from guest memory,
    and presenting the game's framebuffer from its render target (or from memory, converted on the CPU, when no
    render target holds it). Submits are processed on the thread that makes them, under vk_lock(). */
+#include <stdio.h>
+#include <stdlib.h>
+#include "core/main.h"
+#include "core/options.h"
+#include "gpu/gpu.h"
+#include "hle/nvdrv.h"
+#include "platform/backend.h"
+#include "platform/log.h"
 #include "gpu/vk/vk.h"
 #include "gpu/renderer.h"
 
@@ -16,12 +24,10 @@ static u32 g_last_w, g_last_h;
 /* 0 when Vulkan can't run here: the caller falls back to OpenGL */
 int vkr_start(void) {
     if (!vk_init()) return 0;
-    extern float g_opt_resf;
     g_vk_scale = g_opt_resf >= 0.25f && g_opt_resf <= 4 ? g_opt_resf : 1.0f;
     if (g_vk_scale != 1.0f) LOG("vulkan: render targets at %.2fx\n", g_vk_scale);
     vk_cmd_init();
     vk_pipeline_init();
-    extern void (*g_gpu_before_write)(u64, u64);
     g_gpu_before_write = vk_compute_before_write;
     VkSemaphoreCreateInfo sci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (int i = 0; i < VK_FRAMES; i++) VK_OK(vkCreateSemaphore(g_vk.dev, &sci, NULL, &g_acquired[i]));
@@ -57,7 +63,8 @@ void vkr_cb_bind(GpuChannel* ch, int stage, u32 v) {
     g_vk_cb[stage][idx] = (v & 1) ? ((u64)r[0x8E1] << 32) | r[0x8E2] : 0;
     g_vk_cbsize[stage][idx] = (v & 1) ? r[0x8E0] : 0;
 }
-int vkr_blit(void* s, void* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx, double sdy) {
+int vkr_blit(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
+             double sdy) {
     vk_lock();
     int r = vk_blit2d(s, d, dx, dy, dw, dh, sx, sy, sdx, sdy);
     vk_unlock();
@@ -73,18 +80,16 @@ void vkr_rt_reload(u64 gva) {
     vk_rt_reload(gva);
     vk_unlock();
 }
-void vkr_dispatch(void* ch, const void* q, unsigned long long code) {
-    extern void r3d_pending_flush(void);
+void vkr_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     if (getenv("SWR_NO_COMPUTE")) return;
     r3d_pending_flush(); /* a merged draw the front end is holding comes first */
     vk_lock();
     vk_dispatch(ch, q, code);
     vk_unlock();
 }
-/* compute results land before the stream signals or waits (vk_compute.c) */
+/* compute results land before the stream signals or waits (gpu/vk/compute.c) */
 void vkr_before_syncwait(void) { vk_compute_land(); }
 void vkr_stream_incr(u32 id) {
-    extern void syncpt_incr(u32);
     vk_compute_land();
     syncpt_incr(id);
 }
@@ -92,7 +97,6 @@ void vkr_stream_incr(u32 id) {
 /* ------------------------------------------------------------ presenting */
 /* the frame from memory when no render target holds it (the game drew it on the CPU, or a video frame) */
 static Surf* cpu_frame(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
-    extern void vi_convert_cpu(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, u32 * out);
     if (g_cpu_img && (g_cpu_img->w != w || g_cpu_img->h != h)) {
         vk_defer_image(g_cpu_img->img, g_cpu_img->mem, g_cpu_img->view, g_cpu_img->att);
         free(g_cpu_img);
@@ -199,7 +203,6 @@ void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 b
     vk_buf_frame();
     if (g_vk_present % 300 == 0) vk_pipeline_save();
     if (g_vk_present % 600 == 0) {
-        extern u64 g_vk_drawn, g_vk_skipped, g_vk_dispatches, g_vk_cs_batches, g_vk_cs_skipped, g_vk_cs_wait_ns;
         LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped\n",
             (unsigned long long)g_vk_drawn, (unsigned long long)g_vk_skipped, (unsigned long long)g_vk_dispatches,
             (unsigned long long)g_vk_cs_batches, (unsigned long long)(g_vk_cs_wait_ns / 1000000),

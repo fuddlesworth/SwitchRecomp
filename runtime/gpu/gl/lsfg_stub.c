@@ -2,12 +2,15 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* lsfg stubs for GLES builds (Android has no frame generation) */
-#include "gpu/gpu.h"
+#include "gpu/gl/lsfg.h"
+#include "abi/cpu.h"
 #include <string.h>
 #include <stdlib.h>
-int g_lsfg_opt = 0, g_lsfg_quality = 0, g_lsfg_mult = 2, g_lsfg_height = 720;
-float g_lsfg_flow = 0.5f, g_lsfg_target = 60.f;
-char g_lsfg_dll[1024];
+static int g_lsfg_opt = 0, g_lsfg_quality = 0;
+int g_lsfg_mult = 2, g_lsfg_height = 720;
+static float g_lsfg_flow = 0.5f;
+float g_lsfg_target = 60.f;
+static char g_lsfg_dll[1024];
 int lsfg_init(void) { return 0; }
 int lsfg_available(void) { return 0; }
 int lsfg_ready(void) { return 0; }

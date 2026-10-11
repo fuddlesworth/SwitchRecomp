@@ -2,7 +2,13 @@
    guest submit (and again after the GPU front end wrote it). Data that changed is copied into the frame's staging
    ring, which draws read directly; data that stayed the same over a few checks gets a buffer of its own, written
    once and never changed (a change makes a new one), so nothing waits for the GPU. Big ranges that have been stable
-   for long are checked less often, like gpu_gl.c's buf_cached. */
+   for long are checked less often, like gpu/gl/renderer.c's buf_cached. */
+#include <stdlib.h>
+#include <string.h>
+#include "gpu/gpu.h"
+#include "kernel/mem.h"
+#include "platform/log.h"
+#include "platform/plat.h"
 #include "gpu/vk/vk.h"
 
 typedef struct Vb {
@@ -19,8 +25,6 @@ typedef struct Vb {
 } Vb;
 #define VBH 4096
 static Vb* g_vbh[VBH];
-extern u64 g_gw_gen;
-extern int gpu_mem_dirty_since(u64 since, u64 a, u64 sz);
 
 /* written-page tracking (plat_ww_scan): a generation per 4K page of guest memory, bumped when a scan finds it
    written. A cache entry remembers the clock when it last matched memory, and is stale only if a page in its range

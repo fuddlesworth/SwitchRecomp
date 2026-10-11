@@ -8,14 +8,14 @@
    Calls that return something (glGet*, glGen*, glMapBuffer...) sync with the GL thread.
    glFenceSync is virtualized, the GL thread owns the real fences.
    SWR_NO_GLQ=1 turns it off. */
+#include <stdlib.h>
+#include <string.h>
+#include "platform/backend.h"
+#include "platform/log.h"
+#include "platform/plat.h"
 #include "gpu/gl/glq_int.h"
 #include "gpu/gl/glq.h"
 __thread int t_glq_direct;
-extern void* backend_gl_proc(const char*);
-extern int backend_gl_create(void);
-extern void backend_gl_swap(void);
-extern int backend_gl_worker_current(void);
-extern int backend_glq_ok(void);
 
 #define Q_CAP (64u << 20)
 #define Q_BIG (8u << 20)
@@ -176,17 +176,7 @@ size_t q_img_size(GLsizei w, GLsizei h, GLsizei d, GLenum f, GLenum t) {
            ((size_t)(d - 1) * ih + (size_t)(h - 1)) * row + (size_t)w * px;
 }
 
-/* ---------- hand-written wrappers (glq_gen.c has the r_ pointers) */
-typedef void(APIENTRY* T_ps)(GLenum, GLint);
-extern T_ps r_glPixelStorei;
-typedef void(APIENTRY* T_bb)(GLenum, GLuint);
-extern T_bb r_glBindBuffer;
-typedef GLsync(APIENTRY* T_fs)(GLenum, GLbitfield);
-extern T_fs r_glFenceSync;
-typedef GLenum(APIENTRY* T_cws)(GLsync, GLbitfield, GLuint64);
-extern T_cws r_glClientWaitSync;
-typedef void(APIENTRY* T_ds)(GLsync);
-extern T_ds r_glDeleteSync;
+/* ---------- hand-written wrappers (glq_gen.c has the r_ pointers, glq_int.h declares them) */
 typedef struct {
     GLenum a;
     GLint b;
@@ -362,13 +352,9 @@ void* glq_proc(const char* n) {
 static int g_start_ok;
 static void gl_thread(void* arg) {
     (void)arg;
-    {
-        extern void plat_thread_high_priority(void);
-        plat_thread_high_priority();
-    }
+    { plat_thread_high_priority(); }
     t_glq_direct = 1;
     int ok = backend_gl_create() && swr_gl_load(backend_gl_proc);
-    extern int swr_gl_is_gles(void);
     if (ok && swr_gl_is_gles()) ok = 0; /* not on GLES */
     if (ok) {
         for (const GlqEnt* e = g_glq_tab; e->name; e++) {

@@ -55,9 +55,14 @@ CI (`.github/workflows/build.yml`) builds Windows natively with GCC and Clang fr
 cross-builds it on Linux. To check Windows code before pushing, cross-build it here: with a MinGW-w64 toolchain on
 PATH (Arch's `mingw-w64-gcc`, or the Linux build of llvm-mingw, which provides the `x86_64-w64-mingw32-*` names),
 run `python3 scripts/bootstrap.py --target win64`, then `cmake --preset mingw-cross && cmake --build --preset
-mingw-cross`. Upstream code that only Windows compiles (`platform/backend/win32.c`, `platform/recorder_win32.c`, the `_WIN32` parts of
-`platform/plat.c`) has relied on implicit declarations that `-w` hid and that GCC 14+ and Clang reject: a missing header shows
-up only there.
+mingw-cross`. Code that only Windows compiles (`platform/backend/win32.c`, `platform/recorder_win32.c`, the `_WIN32` parts of
+`platform/plat.c`) is checked only there: a missing header, or a global that should be static, shows up only in that build.
+
+The runtime builds with the compilers' default warnings plus three errors: `-Werror=missing-prototypes`,
+`-Werror=missing-variable-declarations` and (GCC) `-Werror=nested-externs`. A function or global another file uses
+goes in the header next to the file that defines it, which that file includes too, so the compiler checks the two
+agree. Anything else is static. An `extern` inside a function, or a prototype copied into another `.c` file, is the
+pattern this replaced: upstream had 237 of them, and some disagreed with the definition.
 
 The SDL3 backend, with both renderers, builds for Windows too: `cmake --preset mingw-cross -B build/mingw-sdl3
 -DSWR_BACKEND=sdl3 -DSWR_DEPLOY=OFF` (the bootstrap builds a static SDL3 into `deps/win64/sdl3`).

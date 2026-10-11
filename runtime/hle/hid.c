@@ -2,11 +2,13 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* hid. Games read the shared memory directly, so we fill it in the real layout (17 entry LIFOs). */
-#include "core/rt.h"
+#include "hle/hid.h"
+#include "hle/services.h"
+#include "kernel/ipc.h"
+#include "kernel/kernel.h"
+#include <string.h>
 #include "hle/hid_layout.h"
 
-KShmem* kshmem_new(u64 size, const char* name);
-u8* kshmem_ptr(KShmem* s);
 static KShmem* g_hid_shm;
 PadState g_pad;
 static u64 g_samp;

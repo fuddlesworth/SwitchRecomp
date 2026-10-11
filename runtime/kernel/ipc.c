@@ -3,7 +3,14 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* HIPC/CMIF (+domains). Requests are served on the calling thread, no server threads and
    no context switches. */
-#include "core/rt.h"
+#include "kernel/ipc.h"
+#include "kernel/kernel.h"
+#include "kernel/mem.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* ============================================================ service objects */
 SvcObj* svcobj_new(const char* name, int (*dispatch)(SvcObj*, IpcCtx*), size_t ds) {

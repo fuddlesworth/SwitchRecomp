@@ -2,6 +2,10 @@
    back to guest memory when the CPU side needs it (DMA and 2D copies), vk_rt_reload reads it again after the CPU
    side wrote that memory. Games reuse one address for render targets of different sizes and formats within a frame:
    a target whose address is taken by another is parked and reused when its size and format come back. */
+#include <stdlib.h>
+#include <string.h>
+#include "gpu/gpu.h"
+#include "hle/nvdrv.h"
 #include "gpu/vk/vk.h"
 
 #define SURFH 4096
@@ -289,20 +293,15 @@ void vk_surf_evict(u32 before) {
         }
 }
 
-/* the 2D engine's blit between render targets, on the GPU (gpu_gl.c's r3d_blit_gl). The surfaces are gpu_engines.c's
+/* the 2D engine's blit between render targets, on the GPU (gpu/gl/renderer.c's r3d_blit_gl). The surfaces are gpu/engines.c's
    Surf2D. 0 when it can't be done there: the front end then copies through guest memory */
-typedef struct {
-    u32 format, linear, bh, depth, layer, pitch, width, height;
-    u64 addr;
-} Surf2D;
 static int blit_ok(VkFormat f, VkFormatFeatureFlags need) {
     VkFormatProperties p;
     vkGetPhysicalDeviceFormatProperties(g_vk.phys, f, &p);
     return (p.optimalTilingFeatures & need) == need;
 }
-int vk_blit2d(const void* sp, const void* dp, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
+int vk_blit2d(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
               double sdy) {
-    const Surf2D *s = sp, *d = dp;
     Surf* st = vk_rt_find(s->addr);
     if (!st || st->f.depth || dw <= 0 || dh <= 0) return 0;
     u32 tile = (d->linear ? 0x1000u : 0) | (d->bh << 4);

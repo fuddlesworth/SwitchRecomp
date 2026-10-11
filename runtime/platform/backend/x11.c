@@ -2,7 +2,20 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* X11 + GLX 4.3 backend. Also what the Xvfb tests run on (screenshots, scripted input). */
-#include "core/rt.h"
+#include "core/main.h"
+#include "gpu/renderer.h"
+#include "hle/hid.h"
+#include "platform/backend.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
@@ -18,7 +31,6 @@ static u64 g_start;
 static u64 g_press = 0, g_press_at = 0, g_press_len = 300;
 static char g_script[1024];
 static u64 keys_held;
-extern int gl_frontend_available;
 void backend_ini(const char* k, const char* v) {
     if (!strcmp(k, "seconds"))
         g_seconds = atoi(v);
@@ -79,7 +91,6 @@ void video_init(const char* title) {
     XMapWindow(dpy, win);
     XFlush(dpy);
     g_start = plat_ns();
-    extern void gpu_gl_start(void);
     gpu_gl_start();
 }
 /* GPU thread */
@@ -151,10 +162,7 @@ void backend_window_size(int* w, int* h) {
     *h = g_wh;
 }
 
-void video_present_rgba(const u32* px, int w, int h, int stride) {
-    extern void gpu_gl_present_cpu(const u32*, int, int, int);
-    gpu_gl_present_cpu(px, w, h, stride);
-}
+void video_present_rgba(const u32* px, int w, int h, int stride) { gpu_gl_present_cpu(px, w, h, stride); }
 
 /* keys -> HidNpadButton bits */
 static u64 keymap(KeySym k) {
@@ -212,10 +220,8 @@ void video_poll(void) {
 void frontend_frame(void) {
     u64 el = plat_ns() - g_start;
     if ((g_maxframes >= 0 && g_frames >= g_maxframes) || (g_seconds && el >= (u64)g_seconds * 1000000000ull)) {
-        extern u64 gpu_gl_screenshot(const char* path);
         u64 h = gpu_gl_screenshot(g_shot[0] ? g_shot : NULL);
         fprintf(stderr, "\nframes=%d hash=%016llx 1280x720\n", g_frames, (unsigned long long)h);
-        extern void save_hints(void);
         save_hints();
         fflush(NULL);
         _exit(0);

@@ -85,8 +85,10 @@ a renderer rewrite on top of a memory-corruption bug would make every regression
       - Open question: what the game waited on before allocating those nodes (`sdk-scout` on the allocator).
       - The Vulkan renderer orders it that way (Phase 6, step 4): 0 crashes in 7 runs. What remains here is
         the same ordering for OpenGL, or Vulkan becoming the default.
-- [ ] Turn compiler warnings back on (upstream builds with `-w`) and fix them file by file, starting with the
-      files we change.
+- [~] Turn compiler warnings back on (upstream builds with `-w`) and fix them file by file, starting with the
+      files we change. The default warnings are on since Phase 8 removed `-w`, and both compilers build clean
+      except for one: GCC's `-Wstringop-overflow` in `shader.c`, where `R(c, r + 2)` for a vector operand that
+      starts near register 255 writes past `used_reg[256]`. Next: what the hardware does there, then `-Wall`.
 
 ## Phase 3: sound
 
@@ -232,8 +234,14 @@ variant and run on Catherine with both renderers.
       both sides check.
 - [x] `runtime/` as a tree of components (`abi`, `core`, `kernel`, `hle`, `gpu` with `gl` and `vk`, `video`,
       `platform`), each a CMake object library, with includes by path.
-- [ ] Headers per component: `rt.h` split up, every inline `extern` replaced by a declaration in the header that
-      owns it, and `-Wnested-externs -Wmissing-prototypes` to keep it that way.
+- [x] Headers per component: `rt.h` split into a header per module (`platform/plat.h`, `platform/log.h`,
+      `kernel/mem.h`, `kernel/kernel.h`, `kernel/ipc.h`, `core/loader.h`, `core/main.h`, `core/options.h`, one per
+      service and device in `hle/`, `video/host1x.h`, `platform/backend.h`...). Every function and global used across
+      files is declared once, in the header of the file that defines it, and the rest are static. The 237 `extern`
+      lines in `.c` files are gone, `-w` with them, and `-Werror=missing-prototypes`,
+      `missing-variable-declarations` and `nested-externs` keep it that way. It turned up three copies of the 2D
+      blit surface struct passed as `void*`, renderer functions whose definitions didn't match the interface's types,
+      a backend static shadowing an LSFG global, and declarations of functions that no longer exist.
 - [ ] The renderer interface as a table of operations that the OpenGL, Vulkan and null renderers fill in, in place of
       the `gpu_gl_*` names, `gpu/renderer.c`'s macros and `gpu/gl/names.h`.
 - [ ] The big files split along their seams: `gpu/gl/renderer.c`, `shader.c`, `hle/services.c` (one file per service

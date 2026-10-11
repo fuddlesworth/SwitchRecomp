@@ -3,7 +3,23 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 #define _GNU_SOURCE
 /* platform glue: threads, timers, VM, files. win32 + posix */
-#include "core/rt.h"
+#include "platform/plat.h"
+#include "core/loader.h"
+#include "core/main.h"
+#include "gpu/gl/overlay.h"
+#include "gpu/renderer.h"
+#include "kernel/mem.h"
+#include "platform/backend.h"
+#include "platform/log.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+#include <stdarg.h>
 #include <time.h>
 
 __thread void* tls_thread;
@@ -52,10 +68,7 @@ void logf_(int lvl, const char* fmt, ...) {
     if (lvl <= 1 || g_verbose >= 2) {
         fputs(buf, stderr);
 #if defined(__ANDROID__)
-        {
-            extern void android_log(const char*);
-            android_log(buf);
-        }
+        android_log(buf);
 #endif
     }
     pm_unlock(&g_logm);
@@ -68,15 +81,10 @@ void fatal(const char* fmt, ...) {
     va_end(ap);
     logf_(0, "FATAL: %s\n", buf);
 #if defined(_WIN32)
-    {
-        extern void win_fatal_box(const char*);
-        win_fatal_box(buf);
-    }
+    { win_fatal_box(buf); }
 #endif
 #if defined(__ANDROID__)
     {
-        extern void overlay_message(const char*);
-        extern void gpu_gl_present_cpu(const u32*, int, int, int);
         char m[600];
         snprintf(m, sizeof m, "Error: %.500s\n(see %s.log)", buf, g_exename);
         overlay_message(m);
@@ -122,10 +130,7 @@ int plat_thread(PThreadFn fn, void* arg, size_t stack) {
     a->arg = arg;
     uintptr_t h = _beginthreadex(NULL, (unsigned)stack, tstart, a, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
     if (!h) return -1;
-    {
-        extern void plat_prof_add_thread(HANDLE);
-        plat_prof_add_thread((HANDLE)h);
-    }
+    { plat_prof_add_thread((HANDLE)h); }
     CloseHandle((HANDLE)h);
     return 0;
 }
@@ -282,7 +287,6 @@ int plat_ncpu(void) {
     return (int)si.dwNumberOfProcessors;
 }
 static LONG WINAPI crash_filter(EXCEPTION_POINTERS* e) {
-    extern void crash_report(void* host_pc, void* fault_addr, int sig);
     crash_report((void*)e->ContextRecord->Rip, (void*)e->ExceptionRecord->ExceptionInformation[1],
                  (int)e->ExceptionRecord->ExceptionCode);
     return EXCEPTION_EXECUTE_HANDLER;
@@ -324,7 +328,6 @@ void plat_install_crash_handler(void) {
 /* ------------------------------------------------------------------ sampling profiler (profile=1)
    ~1 ms tick: suspend each thread, grab rip, map it to a game function / exe offset / module.
    profile.txt gets rewritten every 10 s. */
-#include "core/rt.h"
 static HANDLE g_pth[256];
 static volatile LONG g_npth;
 void plat_prof_add_thread(HANDLE h) {
@@ -771,7 +774,6 @@ int plat_ncpu(void) {
     return n > 0 ? (int)n : 1;
 }
 static void sighandler(int sig, siginfo_t* si, void* uc_) {
-    extern void crash_report(void* host_pc, void* fault_addr, int sig);
     void* pc = NULL;
 #if defined(__x86_64__)
 #include <ucontext.h>

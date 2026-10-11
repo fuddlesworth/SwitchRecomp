@@ -4,6 +4,25 @@
 /* GL 4.3 renderer for the Maxwell command stream. Runs on its own thread like the real GPU: the game
    submits pushbuffers, we execute them and signal syncpoints. Textures, buffers and shaders are
    translated once and cached. */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdarg.h>
+#include "core/loader.h"
+#include "core/main.h"
+#include "core/options.h"
+#include "gpu/gl/lsfg.h"
+#include "gpu/renderer.h"
+#include "gpu/texture/astc.h"
+#include "gpu/texture/bcn.h"
+#include "hle/nvdrv.h"
+#include "kernel/mem.h"
+#include "platform/backend.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#ifdef _WIN32
+#include "platform/recorder.h"
+#endif
 #include "gpu/gpu.h"
 #include <time.h>
 #include <math.h>
@@ -11,31 +30,25 @@
 #include "gpu/shader/shader.h"
 
 int g_gl = 0; /* active renderer */
-int gl_frontend_available;
 static int g_gl_ready;
 #include "gpu/gl/glq.h"
 /* GL calls in this file go through glq when it's on */
 #define backend_gl_proc           glq_proc
 #define backend_gl_swap           glq_swap
 #define backend_gl_worker_current glq_worker_current
-extern int backend_gl_create(void);
-extern void* backend_gl_proc(const char*);
-extern void backend_gl_swap(void);
-extern void backend_window_size(int*, int*);
 u64 g_draws;
 static __thread int t_gpu_thread; /* GL context owner */
 static void cs_complete(int wait);
 static void cs_kick_async(void);
 static int cs_inflight(void);
 static void cs_submit_done(u32 id, u32 n);
-int g_diag_draws;
+static int g_diag_draws;
+static u32 g_submit_epoch; /* the buffer cache's entries are validated once per submit */
 static u64 g_gpu_busy;
 static u64 st_tex_ok, st_tex_null, st_tex_mismatch, st_tex_rt;
 u64 gpu_busy_ns(void) { return __atomic_load_n(&g_gpu_busy, __ATOMIC_RELAXED); }
-extern u32 g_submit_epoch;
 static u64 st_compiling, st_cb_skip, st_cb_bytes, st_vb_hashed, st_vb_up, st_tex_up;
 static u64 st_noshader, st_shfail, st_noprog, st_nort, st_drawn, st_clears, st_pres_rt, st_pres_cpu, st_shaders;
-extern int g_opt_res;
 static float g_scale = 1.0f; /* internal res scale, 0.25..4 */
 static u32 SC(u32 v) {
     u32 r = (u32)(v * g_scale + 0.5f);
@@ -43,7 +56,6 @@ static u32 SC(u32 v) {
 }
 static u32 g_last_cw, g_last_ch; /* last color target size, used to spot shadow passes */
 static float fabsf_(float x) { return x < 0 ? -x : x; }
-u32 fmt_bpp_2d(u32 f);
 
 /* ============================================================ work queue */
 enum { WK_SUBMIT, WK_PRESENT_CPU, WK_PRESENT_ADDR, WK_SHOT, WK_SYNC, WK_DUMP };
@@ -127,7 +139,6 @@ typedef struct {
 /* GLES: anything the hw can't sample gets decoded on the CPU */
 int g_gles;
 static int g_has_astc, g_has_s3tc, g_has_rgtc, g_has_bptc;
-extern int swr_bc_decode(int kind, const u8* src, u32 w, u32 h, u32* out);
 static GlFmt F(GLenum i, GLenum f, GLenum t, int bpp) {
     GlFmt r = {i, f, t, (u8)bpp, 1, 1, 0, 0, 0, 0, 0};
     r.is_int = (f == GL_RGBA_INTEGER || f == GL_RG_INTEGER || f == GL_RED_INTEGER);
@@ -427,7 +438,6 @@ static u64 bl_level_size(u32 w, u32 h, u32 d, const GlFmt* f, u32 bh, u32 bd, u3
     u64 lds = ((ld + (1u << bdd) - 1) >> bdd) << bdd;
     return (u64)gx * gys * lds * 512;
 }
-extern void astc_decode_image(const u8* src, u32 w, u32 h, u32 bw, u32 bh, u8* dst);
 
 /* hack for SMO's Cap Kingdom sea: the VS offsets the surface by (h-0.5)*k using an R16F heightmap that's
    still all zeros at this point (haven't found what writes it). zeros push the sea up into the sky, 0.5 is
@@ -1395,7 +1405,6 @@ static struct {
     u32 tic[8];
     Tex* t;
 } g_tdc[512];
-extern u64 g_draws;
 static u64 st_tdc_hit, st_tdc_miss;
 static Tex* tex_from_tic(u32* tic) {
     u32 k = (tic[1] ^ (tic[1] >> 9) ^ tic[0] ^ (tic[2] << 7) ^ tic[4] ^ (tic[5] << 3)) & 511;
@@ -1637,7 +1646,6 @@ static GLuint sampler_get(const u32* tsc) {
 }
 
 /* ============================================================ shaders and programs */
-extern int g_glsl_version;
 struct WJob;
 typedef struct Sh {
     u64 hash;
@@ -1839,7 +1847,6 @@ static Sh* shader_get(u64 gva_code, u64 gva_a, int stage, u32 attr_int, u32 attr
     char* src = shader_to_glsl(code, 0x10000, stage, &s->si);
     /* dump shaders with indirect branches (code + cbufs) for offline analysis */
     {
-        extern int g_opt_diag;
         if (g_opt_diag && src && strstr(src, "uint t_ = uint(")) {
             static int nb;
             if (nb < 24) {
@@ -2151,7 +2158,6 @@ static WJob* wr_pop(WRing* r) {
     __atomic_store_n(&r->h, h + 1, __ATOMIC_RELEASE);
     return j;
 }
-extern int backend_gl_worker_current(void);
 static void shader_worker(void* arg) {
     (void)arg;
     if (!backend_gl_worker_current()) {
@@ -2160,7 +2166,6 @@ static void shader_worker(void* arg) {
     }
     __atomic_store_n(&g_worker, 1, __ATOMIC_RELEASE);
     {
-        extern int g_opt_cmp_low;
         if (g_opt_cmp_low) plat_thread_low_priority();
     } /* only use the CPU the game isn't using */
     for (;;) {
@@ -2662,7 +2667,7 @@ static Tex* rt_texture(u64 gva, u32 w, u32 h, u32 fmt, u32 tile, int depth) {
    or slice by slice (base layer @0x208). backed by a 3D/array texture that 3D/array TICs at the same
    address then use directly (32^3 LUTs) */
 static u64 st_rt_vol, st_waited;
-int g_draw_layered;
+static int g_draw_layered;
 static Tex* rt_vol(Tex* t, u32 dep, int is3d) {
     GLenum tg = is3d ? GL_TEXTURE_3D : GL_TEXTURE_2D_ARRAY;
     Tex* v = t->vol;
@@ -2831,10 +2836,6 @@ static void bind_framebuffer(GpuChannel* ch) {
 }
 
 /* ============================================================ RT <-> memory, GPU 2D blits */
-typedef struct {
-    u32 format, linear, bh, depth, layer, pitch, width, height;
-    u64 addr;
-} Surf2Dg;
 static GLuint g_rfbo, g_dfbo;
 static int rt_plain(Tex* t) {
     return t && !t->f.depth && !t->f.is_int && t->f.fmt == GL_RGBA && t->f.type == GL_UNSIGNED_BYTE && t->f.bpp == 4;
@@ -2968,7 +2969,8 @@ void gpu_gl_rt_reload(u64 gva) {
 }
 /* 2D blit from an RT, done on the GPU */
 static void state_dirty(void);
-int r3d_blit_gl(Surf2Dg* s, Surf2Dg* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx, double sdy) {
+int r3d_blit_gl(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
+                double sdy) {
     state_dirty();
     Tex* st = tex_find_rt(s->addr);
     trace_note("BLIT2D %llx(%ux%u f%x%s) -> %llx(%ux%u f%x) dst(%d,%d %dx%d) src(%.1f,%.1f step %.3f,%.3f)\n",
@@ -3567,8 +3569,6 @@ typedef struct {
 } UrC;
 static UrC urc[4096];
 static void upload_cbufs_ring(int stage, Sh* s) {
-    extern u64 g_gw_gen;
-    extern int gpu_mem_dirty_since(u64, u64, u64);
     int bb = (stage == 0 ? 0 : stage == 4 ? 1 : 2) * 18;
     for (int i = 0; i < 18; i++) {
         if (!(s->si.cbuf_mask & (1u << i))) continue;
@@ -3626,8 +3626,6 @@ static void upload_cbufs(int stage, Sh* s) {
         static u32 last_sz[5][18];
         if (!last[stage][i]) last[stage][i] = calloc(1, 65536);
         { /* same submit/address, not GPU-written: unchanged (games don't write while the GPU reads) */
-            extern u64 g_gw_gen;
-            extern int gpu_mem_dirty_since(u64, u64, u64);
             static u64 la[5][18], lg[5][18], le[5][18];
             if (a && la[stage][i] == a && le[stage][i] == g_submit_epoch && last_sz[stage][i] >= sz &&
                 !gpu_mem_dirty_since(lg[stage][i], a, sz)) {
@@ -4054,7 +4052,6 @@ static void bind_textures(GpuChannel* ch, int stage, Sh* s) {
 static u8* g_stage_buf;
 static size_t g_stage_cap;
 /* buffer cache keyed by guest range, validated once per submit */
-u32 g_submit_epoch;
 typedef struct VbC {
     u64 start, len, hash, cpu;
     u32 epoch, used;
@@ -4093,10 +4090,7 @@ static void ww_poll(void) {
             g_cgen = calloc((size_t)(AS_SIZE >> 16), 4);
             if (!g_cgen)
                 g_ww = 0;
-            else {
-                extern void (*g_ww_touch)(u64);
-                g_ww_touch = ww_touch;
-            }
+            else { g_ww_touch = ww_touch; }
         }
         if (!g_ww) return;
         LOG("gpu: write tracking active (unchanged buffers are not re-read)\n");
@@ -4114,8 +4108,6 @@ static int ww_dirty(u64 ga, u64 len, u32 since) {
         if (g_cgen[c] > since) return 1;
     return 0;
 }
-void cs_mem_need(u64 a, u64 n);
-extern volatile int g_cs_any;
 /* cheap check for big ranges: first/last 64 bytes + 62 spread out 32-byte blocks (~2K read). good at catching
    a new level loaded over old data, not small edits; the full check handles those */
 static u64 sample_hash(u64 gva, u64 len) {
@@ -4609,7 +4601,7 @@ static void trace_frame(void) {
 }
 static void lsfg_pump(void);
 static int g_lfn;
-void cs_flush_pending(void);
+static void cs_flush_pending(void);
 void r3d_draw_gl(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 base_vertex, u32 base_instance,
                  u32 instances) {
     u32* r = ch->r3d;
@@ -4777,12 +4769,10 @@ void r3d_draw_gl(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count
         g_last_ch = g_rt[0]->h;
     }
     {
-        extern int g_opt_shadows; /* shadows=0: skip depth-only passes at a different size (shadow maps) */
         if (!g_opt_shadows && !g_nrt && g_zt && (g_zt->w != g_last_cw || g_zt->h != g_last_ch)) {
             trace_note("DRAW SKIPPED: shadow\n");
             /* ...and clear the map to far (1.0) once a frame so it reads as fully lit instead of black */
             {
-                extern int g_frames;
                 if (g_zt->skipclr != g_frames + 1) {
                     g_zt->skipclr = g_frames + 1;
                     static PFNGLCLEARTEXIMAGEPROC p_cz;
@@ -5168,15 +5158,7 @@ volatile u32 g_vi_transform; /* crop/transform from QueueBuffer */
    each presented frame gets converted to NV12 (BT.709) on the GPU at window size, same letterboxing as on
    screen. read back through a PBO two frames later so the GPU thread never waits. Windows does the H.264
    encode on its own thread */
-extern volatile int g_rec_toggle;
-extern void backend_rec_state(int on);
-extern int rec_open(const wchar_t* path, int w, int h, int fps);
-extern void rec_frame(const u8* nv12, i64 t100, i64 dur100);
-extern void rec_close(void);
 #define REC_N 3
-extern volatile int g_vt_on;
-extern int g_opt_rec_fps;
-extern u64 guest_ns(void);
 static u64 g_rec_n, g_rec_vt0, g_rec_lastts;
 static int g_rec_on, g_rec_w, g_rec_h;
 static u64 g_rec_t0, g_rec_last;
@@ -5280,9 +5262,6 @@ static void rec_start(void) {
     g_rec_have = 0;
     backend_rec_state(1);
     {
-        extern void vt_set(int);
-        extern volatile int g_vt_on;
-        extern volatile int g_rec_active;
         g_rec_active = 1;
         vt_set(1);
         g_rec_vt0 = guest_ns();
@@ -5343,13 +5322,11 @@ static void rec_stop(void) {
     g_rec_on = 0;
     backend_rec_state(0);
     {
-        extern void vt_set(int);
-        extern volatile int g_rec_active;
         vt_set(0);
         g_rec_active = 0;
     }
 }
-volatile int g_rec_exit; /* at exit: 1 = finalize, 2 = done */
+static volatile int g_rec_exit; /* at exit: 1 = finalize, 2 = done */
 void gpu_gl_rec_finish(void) {
     if (!g_rec_on) return;
     g_rec_exit = 1;
@@ -5730,14 +5707,6 @@ static void screen_swap(void) {
 } /* Android overlay may touch state/program */
 
 /* ============================================================ LSFG frame gen (user's own Lossless.dll) */
-extern int lsfg_init(void);
-extern int lsfg_ready(void);
-extern int lsfg_context(u32, u32);
-extern GLuint lsfg_in_tex(void);
-extern void lsfg_reset(void);
-extern int lsfg_process(int, GLuint*);
-extern int g_lsfg_mult, g_lsfg_height;
-extern float g_lsfg_target;
 static GLuint g_lf_fbo;
 static u64 g_lf_last, g_lf_int = 33333333ull;
 static int g_lf_on, g_lf_W, g_lf_H;
@@ -5777,7 +5746,6 @@ static int lsfg_frame(GLuint tex, const float* xf, int tw, int th) {
     if (!lsfg_ready() || tw <= 0 || th <= 0) return 0;
 #ifdef _WIN32
     {
-        extern volatile int g_vt_on;
         if (g_vt_on) {
             lf_flush();
             g_lf_on = 0;
@@ -5802,7 +5770,6 @@ static int lsfg_frame(GLuint tex, const float* xf, int tw, int th) {
         if (st != ls) {
             ls = st;
 #ifdef _WIN32
-            extern void backend_lsfg_state(int, int);
             backend_lsfg_state(st != 0, st);
 #endif
             LOG("lsfg: %s\n", st ? "ON" : "standby (the game already reaches the target)");
@@ -5887,7 +5854,6 @@ static int lsfg_frame(GLuint tex, const float* xf, int tw, int th) {
             shot = e ? atoi(e) : 0;
         }
         if (shot > 0 && n > 0 && ++cnt == shot) {
-            extern void lsfg_debug_tex(GLuint*, GLuint*, u32*, u32*);
             GLuint a, b;
             u32 w, h;
             lsfg_debug_tex(&a, &b, &w, &h);
@@ -6112,7 +6078,6 @@ static int present_addr(u64 cpu_addr, int w, int h) {
 }
 
 /* ============================================================ GPU thread */
-extern void gpu_submit_now(u64* e, u32 n, u32 channel);
 static u64 g_last_shot_hash;
 static void do_screenshot(const char* path) {
     int w = g_last_w ? g_last_w : 1280, h = g_last_h ? g_last_h : 720;
@@ -6599,7 +6564,6 @@ static u64 g_fr_shnew;
 /* UBO with 1/scale for gl_FragCoord math (shaders do uv = pos * 1/native size) */
 static GLuint g_rs_ubo;
 static void rs_update(void) {
-    extern int g_rs_binding;
     if (!g_rs_ubo) {
         GLint mx = 84;
         glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, &mx);
@@ -6699,11 +6663,8 @@ static u64 rd_t0, rd_f0, rd_busy0, rd_cpu0, rd_swap;
 static int rd_hold, rd_up;
 static u64 rd_lastdown;
 static void res_dyn_step(void) {
-    extern int g_opt_resdyn;
-    extern float g_opt_resmin, g_opt_resf;
     if (!g_opt_resdyn || g_gles || !p_cis) return;
     u64 now = plat_ns();
-    extern u64 plat_thread_cpu_ns(void);
     if (!rd_t0) {
         rd_t0 = now;
         rd_f0 = g_frame;
@@ -6796,8 +6757,6 @@ static void frame_stats(void) {
     }
     g_fr_shnew = st_sh_new;
     { /* resolution edited in the ini while running: apply now */
-        extern int g_opt_resdyn;
-        extern float g_opt_resf;
         if (!g_opt_resdyn && !g_gles && p_cis && (g_scale > g_opt_resf + 0.01f || g_scale < g_opt_resf - 0.01f))
             rt_rescale(g_opt_resf);
     }
@@ -6806,10 +6765,7 @@ static void frame_stats(void) {
 static void gpu_thread(void* arg) {
     t_gpu_thread = 1;
     (void)arg;
-    {
-        extern void plat_thread_high_priority(void);
-        plat_thread_high_priority();
-    }
+    { plat_thread_high_priority(); }
     {
         int qs = glq_start(); /* 1: GL lives on its own thread (context + fn pointers made there), 0: this thread */
         if (qs < 0 || (qs == 0 && (!backend_gl_create() || !swr_gl_load(backend_gl_proc)))) {
@@ -6820,7 +6776,6 @@ static void gpu_thread(void* arg) {
         }
     }
     {
-        extern int g_glsl_version, g_glsl_es;
         GLint mj = 4, mn = 3;
         glGetIntegerv(GL_MAJOR_VERSION, &mj);
         glGetIntegerv(GL_MINOR_VERSION, &mn);
@@ -6867,7 +6822,6 @@ static void gpu_thread(void* arg) {
             if (!strcmp(e, "GL_NV_viewport_array2")) vl |= 4;
         }
         {
-            extern int g_vs_layer_ext;
             g_vs_layer_ext = g_gles ? 0 : (vl & 1) ? 1 : (vl & 2) ? 2 : (vl & 4) ? 3 : 0;
             LOG("gpu: render target layer from the vertex shader: %s\n",
                 g_vs_layer_ext == 1   ? "ARB_shader_viewport_layer_array"
@@ -6927,7 +6881,6 @@ static void gpu_thread(void* arg) {
         glEnable(0x8642);
     } /* GL_PROGRAM_POINT_SIZE, gl_PointSize comes from the shader */
     {
-        extern float g_opt_resf;
         g_scale = g_opt_resf;
         if (g_scale != 1.0f) LOG("internal resolution x%.2f\n", g_scale);
     }
@@ -6970,10 +6923,6 @@ static void gpu_thread(void* arg) {
                 static int nst;
                 nst++;
                 next_st = now + (nst < 24 ? 5000000000ull : 30000000000ull);
-                extern volatile u64 g_gpu_submits;
-                extern int g_frames;
-                extern volatile u64 g_dma_copies;
-                extern volatile u64 g_compute_launches;
                 LOG("gpu: frames=%d submits=%llu draws=%llu (drawn %llu, no shader %llu, failed shader %llu, no program %llu, no target %llu) clears=%llu shaders=%llu present: rt=%llu cpu=%llu | textures ok=%llu rt=%llu null=%llu type-mismatch=%llu, dma copies=%llu, compute=%llu, waiting for shader=%llu\n",
                     g_frames, (unsigned long long)g_gpu_submits, (unsigned long long)g_draws,
                     (unsigned long long)st_drawn, (unsigned long long)st_noshader, (unsigned long long)st_shfail,
@@ -7003,13 +6952,11 @@ static void gpu_thread(void* arg) {
                         rf = g_rf = fopen("performance.txt", "w");
                         t_start = g_rf_t0 = now;
                         if (rf) {
-                            extern int plat_ncpu(void);
                             fprintf(
                                 rf,
                                 "SwitchRecomp - performance (each line = last few seconds). CPU: %d cores. GPU: %s\n",
                                 plat_ncpu(), (const char*)glGetString(GL_RENDERER));
                             {
-                                extern int g_code_tcc;
                                 if (g_code_tcc)
                                     fprintf(
                                         rf,
@@ -7023,7 +6970,6 @@ static void gpu_thread(void* arg) {
                     u64 pc = plat_process_cpu_ns(), gc = plat_thread_cpu_ns();
                     u64 dtn = now - l_now;
                     if (rf && l_now && dtn) {
-                        extern int plat_ncpu(void);
                         u64 cn = g_cmp_n - l_cn, cns = g_cmp_ns - l_cns;
                         u64 frn = g_frame - l_fr2;
                         fprintf(rf, "%4llu | %4.1f | %3d%% of %d cores | %3d%% | %6llu | %4llu (%5.1f, %5.1f) | %llu\n",
@@ -7080,7 +7026,6 @@ static void gpu_thread(void* arg) {
                     u64 fr = g_frame - last_frames_pf;
                     if (!fr) fr = 1;
                     static u64 l_shf, l_sh, l_fbs, l_tbs, l_urw, l_tck, l_ss, l_dm, l_csg, l_css, l_csn, l_th, l_tm;
-                    extern u64 g_draws_merged;
                     LOG("per-frame profile: %llu draws | constants: %.1f KB copied, %llu reused | vertices/indices: %.1f KB checked, %.1f KB uploaded | textures: %.1f KB checked, %.1f KB uploaded | shaders via fast cache %llu/%llu | same fbo %llu, same textures %llu, same state %llu, ring waits %llu, merged instances %llu | compute: %llu GPU copies, %llu waits (%.1f ms) | texture lookups reused %.0f%%\n",
                         (unsigned long long)((st_drawn - l_dr) / fr), (double)(st_cb_bytes - l_cbb) / 1024.0 / fr,
                         (unsigned long long)((st_cb_skip - l_cbs) / fr), (double)(st_vb_hashed - l_vbh) / 1024.0 / fr,
@@ -7150,7 +7095,6 @@ static void gpu_thread(void* arg) {
                 g_submit_epoch++;
                 ww_poll();
                 {
-                    extern volatile u64 g_gpu_sub_ns;
                     static u32 fr = ~0u;
                     if (fr != g_frame || !g_gpu_sub_ns) {
                         fr = g_frame;
@@ -7173,7 +7117,6 @@ static void gpu_thread(void* arg) {
                 break;
             case WK_PRESENT_ADDR:
                 if (!present_addr(w.addr, w.w, w.h)) {
-                    extern void vi_convert_cpu(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, u32 * out);
                     u32* px = malloc((size_t)w.w * w.h * 4);
                     vi_convert_cpu(w.addr, w.w, w.h, w.n, (w.fmt >> 8) & 15, (w.fmt >> 12) & 15, w.fmt & 0xFF, px);
                     present_cpu(px, w.w, w.h);
@@ -7200,7 +7143,6 @@ void gpu_gl_start(void) {
     pm_init(&g_ql);
     pc_init(&g_qcv);
     pc_init(&g_qspace);
-    gl_frontend_available = 1;
     if (plat_thread(gpu_thread, NULL, 64u << 20)) fatal("could not create the GPU thread");
     while (!g_gl_ready) plat_sleep_ns(1000000);
 }
@@ -7210,10 +7152,7 @@ int gpu_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
     Work w;
     memset(&w, 0, sizeof w);
     w.kind = WK_SUBMIT;
-    {
-        extern u64 guest_ns(void);
-        w.sub_ns = guest_ns();
-    }
+    { w.sub_ns = guest_ns(); }
     w.ent = malloc((size_t)n * 8 + 8);
     memcpy(w.ent, e, (size_t)n * 8);
     w.n = n;
@@ -7396,14 +7335,12 @@ static void cs_complete(int wait) {
         g_cs_hi = 0;
     }
     /* submits that completed while this was in flight only count as done now; the game waits on them before reading */
-    extern void syncpt_incr(u32 id);
     for (int i = 0; i < g_cs_nincs; i++)
         for (u32 k = 0; k < g_cs_incs[i].n; k++) syncpt_incr(g_cs_incs[i].id);
     g_cs_nincs = 0;
 }
 /* syncpoint incrs of a submit get held back (in order) while compute results are in flight */
 static void cs_submit_done(u32 id, u32 n) {
-    extern void syncpt_incr(u32 id);
     if (g_cs_fl.fence && g_cs_nincs >= 64) cs_complete(1);
     if (g_cs_fl.fence) {
         g_cs_incs[g_cs_nincs].id = id;
@@ -7415,7 +7352,6 @@ static void cs_submit_done(u32 id, u32 n) {
 }
 /* an incr inside the stream means everything before it is done, so it has to go after any pending compute results */
 void gpu_gl_stream_incr(u32 id) {
-    extern void syncpt_incr(u32 id);
     if (!t_gpu_thread) {
         syncpt_incr(id);
         return;
@@ -7429,7 +7365,7 @@ void gpu_gl_before_syncwait(void) {
 }
 static int cs_inflight(void) { return g_cs_fl.fence != 0; }
 /* sync path: land everything pending/in flight in guest memory now */
-void cs_flush_pending(void) {
+static void cs_flush_pending(void) {
     cs_complete(1);
     if (!g_cs_npend) {
         g_cs_any = 0;
@@ -7610,7 +7546,6 @@ static int cs_cb_read(u32 idx, u32 off, u32* out) {
 }
 void gpu_gl_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     if (getenv("SWR_NO_COMPUTE")) return;
-    extern void r3d_pending_flush(void);
     r3d_pending_flush();
     u32* rc = ch->rcomp;
     u64 prog = code + q[8];

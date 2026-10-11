@@ -1,6 +1,13 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
+#include <string.h>
+#include "core/main.h"
+#include "core/options.h"
+#include "gpu/renderer.h"
+#include "kernel/mem.h"
+#include "platform/log.h"
+#include "platform/plat.h"
 #include <stdio.h>
 #include <stdlib.h>
 /* engines: MME, 3D (regs, cb data, reports, clears), 2D, DMA, compute */
@@ -196,12 +203,6 @@ static void mme_run(GpuChannel* ch, u32 idx, const u32* params, u32 np) {
 
 /* ============================================================ Maxwell 3D */
 #define R3(i) (ch->r3d[i])
-extern void r3d_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 base_vertex,
-                     u32 base_instance, u32 instances);
-extern void r3d_clear(GpuChannel* ch, u32 v);
-extern void r3d_const_upload(GpuChannel* ch, u32 v);
-extern void r3d_cb_bind(GpuChannel* ch, int stage, u32 v);
-extern u64 g_draws;
 static u32 g_instance_count, g_draw_inline_count;
 /* instancing comes in as N BEGIN/END pairs with the next-instance bit. we accumulate them and emit
    one draw of N instances once something else shows up */
@@ -226,8 +227,6 @@ int r3d_pending_on(void) { return g_pd.on; }
    measured GPU time ~0 and the game stays at full res. game_dynamic_resolution=1 stamps real time instead. */
 volatile u64 g_gpu_sub_ns;
 u64 gpu_ticks(void) {
-    extern int g_opt_drs;
-    extern u64 guest_ns(void);
     static u64 last;
     u64 n = g_opt_drs ? guest_ns() : (g_gpu_sub_ns ? g_gpu_sub_ns : guest_ns());
     if (n <= last) n = last + 16;
@@ -313,10 +312,7 @@ void maxwell3d_method(GpuChannel* ch, u32 m, u32 v, int last) {
         case 0x6C: i2m_launch(ch, ch->r3d, 0x60); break;
         case 0x6D: i2m_data(ch, v); break;
         case 0xB2:
-            if (v & (1u << 20)) {
-                extern void gpu_gl_stream_incr(u32);
-                gpu_gl_stream_incr(v & 0xFFFF);
-            }
+            if (v & (1u << 20)) { gpu_gl_stream_incr(v & 0xFFFF); }
             break;                           /* SyncInfo */
         case 0x674: r3d_clear(ch, v); break; /* ClearBuffers */
         case 0x6C3: query_get(ch, ch->r3d, 0x6C0, v); break;
@@ -398,27 +394,20 @@ void compute_method(GpuChannel* ch, u32 m, u32 v, int last) {
         case 0x6D: i2m_data(ch, v); break;
         case 0xAF: /* launch; the first few programs get dumped for debugging */ {
             g_compute_launches++;
-            extern int g_gl;
-            extern void gpu_gl_note_compute(void);
             if (g_gl) gpu_gl_note_compute();
             u64 qmd = (u64)ch->rcomp[0xAD] << 8;
             u64 code = ((u64)ch->rcomp[0x582] << 32) | ch->rcomp[0x583];
             u32 q[64];
             gmem_read(qmd, q, 256);
-            if (g_gl) {
-                extern void gpu_gl_dispatch(GpuChannel*, const u32*, u64);
-                gpu_gl_dispatch(ch, q, code);
-            }
+            if (g_gl) { gpu_gl_dispatch(ch, q, code); }
             u64 prog = code + q[8];
             static u64 seen[32];
             static int ns;
             int known = 0;
             for (int i = 0; i < ns; i++)
                 if (seen[i] == prog) known = 1;
-            extern int g_opt_diag;
             if (!known && ns < 32 && g_opt_diag) {
                 seen[ns++] = prog;
-                extern int plat_mkdir(const char*);
                 plat_mkdir("captures");
                 plat_mkdir("captures/compute");
                 char p[160];
@@ -470,10 +459,6 @@ void kepler_i2m_method(GpuChannel* ch, u32 m, u32 v) {
 }
 
 /* ============================================================ Fermi 2D (blits) */
-typedef struct {
-    u32 format, linear, bh, depth, layer, pitch, width, height;
-    u64 addr;
-} Surf2D;
 static void surf2d(u32* r, int b, Surf2D* s) {
     s->format = r[b];
     s->linear = r[b + 1];
@@ -521,8 +506,6 @@ u32 fmt_bpp_2d(u32 f) {
         default: return 4;
     }
 }
-extern int r3d_blit(Surf2D* src, Surf2D* dst, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
-                    double sdy);
 void fermi2d_method(GpuChannel* ch, u32 m, u32 v) {
     m &= 0x3FF;
     ch->r2d[m] = v;
@@ -547,9 +530,6 @@ void fermi2d_method(GpuChannel* ch, u32 m, u32 v) {
             if (sy < 0) sy = 0;
         }
         if (r3d_blit(&src, &dst, dx0, dy0, dw, dh, sx, sy, sdx, sdy)) return;
-        extern int g_gl;
-        extern void gpu_gl_rt_flush(u64);
-        extern void gpu_gl_rt_reload(u64);
         if (g_gl) {
             gpu_gl_rt_flush(src.addr);
             gpu_gl_rt_flush(dst.addr);
@@ -589,8 +569,6 @@ static u8* bl_span_ptr(u64 base, u32 wbytes, u32 h, u32 bh, u32 z, u32 bd, u64* 
     return p;
 }
 static void bl_span_done(u64 base, u64 span) {
-    extern void (*g_ww_touch)(u64);
-    extern u8* g_mem;
     if (g_ww_touch) {
         u8* p = gmem_ptr(base, span);
         if (p)
@@ -651,7 +629,6 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
     {
         static u64 ndma;
         ndma++;
-        extern volatile u64 g_dma_copies;
         g_dma_copies = ndma;
     }
     {
@@ -664,10 +641,6 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
                 sbh, sw, sh, r[0x1CF], v);
         }
     }
-    extern int g_gl;
-    extern void gpu_gl_rt_flush(u64);
-    extern void gpu_gl_rt_reload(u64);
-    extern void gpu_gl_trace(const char*);
     if (g_gl) {
         char tb[256];
         snprintf(tb, sizeof tb, "DMA %s %llx -> %s %llx len=%u lines=%u remap=%d\n", src_linear ? "lin" : "bl",
@@ -793,7 +766,4 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
     }
 }
 
-void gpu_flush(GpuChannel* ch) {
-    extern void r3d_flush(GpuChannel * ch);
-    r3d_flush(ch);
-}
+void gpu_flush(GpuChannel* ch) { r3d_flush(ch); }

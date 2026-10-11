@@ -4,8 +4,37 @@
 #define _GNU_SOURCE
 /* startup: load GAME_code.dll/.so, set up memory + services + main thread, then run the frontend
    loop (window, input, vsync). */
-#include "core/rt.h"
+#include "core/main.h"
+#include "core/loader.h"
+#include "core/options.h"
+#include "gpu/gl/lsfg.h"
+#include "gpu/gpu.h"
+#include "gpu/renderer.h"
+#include "hle/fs.h"
+#include "hle/hid.h"
+#include "hle/nvdrv.h"
+#include "hle/services.h"
+#include "hle/vi.h"
+#include "kernel/ipc.h"
+#include "kernel/kernel.h"
+#include "kernel/mem.h"
+#include "platform/backend.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 #include <sys/stat.h>
+#if defined(_WIN32)
+extern char __ImageBase; /* the linker's: where the executable is loaded */
+#else
+#include <dlfcn.h>
+#endif
 
 const SwrModule* g_mod;
 GuestFn* g_disp;
@@ -78,7 +107,6 @@ static void load_hints(void) {
     fclose(f);
 }
 
-void kernel_dump_regs(CPU* c);
 static void rt_undef(CPU* c, u64 pc, u32 w) {
     WARN("\nUnsupported instruction %08x at %llx\n", w, (unsigned long long)pc);
     c->pc = pc;
@@ -133,7 +161,6 @@ static void vt_frame(void) {
     /* cost per frame = GPU thread busy time. don't use full frame time, the game's own waits
      would feed back and slow the clock further */
     {
-        extern u64 gpu_busy_ns(void);
         u64 b = gpu_busy_ns();
         static u64 lb;
         if (g_vt_lastfr) {
@@ -230,13 +257,11 @@ void crash_report(void* host_pc, void* fault, int sig) {
     logf_(0, "\n*** Crash (signal %d) at host pc=%p, access to %p (game address %llx) ***\n", sig, host_pc, fault,
           (unsigned long long)ga);
     {
-        extern void mem_report(char*, int);
         char mr[200];
         mem_report(mr, sizeof mr);
         logf_(0, "  memory: %s\n", mr);
 #ifdef _WIN32
         {
-            extern char __ImageBase;
             u64 b = (u64)(size_t)&__ImageBase, p = (u64)(size_t)host_pc;
             if (p >= b && p < b + 0x10000000ull)
                 logf_(0, "  in the runtime itself (exe offset +%llx), thread %s\n", (unsigned long long)(p - b),
@@ -355,16 +380,11 @@ static void ini_apply(const char* k, const char* v) {
     else if (!strcmp(k, "game_dynamic_resolution"))
         g_opt_drs = atoi(v); /* 1 = let the game's own DRS work */
     else if (!strcmp(k, "memory_gb")) {
-        extern int g_opt_mem_gb;
         g_opt_mem_gb = atoi(v);
     } else if (!strcmp(k, "heap_max_mb")) {
-        extern u64 g_heap_max;
         g_heap_max = (u64)atoi(v) << 20;
     }
-    {
-        extern void lsfg_ini(const char*, const char*);
-        lsfg_ini(k, v);
-    }
+    { lsfg_ini(k, v); }
     backend_ini(k, v);
 }
 void ini_load(const char* path) {
@@ -469,7 +489,7 @@ static int ini_known(const char* k) {
             if (!strcmp(o->key, k)) return 1;
     return 0;
 }
-void ini_write(void) {
+static void ini_write(void) {
     if (!g_ini_path[0]) return;
     char tmp[1450];
     snprintf(tmp, sizeof tmp, "%s.tmp", g_ini_path);
@@ -505,18 +525,18 @@ void ini_write(void) {
     g_ini_mtime = file_mtime(g_ini_path);
 }
 /* in-game toggles (F4) get persisted */
-volatile int g_ini_dirty;
+static volatile int g_ini_dirty;
 void ini_set(const char* k, const char* v) {
     ini_store(k, v);
     g_ini_dirty = 1;
 }
-void ini_open(const char* path) {
+static void ini_open(const char* path) {
     strncpy(g_ini_path, path, sizeof g_ini_path - 1);
     ini_load(path);
     ini_write();
 }
 /* ini edited while running: reload and apply what we can live */
-void ini_poll(void) {
+static void ini_poll(void) {
     if (!g_ini_path[0]) return;
     if (g_ini_dirty) {
         g_ini_dirty = 0;
@@ -541,7 +561,6 @@ void vi_convert_cpu(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt
     u32 bpp = (fmt == 4 || fmt == 6 || fmt == 7) ? 2 : 4;
     u8* lin = malloc((size_t)w * h * bpp);
     if (layout == 3 || layout == 2) {
-        extern void deswizzle(u8 * dst, u32 dst_pitch, const u8* src, u32 w_bytes, u32 h, u32 bh_log2);
         deswizzle(lin, w * bpp, GP(a), w * bpp, h, bhl);
     } else {
         for (u32 y = 0; y < h; y++) memcpy(lin + (size_t)y * w * bpp, GP(a + (u64)y * pitch), w * bpp);
@@ -583,8 +602,6 @@ void vi_convert_cpu(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt
     free(lin);
 }
 void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
-    extern u64 nvmap_addr_by_id(u32 id);
-    extern int g_gl;
     u64 a = nvmap_addr_by_id(nvmap_id);
     if (!a) {
         WARN("vi: buffer without memory (nvmap %u)\n", nvmap_id);
@@ -592,7 +609,6 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     }
     a += offset;
     if (g_gl) {
-        extern void gpu_gl_present_buffer(u64, u32, u32, u32, u32, u32, u32);
         gpu_gl_present_buffer(a, w, h, pitch, layout, bhl, fmt);
     } else {
         pm_lock(&g_flock);
@@ -676,7 +692,6 @@ static int load_code(void) {
     void* h = plat_dl_open(p);
     if (!h) {
 #if !defined(_WIN32)
-        extern char* dlerror(void);
         WARN("dlopen: %s\n", dlerror());
 #endif
         WARN("Cannot find the recompiled code: %s\n", p);
@@ -717,8 +732,8 @@ static void build_dispatch(void) {
     swr_interp_entry = g_mod->interp;
 }
 
-void services_init(void) {
-    extern void svc_core_init(void), svc_hid_init(void), svc_fs_init(void), svc_vi_init(void), svc_pl_init(void);
+static void svc_pl_init(void);
+static void services_init(void) {
     svc_core_init();
     svc_hid_init();
     svc_fs_init();
@@ -778,7 +793,6 @@ int swr_main(int argc, char** argv) {
     load_hints();
     if (loader_load()) fatal("Could not load the game executables from %sexefs/", g_datadir);
     { /* npdm SystemResourceSize; newer SDKs only init their VM allocator when > 0 */
-        extern u64 g_sysres_size;
         char q[1200];
         snprintf(q, sizeof q, "%sexefs/main.npdm", g_datadir);
         FILE* f = fopen(q, "rb");
@@ -798,7 +812,6 @@ int swr_main(int argc, char** argv) {
     gpu_init();
     video_init(g_mod->title ? g_mod->title : g_exename);
     {
-        extern void plat_prof_start(int);
         if (g_opt_prof) {
             plat_prof_start(0);
             LOG("profile: active (profile.txt every 10 s)\n");
@@ -814,10 +827,7 @@ int swr_main(int argc, char** argv) {
         hid_update();
         vsync_tick_vt();
         if (tick % 60 == 0) ini_poll();
-        {
-            extern void kernel_heal_mutexes(void);
-            kernel_heal_mutexes();
-        }
+        { kernel_heal_mutexes(); }
         /* bail out of the slow clock if nothing was presented for 3s */
         {
             static int lf = -1, still;
@@ -839,8 +849,6 @@ int swr_main(int argc, char** argv) {
         if (++tick % 300 == 0) save_hints();
         /* dump thread states to threads.txt every 15s, useful when something hangs */
         if (tick % 900 == 0) {
-            extern FILE* volatile g_log_redirect;
-            extern void kernel_dump_threads(void);
             char p[1200];
             snprintf(p, sizeof p, "%sthreads.txt", g_exedir);
             FILE* f = fopen(p, "w");
@@ -854,11 +862,7 @@ int swr_main(int argc, char** argv) {
         }
         /* auto diag only with diag=1, F5 always works */
         {
-            extern int g_opt_diag;
-            if (g_opt_diag && (tick == 60 * 20 || tick == 60 * 40)) {
-                extern void gpu_gl_dump_rts(void);
-                gpu_gl_dump_rts();
-            }
+            if (g_opt_diag && (tick == 60 * 20 || tick == 60 * 40)) { gpu_gl_dump_rts(); }
         }
         {
             static int last_frames = -1, still = 0, dumps = 0;
@@ -868,7 +872,6 @@ int swr_main(int argc, char** argv) {
             } else if (++still == 60 * 15 && dumps < 4) {
                 dumps++;
                 still = 0;
-                extern void kernel_dump_threads(void);
                 LOG("warning: %d s without a new image (frames=%d, GPU submits=%llu)\n", 15, g_frames,
                     (unsigned long long)g_gpu_submits);
                 kernel_dump_threads();
@@ -882,10 +885,7 @@ int swr_main(int argc, char** argv) {
             next = now;
     }
     save_hints();
-    {
-        extern void gpu_gl_rec_finish(void);
-        gpu_gl_rec_finish();
-    }
+    { gpu_gl_rec_finish(); }
     LOG("Exit.\n");
     fflush(NULL);
 #if defined(_WIN32)
@@ -896,7 +896,7 @@ int swr_main(int argc, char** argv) {
 
 #if !defined(_WIN32)
 #include <dlfcn.h>
-int dladdr_name(void* pc, char* out, int n) {
+static int dladdr_name(void* pc, char* out, int n) {
     Dl_info i;
     if (dladdr(pc, &i) && i.dli_sname) {
         snprintf(out, n, "%s+%lx", i.dli_sname, (unsigned long)((u8*)pc - (u8*)i.dli_saddr));
@@ -1195,8 +1195,6 @@ static void fonts_fill(u8* shm, u64 cap) {
 }
 static int pl_disp(SvcObj* o, IpcCtx* c) {
     static KShmem* shm;
-    extern KShmem* kshmem_new(u64, const char*);
-    extern u8* kshmem_ptr(KShmem*);
     if (!shm) {
         shm = kshmem_new(0x1100000, "font");
         fonts_fill(kshmem_ptr(shm), 0x1100000);
@@ -1230,7 +1228,7 @@ static int pl_disp(SvcObj* o, IpcCtx* c) {
     return stub_ok(o, c);
 }
 static SvcObj* new_pl(void) { return svcobj_new("pl:u", pl_disp, 0); }
-void svc_pl_init(void) {
+static void svc_pl_init(void) {
     svc_register("pl:u", new_pl);
     svc_register("pl:s", new_pl);
 }

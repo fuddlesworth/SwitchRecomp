@@ -2,7 +2,21 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* X11 + EGL + GLES 3.2. Lets us test the Android GL path on a PC. */
-#include "core/rt.h"
+#include "core/main.h"
+#include "gpu/gl/overlay.h"
+#include "gpu/renderer.h"
+#include "hle/hid.h"
+#include "platform/backend.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
@@ -18,7 +32,6 @@ static u64 g_start;
 static u64 g_press = 0, g_press_at = 0, g_press_len = 300;
 static char g_script[1024];
 static u64 keys_held;
-extern int gl_frontend_available;
 void backend_ini(const char* k, const char* v) {
     if (!strcmp(k, "seconds"))
         g_seconds = atoi(v);
@@ -88,7 +101,6 @@ void video_init(const char* title) {
     XMapWindow(dpy, win);
     XFlush(dpy);
     g_start = plat_ns();
-    extern void gpu_gl_start(void);
     gpu_gl_start();
 }
 int backend_gl_create(void) {
@@ -104,7 +116,6 @@ int backend_gl_create(void) {
 }
 void* backend_gl_proc(const char* n) { return (void*)eglGetProcAddress(n); }
 void backend_gl_swap(void) {
-    extern void overlay_draw(int w, int h);
     overlay_draw(g_ww, g_wh);
     eglSwapBuffers(edpy, esurf);
 }
@@ -113,10 +124,7 @@ void backend_window_size(int* w, int* h) {
     *h = g_wh;
 }
 
-void video_present_rgba(const u32* px, int w, int h, int stride) {
-    extern void gpu_gl_present_cpu(const u32*, int, int, int);
-    gpu_gl_present_cpu(px, w, h, stride);
-}
+void video_present_rgba(const u32* px, int w, int h, int stride) { gpu_gl_present_cpu(px, w, h, stride); }
 
 /* keys -> HidNpadButton bits */
 static u64 keymap(KeySym k) {
@@ -151,13 +159,10 @@ void video_poll(void) {
             KeySym k = XLookupKeysym(&e.xkey, 0);
             keys_held &= ~keymap(k);
         } else if (e.type == ButtonPress) {
-            extern void overlay_touch(int, int, float, float);
             overlay_touch(0, 0, (float)e.xbutton.x, (float)e.xbutton.y);
         } else if (e.type == MotionNotify) {
-            extern void overlay_touch(int, int, float, float);
             if (e.xmotion.state & Button1Mask) overlay_touch(0, 1, (float)e.xmotion.x, (float)e.xmotion.y);
         } else if (e.type == ButtonRelease) {
-            extern void overlay_touch(int, int, float, float);
             overlay_touch(0, 2, (float)e.xbutton.x, (float)e.xbutton.y);
         } else if (e.type == ConfigureNotify) {
             g_ww = e.xconfigure.width;
@@ -180,18 +185,13 @@ void video_poll(void) {
     }
     g_pad.buttons = b;
     g_pad.lx = g_pad.ly = g_pad.rx = g_pad.ry = 0;
-    {
-        extern void overlay_state(u64*, i32*, i32*, i32*, i32*);
-        overlay_state(&g_pad.buttons, &g_pad.lx, &g_pad.ly, &g_pad.rx, &g_pad.ry);
-    }
+    { overlay_state(&g_pad.buttons, &g_pad.lx, &g_pad.ly, &g_pad.rx, &g_pad.ry); }
 }
 void frontend_frame(void) {
     u64 el = plat_ns() - g_start;
     if ((g_maxframes >= 0 && g_frames >= g_maxframes) || (g_seconds && el >= (u64)g_seconds * 1000000000ull)) {
-        extern u64 gpu_gl_screenshot(const char* path);
         u64 h = gpu_gl_screenshot(g_shot[0] ? g_shot : NULL);
         fprintf(stderr, "\nframes=%d hash=%016llx 1280x720\n", g_frames, (unsigned long long)h);
-        extern void save_hints(void);
         save_hints();
         fflush(NULL);
         _exit(0);

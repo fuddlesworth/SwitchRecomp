@@ -3,7 +3,22 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* win32 backend: window, WGL, keyboard, XInput.
    F1 help  F3 screenshot  F4 fps limit  F11 fullscreen  Esc quit */
-#include "core/rt.h"
+#include "core/main.h"
+#include "core/options.h"
+#include "gpu/renderer.h"
+#include "hle/hid.h"
+#include "kernel/kernel.h"
+#include "platform/backend.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 #include <windows.h>
 #include <mmsystem.h> /* timeBeginPeriod: rt.h defines WIN32_LEAN_AND_MEAN, which leaves it out of windows.h */
 
@@ -19,7 +34,6 @@ static char g_shot[1024];
 static u64 g_start;
 static volatile int g_shot_req;
 static HANDLE g_ready;
-extern int g_opt_fps;
 
 static int g_ls_mode = 0;
 static char g_ls_path[1024];
@@ -276,14 +290,10 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l) {
                 return 0;
             }
             if (w == VK_F8) {
-                extern volatile int g_shot8_req;
                 g_shot8_req = 1;
                 return 0;
             }
             if (w == VK_F5) {
-                extern void gpu_gl_dump_rts(void);
-                extern void kernel_dump_threads(void);
-                extern FILE* volatile g_log_redirect;
                 CreateDirectoryA("captures", NULL);
                 FILE* f = fopen("captures/threads.txt", "w"); /* written next to the trace */
                 if (f) {
@@ -302,7 +312,6 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l) {
                 snprintf(t, sizeof t, "FPS limit: %s", g_opt_fps == 0 ? "unlimited" : "60");
                 SetWindowTextA(h, t);
                 {
-                    extern void ini_set(const char*, const char*);
                     char v[8];
                     snprintf(v, sizeof v, "%d", g_opt_fps);
                     ini_set("fps_limit", v);
@@ -393,7 +402,6 @@ void video_init(const char* title) {
         if (nt && GetProcAddress(nt, "wine_get_version"))
             LOG("Proton/Wine detected: for more FPS put   mesa_glthread=true %%command%%   in the game's Steam launch options (moves the OpenGL driver work to another core)\n");
     }
-    extern void gpu_gl_start(void);
     gpu_gl_start();
 }
 
@@ -419,7 +427,6 @@ int backend_gl_create(void) {
     }
     wglMakeCurrent(g_hdc, g_ctx);
     SWI si = (SWI)wglGetProcAddress("wglSwapIntervalEXT");
-    extern int g_opt_vsync;
     if (si) si(g_opt_vsync ? 1 : 0);
     return 1;
 }
@@ -438,10 +445,7 @@ void backend_window_size(int* w, int* h) {
     *w = g_ww;
     *h = g_wh;
 }
-void video_present_rgba(const u32* px, int w, int h, int stride) {
-    extern void gpu_gl_present_cpu(const u32*, int, int, int);
-    gpu_gl_present_cpu(px, w, h, stride);
-}
+void video_present_rgba(const u32* px, int w, int h, int stride) { gpu_gl_present_cpu(px, w, h, stride); }
 
 static i32 axis(u64 b, int neg, int pos) { return ((b >> pos) & 1 ? 32767 : 0) - ((b >> neg) & 1 ? 32767 : 0); }
 static i32 dz(i32 v) { return (v > -7000 && v < 7000) ? 0 : v; }
@@ -499,7 +503,6 @@ void video_poll(void) {
 }
 
 void frontend_frame(void) {
-    extern u64 gpu_gl_screenshot(const char* path);
     if (g_shot_req) {
         g_shot_req = 0;
         char p[MAX_PATH];
@@ -513,12 +516,8 @@ void frontend_frame(void) {
     if (g_seconds && plat_ns() - g_start >= (u64)g_seconds * 1000000000ull) {
         u64 h = gpu_gl_screenshot(g_shot[0] ? g_shot : NULL);
         fprintf(stderr, "\nframes=%d hash=%016llx\n", g_frames, (unsigned long long)h);
-        extern void save_hints(void);
         save_hints();
-        {
-            extern void gpu_gl_rec_finish(void);
-            gpu_gl_rec_finish();
-        }
+        { gpu_gl_rec_finish(); }
         fflush(NULL);
         ExitProcess(0);
     }

@@ -2,7 +2,19 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* vi + the nvnflinger buffer queue. QueueBuffer presents immediately, there's no compositor. */
-#include "core/rt.h"
+#include "hle/vi.h"
+#include "core/main.h"
+#include "core/options.h"
+#include "gpu/renderer.h"
+#include "hle/nvdrv.h"
+#include "hle/services.h"
+#include "kernel/ipc.h"
+#include "kernel/kernel.h"
+#include "kernel/mem.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include <stdlib.h>
+#include <string.h>
 
 typedef struct {
     int used;
@@ -65,11 +77,9 @@ static void pw_out(PW* w, u64 addr, u64 size) {
 }
 
 /* ============================================================ present */
-void gpu_present_slot(Slot* s);
 static void present_slot(int i) {
     Slot* s = &slots[i];
     if (!s->used) return;
-    extern void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt);
     vi_show_buffer(s->nvmap_id, s->offset, s->w, s->h, s->pitch, s->layout, s->bhl, s->afmt);
     g_present_count++;
 }
@@ -188,8 +198,6 @@ static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
                 }
             }
             if (len >= 0x28) {
-                extern volatile i32 g_vi_crop[4];
-                extern volatile u32 g_vi_transform;
                 i32 cr[4];
                 memcpy(cr, qi + 0x0C, 16);
                 for (int i = 0; i < 4; i++) g_vi_crop[i] = cr[i];

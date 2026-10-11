@@ -1,6 +1,7 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
+#include <string.h>
 #include <ctype.h>
 /* GM20B SASS -> GLSL 4.30. Instruction by instruction, the driver compiles the result and we cache it. */
 #include "gpu/shader/shader.h"
@@ -12,7 +13,7 @@ int g_glsl_version = 440;
 int g_vs_layer_ext = 1; /* 1 ARB_shader_viewport_layer_array, 2 AMD_vertex_shader_layer, 3 NV_viewport_array2, 0 none */
 int g_glsl_es = 0;
 int g_rs_binding = 83; /* binding of the res-scale UBO, set by gpu_gl */ /* GLSL ES 3.20 (Android) */
-int g_shader_vulkan; /* emit GLSL 4.50 for Vulkan (vk_shader.c compiles it to SPIR-V), with the bindings in shader.h */
+int g_shader_vulkan; /* emit GLSL 4.50 for Vulkan (gpu/vk/spirv.c compiles it to SPIR-V), with the bindings in shader.h */
 #define B(v, lo, n) ((u32)(((v) >> (lo)) & ((1ull << (n)) - 1)))
 
 /* ============================================================ text */
@@ -2534,7 +2535,6 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
          reject the shader. when the driver refuses (g_texoff_emul, see gl_selftest) add it to the coord
          in level 0 texels instead */
                 if (ofs && !dc && dim == 2 && !lod && !bias) {
-                    extern int g_texoff_emul;
                     if (g_texoff_emul)
                         smp =
                             array

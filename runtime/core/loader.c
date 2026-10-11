@@ -2,7 +2,13 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* NSO/NRO loading. The code segment has to match what we recompiled byte for byte. */
-#include "core/rt.h"
+#include "core/loader.h"
+#include "core/main.h"
+#include "kernel/mem.h"
+#include "platform/log.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 u64 g_code_lo, g_code_hi;
 

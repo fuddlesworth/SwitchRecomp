@@ -3,6 +3,7 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* ASTC LDR 2D decoder, written from the Khronos spec.
    Desktop GPUs mostly lack ASTC so we decode on upload. */
+#include "gpu/texture/astc.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>

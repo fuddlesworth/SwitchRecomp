@@ -3,7 +3,16 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* Android backend. NativeActivity (no java code), EGL/GLES 3.2, touch overlay, gamepads,
    game data either in the apk or on storage. */
-#include "core/rt.h"
+#include "core/main.h"
+#include "core/options.h"
+#include "gpu/gl/overlay.h"
+#include "gpu/renderer.h"
+#include "hle/hid.h"
+#include "platform/backend.h"
+#include "platform/log.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <EGL/egl.h>
 #include <android/native_activity.h>
 #include <android/native_window.h>
@@ -29,12 +38,6 @@ static pthread_mutex_t g_mx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER;
 static int g_started;
 static char g_ext[1024], g_name[128] = "BowsersFury";
-extern int g_overlay_visible;
-extern void overlay_touch(int id, int action, float x, float y);
-extern void overlay_state(u64* b, i32* lx, i32* ly, i32* rx, i32* ry);
-extern void overlay_message(const char* m);
-extern void overlay_set_opacity(float o);
-extern void overlay_draw(int w, int h);
 
 void android_log(const char* s) { __android_log_write(ANDROID_LOG_INFO, "SwitchRecomp", s); }
 
@@ -48,13 +51,9 @@ void backend_ini(const char* k, const char* v) {
 int video_has_gl(void) { return 1; }
 void video_init(const char* title) {
     (void)title;
-    extern void gpu_gl_start(void);
     gpu_gl_start();
 }
-void video_present_rgba(const u32* px, int w, int h, int stride) {
-    extern void gpu_gl_present_cpu(const u32*, int, int, int);
-    gpu_gl_present_cpu(px, w, h, stride);
-}
+void video_present_rgba(const u32* px, int w, int h, int stride) { gpu_gl_present_cpu(px, w, h, stride); }
 void frontend_frame(void) {}
 
 /* ---------------- EGL, GPU thread */
@@ -83,7 +82,6 @@ static int make_surface(void) {
         return 0;
     }
     eglMakeCurrent(edpy, esurf, esurf, ectx);
-    extern int g_opt_vsync;
     eglSwapInterval(edpy, g_opt_vsync ? 1 : 0);
     eglQuerySurface(edpy, esurf, EGL_WIDTH, &g_sw);
     eglQuerySurface(edpy, esurf, EGL_HEIGHT, &g_sh);
@@ -348,7 +346,6 @@ static void extract_dir(const char* adir, const char* dst) {
     AAssetDir_close(d);
 }
 /* romfs in the apk as romfs/000, 001... stored uncompressed so we can use the fds directly */
-extern int romfs_add_chunk(int fd, u64 base, u64 len);
 static int open_romfs_assets(void) {
     int n = 0;
     for (int i = 0; i < 64; i++) {
@@ -433,7 +430,6 @@ static void* game_thread(void* arg) {
     char argv0[1400];
     snprintf(argv0, sizeof argv0, "%s/%s", g_ext, g_name);
     char* argv[2] = {argv0, NULL};
-    extern int swr_main(int, char**);
     swr_main(1, argv);
     return NULL;
 }
@@ -441,7 +437,6 @@ static int dir_exists(const char* p) {
     struct stat s;
     return !stat(p, &s) && S_ISDIR(s.st_mode);
 }
-extern char g_romfs_dir_override[1024];
 
 /* ---------------- activity callbacks */
 static void onWindowCreated(ANativeActivity* a, ANativeWindow* w) {

@@ -2,7 +2,18 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
 /* nvdrv: nvmap, nvhost-as-gpu, nvhost-ctrl, nvhost-ctrl-gpu, nvhost-gpu. Enough for NVN and deko3d. */
-#include "core/rt.h"
+#include "hle/nvdrv.h"
+#include "core/main.h"
+#include "gpu/gpu.h"
+#include "kernel/ipc.h"
+#include "kernel/kernel.h"
+#include "kernel/mem.h"
+#include "platform/log.h"
+#include "platform/plat.h"
+#include "video/host1x.h"
+#include <stdlib.h>
+#include <string.h>
+static void nv_events_check(void);
 
 /* ============================================================ nvmap */
 typedef struct {
@@ -89,7 +100,6 @@ void syncpt_incr(u32 id) {
     syncpt[id & 255]++;
     pc_broadcast(&g_sync_cv);
     pm_unlock(&g_sync_lk);
-    extern void nv_events_check(void);
     nv_events_check();
 }
 int syncpt_wait(u32 id, u32 thresh, i64 timeout) {
@@ -138,7 +148,7 @@ static void nvev_lock(void) {
     }
 }
 static void nvev_unlock(void) { __atomic_store_n(&g_nvev_lk, 0, __ATOMIC_RELEASE); }
-void nv_events_check(void) {
+static void nv_events_check(void) {
     nvev_lock();
     for (int i = 0; i < 64; i++)
         if (nvev[i].armed && (i32)(syncpt_read(nvev[i].id) - nvev[i].thresh) >= 0) {
@@ -150,7 +160,6 @@ void nv_events_check(void) {
 
 /* ============================================================ files (fds) */
 enum { DEV_NONE, DEV_NVMAP, DEV_AS, DEV_CTRL, DEV_CTRLGPU, DEV_GPU, DEV_NVDEC, DEV_VIC, DEV_OTHER };
-u32 host1x_ioctl(int is_vic, u32 cmd, u8* d, u32 n);
 typedef struct {
     int dev;
     u32 syncpt;
@@ -591,7 +600,6 @@ static u32 ioctl_ctrlgpu(u32 cmd, u8* d, u32 n, u8* extra, u32 nextra) {
             return 0;
         }
         case 0x1C: {
-            extern u64 guest_ns(void);
             u64 t = guest_ns();
             memcpy(d, &t, 8);
             return 0;

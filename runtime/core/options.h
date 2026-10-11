@@ -1,0 +1,15 @@
+/* SwitchRecomp - Copyright 2026 MZ Labs
+   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   any copy or derived work must keep the credit to SwitchRecomp by MZ Labs. */
+/* the settings from <Game>.ini (main.c) */
+#ifndef SWR_OPTIONS_H
+#define SWR_OPTIONS_H
+
+void ini_load(const char* path);
+void ini_set(const char* k, const char* v);
+extern int g_opt_docked, g_opt_lang, g_opt_res, g_opt_fps, g_opt_vsync, g_opt_drs;
+extern int g_opt_diag, g_opt_shadows, g_opt_cmp_low, g_opt_resdyn, g_opt_prof;
+extern int g_opt_rec_smooth, g_opt_rec_fps;
+extern float g_opt_resf, g_opt_resmin;
+
+#endif
