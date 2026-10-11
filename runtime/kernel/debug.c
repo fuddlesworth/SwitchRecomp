@@ -274,6 +274,10 @@ void kernel_dump_threads(void) {
         if (k >= 2)
             LOG(" [addr %llx value %x]", (unsigned long long)t->wait_addr,
                 (k == 2 || k == 3) ? gr32(t->wait_addr) : 0u);
+        if (k == 2) { /* the mutex's owner, from the handle in its tag */
+            KObj* o = h_get(gr32(t->wait_addr) & ~HANDLE_WAIT);
+            if (o && o->type == KO_THREAD) LOG(" owned by thread %llu", (unsigned long long)((KThread*)o)->id);
+        }
         LOG("  lr=%llx pc=%llx sp=%llx\n", (unsigned long long)t->cpu.x[30], (unsigned long long)t->cpu.pc,
             (unsigned long long)t->cpu.x[31]);
         {
