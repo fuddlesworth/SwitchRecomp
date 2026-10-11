@@ -29,7 +29,9 @@ __pycache__/
 /bin/
 *.exe
 
-# Third-party libraries and tools built by scripts/bootstrap.py
+# Third-party packages downloaded by CPM.cmake (cmake/dependencies.cmake), and the Windows toolchain from
+# scripts/bootstrap.ps1
+/.cache/
 /deps/
 
 # Claude Code state local to this checkout

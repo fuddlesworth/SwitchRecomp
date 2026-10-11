@@ -26,5 +26,5 @@ of SwitchRecomp by MZ Labs, under the same license. The text above is MZ Labs'
 notice as released. In this repository, the license is in LICENSE (the source
 files' "LICENSE.txt"), this notice is NOTICE ("NOTICE.txt"), and the
 third-party components and their licenses are listed in README.md (the release's
-README.txt). The third-party libraries are built from source from the
-submodules in third_party/ instead of being bundled.
+README.txt). The third-party libraries are downloaded as source at build time
+(cmake/dependencies.cmake) and built with the runtime instead of being bundled.

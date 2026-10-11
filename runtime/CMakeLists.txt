@@ -9,23 +9,24 @@
 
 add_library(swr_common INTERFACE)
 target_include_directories(swr_common INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_include_directories(swr_common SYSTEM INTERFACE "${DEPS}/include")
 # Every function and global used across files is declared once, in the header of the file that defines it, and
 # everything else is static: a declaration that disagrees with the definition is then a compile error instead of a
-# miscompile. Third-party sources (third_party/) keep their own warnings off.
+# miscompile. Third-party sources keep their own warnings off.
 target_compile_options(swr_common INTERFACE -fno-strict-aliasing
-                       $<$<COMPILE_LANGUAGE:C>:-Werror=missing-prototypes -Werror=missing-variable-declarations>
-                       $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:GNU>>:-Werror=nested-externs>)
+                       $<$<COMPILE_LANGUAGE:C>:-Werror=missing-prototypes -Werror=missing-variable-declarations>)
 if(SWR_VULKAN)
     target_compile_definitions(swr_common INTERFACE SWR_VULKAN VK_NO_PROTOTYPES)
-    target_include_directories(swr_common SYSTEM INTERFACE "${CMAKE_SOURCE_DIR}/third_party/Vulkan-Headers/include"
-                                                           "${CMAKE_SOURCE_DIR}/third_party/volk"
-                                                           "${CMAKE_SOURCE_DIR}/third_party/VulkanMemoryAllocator/include")
+    target_link_libraries(swr_common INTERFACE Vulkan::Headers)
+    target_include_directories(swr_common SYSTEM INTERFACE "${volk_SOURCE_DIR}"
+                                                           "${VulkanMemoryAllocator_SOURCE_DIR}/include")
 endif()
-if(SWR_H264)
-    swr_require_dep(lib/libdecoder.a SWR_H264)
-else()
+if(NOT SWR_H264)
     target_compile_definitions(swr_common INTERFACE SWR_NO_H264)
+endif()
+# The GL headers come from libglvnd, which FreeBSD installs under /usr/local, outside the compiler's search path
+if(NOT WIN32)
+    find_path(SWR_GL_INCLUDE_DIR GL/glcorearb.h REQUIRED)
+    target_include_directories(swr_common SYSTEM INTERFACE "${SWR_GL_INCLUDE_DIR}")
 endif()
 
 function(swr_component name)
@@ -40,6 +41,9 @@ swr_component(kernel kernel/kernel.c kernel/thread.c kernel/sync.c kernel/svc.c 
 swr_component(hle hle/services.c hle/audren.c hle/pl.c hle/sm.c hle/am.c hle/set.c hle/time.c hle/acc.c hle/audio.c hle/misc.c hle/fs.c
               hle/hid.c hle/vi.c hle/nvdrv.c)
 swr_component(video video/host1x.c)
+if(SWR_H264)
+    target_link_libraries(swr_video PRIVATE openh264)
+endif()
 swr_component(gpu gpu/gpu.c gpu/engines.c gpu/maxwell3d.c $<$<BOOL:${SWR_VULKAN}>:gpu/renderer.c>)
 
 set(platform platform/plat.c platform/backend/${SWR_BACKEND}.c)
@@ -63,28 +67,30 @@ else()
     set(gl gpu/gl/renderer.c gpu/gl/formats.c gpu/gl/texture.c gpu/gl/programs.c gpu/gl/framebuffer.c gpu/gl/draw.c
            gpu/gl/trace.c gpu/gl/capture.c gpu/gl/framegen.c gpu/gl/compute.c gpu/gl/load.c gpu/gl/glq.c gpu/gl/glq_gen.c
            "${CMAKE_SOURCE_DIR}/third_party/bcn/bcn.cpp" "${CMAKE_SOURCE_DIR}/third_party/bcn/bcdec.cpp")
-    if(SWR_LSFG AND SWR_BACKEND STREQUAL "sdl3")
-        swr_require_dep(lib/libspvc.a SWR_LSFG)
+    if(SWR_LSFG_ENABLED)
         list(APPEND gl gpu/gl/lsfg.c gpu/gl/lsfg_spvc.cpp)
     else()
         list(APPEND gl gpu/gl/lsfg_stub.c)
     endif()
     swr_component(gl ${gl})
-    target_include_directories(swr_gl SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/third_party/bcn" "${DEPS}/include/spirv_cross")
+    target_include_directories(swr_gl SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/third_party/bcn")
+    if(SWR_LSFG_ENABLED)
+        target_link_libraries(swr_gl PRIVATE spirv-cross-glsl)
+    endif()
     list(APPEND components shader gl)
 endif()
 if(SWR_VULKAN)
-    swr_require_dep(lib/libglslang-all.a SWR_VULKAN)
     swr_component(spirv gpu/vk/spirv.c)
+    target_link_libraries(swr_spirv PUBLIC glslang::glslang glslang::glslang-default-resource-limits)
     # volk loads Vulkan through the window backend's loader, so nothing links against libvulkan
     swr_component(vk gpu/vk/renderer.c gpu/vk/device.c gpu/vk/cmd.c gpu/vk/format.c gpu/vk/surface.c gpu/vk/texture.c
                   gpu/vk/buffer.c gpu/vk/pipeline.c gpu/vk/render.c gpu/vk/compute.c gpu/vk/vma.cpp
-                  "${CMAKE_SOURCE_DIR}/third_party/volk/volk.c")
+                  "${volk_SOURCE_DIR}/volk.c")
     list(APPEND components spirv vk)
 endif()
 # third-party code (vma.cpp is VMA's implementation)
 set_source_files_properties("${CMAKE_SOURCE_DIR}/third_party/bcn/bcn.cpp" "${CMAKE_SOURCE_DIR}/third_party/bcn/bcdec.cpp"
-                            "${CMAKE_SOURCE_DIR}/third_party/volk/volk.c" gpu/vk/vma.cpp PROPERTIES COMPILE_OPTIONS -w)
+                            "${volk_SOURCE_DIR}/volk.c" gpu/vk/vma.cpp PROPERTIES COMPILE_OPTIONS -w)
 
 add_executable(swr-runtime)
 list(TRANSFORM components PREPEND swr_)
@@ -105,32 +111,13 @@ if(WIN32)
 else()
     # No -rdynamic: the game module gets the runtime through RtAPI and imports nothing from it, and exporting every
     # global would let a library loaded later (a GL driver) bind its own symbols to ours by name
-    target_link_libraries(swr-runtime PRIVATE pthread dl m)
-endif()
-if(SWR_H264)
-    target_link_libraries(swr-runtime PRIVATE "${DEPS}/lib/libdecoder.a" "${DEPS}/lib/libcommon.a")
-endif()
-if(TARGET swr_gl AND SWR_LSFG AND SWR_BACKEND STREQUAL "sdl3")
-    target_link_libraries(swr-runtime PRIVATE "${DEPS}/lib/libspvc.a")
-endif()
-if(SWR_VULKAN)
-    target_link_libraries(swr-runtime PRIVATE "${DEPS}/lib/libglslang-all.a")
+    target_link_libraries(swr-runtime PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
 endif()
 
-if(SWR_BACKEND STREQUAL "sdl3" AND WIN32)
-    # static, from scripts/bootstrap.py
-    if(NOT EXISTS "${DEPS}/sdl3/lib/cmake/SDL3/SDL3Config.cmake")
-        message(FATAL_ERROR "${DEPS}/sdl3 is missing. Run scripts/bootstrap.py (scripts\\bootstrap.ps1 on Windows).")
-    endif()
-    find_package(SDL3 REQUIRED CONFIG PATHS "${DEPS}/sdl3" NO_DEFAULT_PATH)
-    set(sdl SDL3::SDL3-static)
-elseif(SWR_BACKEND STREQUAL "sdl3")
-    find_package(SDL3 REQUIRED CONFIG)
-    set(sdl SDL3::SDL3)
-endif()
-if(sdl)
-    target_link_libraries(swr_platform PRIVATE ${sdl})
-    target_link_libraries(swr-runtime PRIVATE ${sdl})
+# SDL3 is the system's, or on Windows built with the runtime (cmake/dependencies.cmake)
+if(SWR_BACKEND STREQUAL "sdl3")
+    target_link_libraries(swr_platform PRIVATE SDL3::SDL3)
+    target_link_libraries(swr-runtime PRIVATE SDL3::SDL3)
 endif()
 
 if(SWR_DEPLOY)

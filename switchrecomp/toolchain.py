@@ -19,9 +19,9 @@ def find_cc(pref=None, target_win=False):
     cands = [pref] if pref else []
     if target_win:
         # windows: prefer the bundled tcc\, builds in seconds
-        cands += (['tcc'] if sys.platform.startswith('win') else []) + ['x86_64-w64-mingw32-gcc', 'gcc', 'clang', 'tcc']
+        cands += (['tcc'] if sys.platform.startswith('win') else []) + ['x86_64-w64-mingw32-clang', 'clang', 'tcc']
     else:
-        cands += ['gcc', 'clang', 'cc', 'tcc']
+        cands += ['clang', 'tcc']
     for c in cands:
         if not c:
             continue
@@ -70,7 +70,7 @@ def compile_all(files, cc, opt, outdir, target_win, jobs, say, extra_flags=()):
     t0 = time.time()
     done = [0]
 
-    # objects are keyed on compiler + flags + the ABI files, so tcc and gcc objects never mix
+    # objects are keyed on compiler + flags + the ABI files, so tcc and clang objects never mix
     h = hashlib.sha1('|'.join(base + flags).encode())
     for f in sorted(os.listdir(ABI_DIR)):
         if f in ('cpu.h', 'cpu_helpers.c'):
@@ -99,7 +99,7 @@ def compile_all(files, cc, opt, outdir, target_win, jobs, say, extra_flags=()):
 
 def link_module(objs, cc, out, target_win, say):
     # big games have hundreds of objects and windows caps command lines at ~32K, so use an @rsp file
-    # (gcc and tcc both take it) with short relative names
+    # (clang and tcc both take it) with short relative names
     bdir = os.path.dirname(os.path.abspath(objs[0])) if objs else '.'
     names = [os.path.relpath(os.path.abspath(o), bdir).replace('\\', '/') for o in objs]
     rsp = os.path.join(bdir, 'objects.rsp')
@@ -123,10 +123,7 @@ def link_module(objs, cc, out, target_win, say):
 
 def build_runtime(cc, target_win, say):
     """Builds the runtime with the CMake preset matching the compiler and target, and returns its path."""
-    if target_win and not sys.platform.startswith('win'):
-        preset = 'mingw-cross'
-    else:
-        preset = 'clang' if 'clang' in os.path.basename(cc or '') else 'gcc'
+    preset = 'windows-cross' if target_win and not sys.platform.startswith('win') else 'default'
     say('Building the runtime (CMake preset %s)...' % preset)
     for cmd in (['cmake', '--preset', preset, '-DSWR_DEPLOY=OFF'], ['cmake', '--build', '--preset', preset]):
         r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)

@@ -535,7 +535,7 @@ static void gpu_thread(void* arg) {
                                 if (g_code_tcc)
                                     fprintf(
                                         rf,
-                                        "WARNING: the game code was compiled with TCC and runs several times slower than with GCC. Recompile with GCC.\n");
+                                        "WARNING: the game code was compiled with TCC and runs several times slower than with Clang. Recompile it with Clang.\n");
                             }
                             fprintf(
                                 rf,

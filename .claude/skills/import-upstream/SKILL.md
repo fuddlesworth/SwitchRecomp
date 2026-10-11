@@ -16,10 +16,10 @@ description: "Bring a new MZ Labs SwitchRecomp release into this fork: import th
    step 2 change by change, find where that code lives now (`docs/ARCHITECTURE.md`, `git log --follow`), and port
    what still matters, one commit per change, each saying which upstream file and release it comes from. Skip what
    our code already does differently, and say so in the PR.
-4. **New third-party binaries.** If the zip added prebuilt libraries, they stay out: add a submodule and a step in
-   `scripts/bootstrap.py` instead. If it added a new top-level Windows toolchain folder, add it to the excludes in
+4. **New third-party binaries.** If the zip added prebuilt libraries, they stay out: add a CPM package to
+   `cmake/dependencies.cmake` instead (`swr-build` skill). If it added a new top-level Windows toolchain folder, add it to the excludes in
    `scripts/import-upstream.sh` and `.gitignore`.
-5. **Rebuild and verify.** Bootstrap if `third_party/` changed, build both presets, and run the game
+5. **Rebuild and verify.** Build (`cmake --preset default`), and run the game
    (`swr-run`, a few runs). If the port changed the recompiler, `abi/cpu.h`, `abi/cpu_helpers.c` or `SWR_ABI`, recompile the
    game first.
 6. **Open the PR** once verified, and update ROADMAP.md if the release changed what is done or planned.

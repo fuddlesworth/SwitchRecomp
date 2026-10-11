@@ -33,16 +33,19 @@ How the pieces fit:
 - [x] Git history: an `upstream` branch holding each MZ Labs release as released and then formatted, and `main`
       with our work on top, one commit per fix. `scripts/import-upstream.sh` imports new releases.
 - [x] `.gitignore` that keeps game data, keys, dumps and build output out of git.
-- [x] No prebuilt binaries: OpenH264, SPIRV-Cross and hactool are submodules that `scripts/bootstrap.py` builds,
-      on Linux, on Windows, or cross-built for Windows.
-- [x] CMake build for the Linux runtime, with presets for GCC 16 and Clang 23, C23 and C++23.
+- [x] No prebuilt binaries: the third-party libraries and hactool are CPM.cmake packages, each pinned to a release
+      archive and its SHA-256 in `cmake/dependencies.cmake`, fetched at configure time and built with the runtime. They
+      replaced the submodules and `scripts/bootstrap.py`, so `cmake -B build` works on a fresh clone.
+- [x] CMake build with Clang only (23 in development), C23 and C++23. GCC was dropped: one compiler for the runtime,
+      the game code and the libraries. Presets `default` and `windows-cross`.
+- [x] FreeBSD builds (`plat.c`'s mmap flags and crash handler), and CI builds it in a FreeBSD 15.1 VM.
 - [x] Scripts for the whole pipeline: extract a dump, recompile, deploy the runtime into `games/`.
 - [x] Formatting: clang-format 23 and ruff through `scripts/format.sh`, applied to the whole history.
-- [x] Windows: `scripts/bootstrap.ps1` downloads a pinned, checksummed toolchain (w64devkit, NASM, Python, and
-      llvm-mingw for Clang) so a Windows machine needs only Git. CMake builds the Windows runtime natively or
-      cross-built.
-- [x] CI on every push and pull request: formatting, Linux with GCC and Clang, Windows with GCC and Clang from a bare
-      runner, and the Linux to Windows cross build.
+- [x] Windows: `scripts/bootstrap.ps1` downloads a pinned, checksummed toolchain (llvm-mingw, CMake, Ninja, NASM and
+      Python) so a Windows machine needs only Git. CMake builds the Windows runtime natively or cross-built with
+      llvm-mingw.
+- [x] CI on every push and pull request: formatting, Linux, FreeBSD, Windows from a bare runner, and the Linux to
+      Windows cross build, all with Clang.
 - [x] Debugging tools in `tools/`: symbol names, disassembly, unattended runs.
 - [ ] Still to move from bring-up: the thread-dump reader and the Maxwell instruction scanner.
 - [x] `README.md` for the Linux setup, crediting "SwitchRecomp by MZ Labs" as NOTICE requires. `LICENSE` and
@@ -86,7 +89,7 @@ a renderer rewrite on top of a memory-corruption bug would make every regression
       - The Vulkan renderer orders it that way (Phase 6, step 4): 0 crashes in 7 runs. What remains here is
         the same ordering for OpenGL, or Vulkan becoming the default.
 - [~] Turn compiler warnings back on (upstream builds with `-w`) and fix them file by file, starting with the
-      files we change. The default warnings are on since Phase 8 removed `-w`, and both compilers build clean.
+      files we change. The default warnings are on since Phase 8 removed `-w`, and the build is clean.
       They found one real bug, still open: in the shader translator, `R(c, r + 2)` for a vector operand that
       starts near register 255 writes past `used_reg[256]` (GCC's `-Wstringop-overflow` saw it while `R` was
       inlined into the same file). Next: what the hardware does there, then `-Wall`.
@@ -114,8 +117,8 @@ Catherine uses two audio paths, and both are silent today.
 - [x] The GL context: SDL creates it (EGL under Wayland) on the GPU thread. The GL worker's shared context is current
       on a hidden helper window, since EGL won't make one surface current on two threads.
 - [x] The SDL3 backend on Windows too, for controllers other than XInput ones and for the Vulkan renderer. The
-      bootstrap builds SDL3 statically from `third_party/SDL`. It runs Catherine on Vulkan under Wine. Under Wine,
-      SDL3 can't open an OpenGL window at all, so OpenGL on Windows is only built.
+      CMake build links SDL3 statically from source. It runs Catherine on Vulkan under Wine. Under Wine, SDL3 can't
+      open an OpenGL window at all, so OpenGL on Windows is only built.
 - [x] The x11, x11es and win32 backends were removed on 2026-10-11: SDL3 is the window backend on Linux and Windows,
       with headless for tests and Android's own. SDL3 still hasn't run on real Windows, only under Wine.
 - [ ] Try a real controller: the mapping follows SDL's positional buttons, but no pad was at hand to test it.
@@ -150,7 +153,7 @@ underneath. What can change is how much of the hardware is emulated and how well
   - [x] Step 1, presenting: instance, device with a graphics and a separate compute queue, swapchain through SDL3
         (Wayland and X11), and the CPU path's frames shown on it. Nothing is drawn yet.
   - [x] Step 2, shaders: the Maxwell translator has a Vulkan mode (`#version 450`, one descriptor set per stage with
-        the bindings in `shader.h`), compiled to SPIR-V with glslang 16.6 (a submodule the bootstrap builds), through
+        the bindings in `shader.h`), compiled to SPIR-V with glslang 16.6 (built with the runtime), through
         an on-disk SPIR-V cache. `SWR_SHADER_CORPUS` records the shaders a run translates, and `swr-shaderc` checks a
         corpus offline: 116 of Catherine's 117 shaders compile and pass `spirv-val` (the other uses a global load the
         translator can't place, in GL too), and the GL output is byte-identical to before.
@@ -238,8 +241,8 @@ variant and run on Catherine with both renderers.
       `kernel/mem.h`, `kernel/kernel.h`, `kernel/ipc.h`, `core/loader.h`, `core/main.h`, `core/options.h`, one per
       service and device in `hle/`, `video/host1x.h`, `platform/backend.h`...). Every function and global used across
       files is declared once, in the header of the file that defines it, and the rest are static. The 237 `extern`
-      lines in `.c` files are gone, `-w` with them, and `-Werror=missing-prototypes`,
-      `missing-variable-declarations` and `nested-externs` keep it that way. It turned up three copies of the 2D
+      lines in `.c` files are gone, `-w` with them, and `-Werror=missing-prototypes` and
+      `missing-variable-declarations` keep it that way. It turned up three copies of the 2D
       blit surface struct passed as `void*`, renderer functions whose definitions didn't match the interface's types,
       a backend static shadowing an LSFG global, and declarations of functions that no longer exist.
 - [x] The renderer interface as a table of operations (`Renderer` in `gpu/renderer.h`) that the OpenGL, Vulkan and

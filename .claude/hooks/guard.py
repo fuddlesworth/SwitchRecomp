@@ -41,7 +41,7 @@ BASH_RULES = [
 ]
 
 # Generated or third-party trees: change the source that produces them instead
-PROTECTED_PATHS = re.compile(r'^(games|work|deps|build[^/]*|third_party)/|\.keys$')
+PROTECTED_PATHS = re.compile(r'^(games|work|deps|\.cache|build[^/]*|third_party)/|\.keys$')
 
 
 def main():
@@ -58,7 +58,7 @@ def main():
         path = params.get('file_path') or params.get('notebook_path') or ''
         project = os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()).rstrip('/') + '/'
         if path.startswith(project) and PROTECTED_PATHS.search(path[len(project):]):
-            print(f'{path} is generated, third-party or a game file. Change the source, script or submodule '
+            print(f'{path} is generated, third-party or a game file. Change the source, script or package pin '
                   'that produces it instead.', file=sys.stderr)
             sys.exit(2)
 

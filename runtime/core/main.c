@@ -73,17 +73,17 @@ static int load_code(void) {
         return -1;
     }
 #if defined(_WIN32)
-    { /* tell gcc from tcc builds by the PE linker version (ld 2.x vs tcc 6.0). tcc code is a lot slower */
+    { /* tell clang from tcc builds by the PE linker version (lld 14.0 vs tcc 6.0). tcc code is a lot slower */
         const u8* b = (const u8*)h;
         u32 lf;
         memcpy(&lf, b + 0x3C, 4);
         u8 mj = b[lf + 24 + 2], mn = b[lf + 24 + 3];
         g_code_tcc = mj == 6 && mn == 0;
         if (g_code_tcc)
-            LOG("code: %s_code.dll was compiled with TCC. It runs several times slower than with GCC: recompile with GCC (SwitchRecomp, compiler GCC) for much better performance\n",
+            LOG("code: %s_code.dll was compiled with TCC. It runs several times slower than with Clang: recompile it with Clang for much better performance\n",
                 g_exename);
         else
-            LOG("code: %s_code.dll compiled with GCC (linker %u.%u)\n", g_exename, mj, mn);
+            LOG("code: %s_code.dll compiled with Clang (linker %u.%u)\n", g_exename, mj, mn);
     }
 #endif
     g_mod = f();
