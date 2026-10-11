@@ -44,7 +44,7 @@ The loop terminates in exactly one way: you reach step 11, its predicate says st
 - `/code-audit branch` — audit current branch vs main
 - `/code-audit staged` — audit staged changes only
 - `/code-audit PR` or `/code-audit PR #123` — audit a pull request
-- `/code-audit runtime/video/host1x.c runtime/hle/nvdrv.c` — audit specific files
+- `/code-audit runtime/video/nvdec.c runtime/hle/nvdrv.c` — audit specific files
 
 If `<scope>` is provided, use it directly — do not ask the user to clarify. If omitted, default to uncommitted changes.
 
@@ -141,7 +141,7 @@ Common audit-time patterns in this repo (C runtime, Python recompiler):
 | Find every guard that only logs | `grep -rn -A2 'WARN(\|LOG(' runtime` and check each is followed by a `return` or other exit |
 | Find a guest address squeezed into 32 bits | `ast-grep --pattern '(u32)$X' --lang c runtime`, then check whether `$X` is a guest address or pointer |
 | Find a direct GL call that bypasses the GL thread | `grep -rn 'r_gl[A-Z]' runtime --include='*.c' \| grep -v glq_gen.c`, and check that every `gl*` name `gpu/gl/renderer.c` uses is in `gpu/gl/glfn.h` and `gpu/gl/glq_gen.c` |
-| Find every syncpoint id not from `syncpt_alloc()` | `grep -rn 'syncpt' runtime/video/host1x.c runtime/hle/nvdrv.c runtime/gpu*.c` |
+| Find every syncpoint id not from `syncpt_alloc()` | `grep -rn 'syncpt' runtime/video runtime/hle/nvdrv.c runtime/gpu` |
 | Find every service command a file answers | `grep -n 'case [0-9]*:' runtime/hle/am.c` (or the service's file) (each answer must match what the SDK caller reads, see the `swr-service` skill) |
 | Find every TODO/FIXME/HACK marker | `grep -rn 'TODO\|FIXME\|HACK\|XXX' runtime *.py tools scripts` |
 | Find a stale comment claim (e.g. "below 192") | `grep -rn "below 192" runtime` |
@@ -303,7 +303,7 @@ tools/run_game.py Catherine --runs 3 --dump work/Catherine
 - Upstream builds with `-w`, so a clean build says nothing about warnings. Build a changed file once with warnings on (`gcc -O2 -Wall -Wextra -fsyntax-only -Iruntime -Ideps/linux/include FILE`) and check none come from the change.
 - A fix for a crash or a race is run until the evidence is statistical: the crash rate before and after, with the run counts, goes in the commit message.
 - Memory-safety fixes also get an AddressSanitizer build (`-DCMAKE_C_FLAGS=-fsanitize=address` in a separate build dir) and a run.
-- The game module only needs recompiling (`scripts/recomp.py`) when `switchrecomp/codegen.py`, `a64.py`, `abi/cpu.h` or `abi/cpu_helpers.c` changed.
+- The game module only needs recompiling (`scripts/recomp.py`) when `switchrecomp/codegen.py`, `a64.py`, anything in `runtime/abi/` changed.
 
 ### 7. Diff Review Before Commit
 

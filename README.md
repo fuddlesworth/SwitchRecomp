@@ -124,6 +124,9 @@ When something goes wrong, `games/<Game>.log` has the details, `games/threads.tx
 
 ## Development
 
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) describes how the recompiler and the runtime fit together, and how a
+frame gets from the game to the screen.
+
 | Task | Command |
 | --- | --- |
 | Format C, C++ and Python | `scripts/format.sh` (`--check` to only report) |
@@ -141,6 +144,7 @@ The `upstream` branch holds the MZ Labs releases: each one as released (tagged `
 | `switchrecomp/` | The recompiler (`python3 -m switchrecomp`): loading, analysis, ARM64 to C, building the game module |
 | `runtime/` | The runtime: kernel, services, GPU, video, platform backends |
 | `scripts/` | Bootstrap (and the Windows toolchain download), extraction, recompiling, formatting, upstream imports |
+| `docs/` | How the parts fit together |
 | `tools/` | Debugging tools |
 | `third_party/` | Pinned submodules, built by `scripts/bootstrap.py` |
 | `.github/workflows/` | CI: formatting, and builds on Linux (GCC, Clang, cross to Windows) and Windows (GCC, Clang) |
