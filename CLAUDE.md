@@ -29,7 +29,7 @@ file holds the rules sessions get wrong and points to the skills that carry the 
   from the disassembly, are the primary references.
 - **Formatting:** `scripts/format.sh` before committing (clang-format 23, ruff). It only changes whitespace, and
   the whole history is formatted, so an unformatted file shows up as noise in every diff. Third-party code
-  (`third_party/bcn`, `third_party/`) is never formatted.
+  (the packages in `.cache/cpm`) is never formatted.
 - Ask only real decisions. When the next step is obvious, take it.
 
 ## Environment
@@ -48,13 +48,17 @@ file holds the rules sessions get wrong and points to the skills that carry the 
 
 | Task | Command |
 | --- | --- |
-| Third-party libraries and hactool (once, and after a submodule changes) | `scripts/bootstrap.py` (Windows: `scripts\bootstrap.ps1`, then `. scripts\env.ps1` per window) |
-| Build the runtime (deploys to every game in `games/`) | `cmake --preset gcc && cmake --build --preset gcc` (or `clang`) |
+| Build the runtime, hactool and the third-party libraries (deploys to every game in `games/`) | `cmake --preset default && cmake --build --preset default` (Windows: `scripts\bootstrap.ps1` once, `. scripts\env.ps1` per window) |
+| Cross-build for Windows (llvm-mingw on PATH) | `cmake --preset windows-cross && cmake --build --preset windows-cross` |
 | Extract a dump | `scripts/extract.py "Game.xci" --name Game [--update u.nsp]` |
 | Recompile a game | `scripts/recomp.py work/Game Game` |
 | Run with scripted input and a screenshot | `cd games && ./Catherine --seconds=60 --shot=/path/out --script=ms:hexbuttons,...` |
 | Name addresses / disassemble game code | `tools/symbols.py work/Catherine ADDR...` / `tools/disasm.py work/Catherine FUNC` |
 | Format / check | `scripts/format.sh` / `scripts/format.sh --check` |
+
+Clang is the only compiler: the configure stops on any other, and the recompiler builds game code with Clang (or tcc
+on Windows). The third-party libraries are CPM packages pinned in `cmake/dependencies.cmake`, downloaded once into
+`.cache/cpm`, and built in the same tree as the runtime.
 
 The runtime finds its game module by its own file name, so each game has a copy of the runtime named after it, made
 by the build's deploy step. Game code (`_code.so`) only needs recompiling when `switchrecomp/codegen.py`, `a64.py` or anything in
@@ -69,8 +73,8 @@ by the build's deploy step. Game code (`_code.so`) only needs recompiling when `
 | Startup | `runtime/core/`: `main.c` (startup, loading the game module), `options.c` (the .ini), `clock.c` (guest time), `rtapi.c` (what the game module calls), `crash.c`, `present.c` (vi's CPU-side present), `loader.c`, `entry.c` |
 | Kernel and memory | `runtime/kernel/`: `kernel.c` (handles, waits, events), `thread.c`, `sync.c` (mutexes, condition variables, address arbitration, WaitSynchronization), `svc.c` (the SVC dispatch), `svc_mem.c` (memory SVCs, GetInfo), `debug.c` (backtraces, dumps), `mem.c`, `ipc.c` (helpers `in32`, `out32`, `buf_in`, `buf_out`, `out_obj`...) |
 | Services | `runtime/hle/`: one file per service family (`sm.c`, `am.c`, `set.c`, `time.c`, `acc.c`, `audio.c`, `misc.c` for the small ones, `services.c` registers them), `hid.c`, `fs.c`, `vi.c`, `nvdrv.c` (nvhost devices, syncpoints) |
-| GPU | `runtime/gpu/`: `gpu.c` (GPFIFO), `engines.c` (3D engine methods), `mme.c` (macros), `compute.c`, `fermi2d.c`, `dma.c`, `maxwell3d.c`, `renderer.h` (the `Renderer` table every renderer fills in, `g_renderer`), `renderer.c` (state the renderers share), `shader/` (Maxwell to GLSL: `shader.c` walks a program, `decode.c` the instruction table, `translate.c` each instruction, `corpus.c`), `texture/astc.c`, `null/` (headless); `third_party/bcn/` |
-| Vulkan renderer | `runtime/gpu/vk/`: `vk.h` (lists the parts), `device.c` (instance, device, queues, swapchain, VMA), `cmd.c` (frames in flight, staging), `surface.c` and `format.c` (render targets, formats), `texture.c` (textures, samplers), `buffer.c` (guest memory as buffers), `pipeline.c` (shader modules, pipelines), `render.c` (rendering passes, clears, draws), `compute.c` (compute on the compute queue, results landing in guest memory), `renderer.c` (its side of the renderer interface, presenting), `spirv.c` (GLSL to SPIR-V with glslang, SPIR-V cache); `third_party/Vulkan-Headers`, `third_party/volk`, `third_party/glslang`, `third_party/VulkanMemoryAllocator` |
+| GPU | `runtime/gpu/`: `gpu.c` (GPFIFO), `engines.c` (3D engine methods), `mme.c` (macros), `compute.c`, `fermi2d.c`, `dma.c`, `maxwell3d.c`, `renderer.h` (the `Renderer` table every renderer fills in, `g_renderer`), `renderer.c` (state the renderers share), `shader/` (Maxwell to GLSL: `shader.c` walks a program, `decode.c` the instruction table, `translate.c` each instruction, `corpus.c`), `texture/astc.c`, `null/` (headless) |
+| Vulkan renderer | `runtime/gpu/vk/`: `vk.h` (lists the parts), `device.c` (instance, device, queues, swapchain, VMA), `cmd.c` (frames in flight, staging), `surface.c` and `format.c` (render targets, formats), `texture.c` (textures, samplers), `buffer.c` (guest memory as buffers), `pipeline.c` (shader modules, pipelines), `render.c` (rendering passes, clears, draws), `compute.c` (compute on the compute queue, results landing in guest memory), `renderer.c` (its side of the renderer interface, presenting), `spirv.c` (GLSL to SPIR-V with glslang, SPIR-V cache); Vulkan-Headers, volk, glslang and VMA are CPM packages (`cmake/dependencies.cmake`) |
 | Shader corpus | `SWR_SHADER_CORPUS=dir` records each translated shader; `build/<dir>/swr-shaderc dir --validate` translates it, compiles it to SPIR-V and validates it (`--out DIR` from two builds, diffed, shows a translator change kept the output) |
 | Video | `runtime/video/`: `host1x.c` (channels, IOVA, ioctls), `nvdec.c` (H.264 with OpenH264), `vic.c` |
 | Platform | `runtime/platform/`: `plat.c` (logging, fatal), `plat_posix.c` and `plat_win32.c` (threads, locks, time, memory, files per OS), `profiler_win32.c`, `backend/` (`sdl3.c` on Linux and Windows, `headless.c`, `android.c`), `recorder_win32.c` (F7) |
@@ -78,7 +82,7 @@ by the build's deploy step. Game code (`_code.so`) only needs recompiling when `
 Each folder under `runtime/` is one CMake object library (`runtime/CMakeLists.txt`), and includes are written from `runtime/`
 (`#include "gpu/vk/vk.h"`). A function or global that another file uses is declared once, in the header next to the file
 that defines it (`kernel/kernel.c` and `kernel/kernel.h`), and everything else is static. The build enforces it:
-`-Werror=missing-prototypes`, `missing-variable-declarations` and, with GCC, `nested-externs`.
+`-Werror=missing-prototypes` and `missing-variable-declarations`.
 
 ## Skills and agents
 
@@ -121,8 +125,8 @@ comments and developer docs under `.claude/` are out of scope.
 - NVN dual vertex programs: VertexA (slot 0) writes the position, VertexB the varyings. Missing A means a black
   screen with every draw call succeeding.
 - The recompiler's old runtime build dropped OpenH264 silently when the library was missing, and movies stayed black.
-  The runtime is only built by CMake now, which makes it an error.
-- `git submodule add` records the default branch's tip. Checking out a tag inside the submodule changes nothing until
-  `git add third_party/NAME`, and `scripts/bootstrap.py` (`git submodule update`) puts the submodule back on the
-  recorded commit. Stage the tag first, then check `git ls-files -s third_party/NAME` against
-  `git -C third_party/NAME rev-parse TAG^{commit}`. Three pins were wrong for a week of commits this way.
+  The runtime is only built by CMake now, which fetches it with the other libraries.
+- Submodule pins went wrong for a week of commits (a `git submodule add` records the default branch's tip, not the
+  tag checked out afterwards). The libraries are CPM packages now (`cmake/dependencies.cmake`), each a release URL with
+  its SHA-256: a bump changes both, and the hash is checked against the download. CPM's `OPTIONS` become cache
+  variables of the whole build (glslang's `BUILD_SHARED_LIBS OFF` applies to every library added after it).

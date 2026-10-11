@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Recompiles an extracted game (scripts/extract.py) into games/, for this machine (Linux or Windows):
 
-    games/NAME[.exe]               the runtime, built by CMake with the chosen preset
-    games/NAME_code.so / .dll      the game's code translated to C and compiled with the preset's compiler
+    games/NAME[.exe]               the runtime, built by CMake (preset default)
+    games/NAME_code.so / .dll      the game's code translated to C and compiled with Clang
     games/NAME_data/               exefs, romfs and saves
     games/shader_cache/spirv/      SPIR-V for the game's own shader files, when it ships them (Vulkan renderer)
 
     python3 scripts/recomp.py work/Catherine Catherine
-    python3 scripts/recomp.py work/Catherine Catherine --preset clang -- --native
+    python3 scripts/recomp.py work/Catherine Catherine -- --native
 
 Options after `--` go to the recompiler (python3 -m switchrecomp). The first run of a big game takes several minutes; later runs only
 recompile what changed.
@@ -20,23 +20,22 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WINDOWS = sys.platform == 'win32'
-COMPILERS = {'gcc': 'gcc', 'clang': 'clang'}
+PRESET = 'default'
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('game', help='the extracted game folder (exefs/ + romfs/)')
     ap.add_argument('name', help='output name, e.g. Catherine')
-    ap.add_argument('--preset', choices=sorted(COMPILERS), default='gcc', help='CMake preset and compiler')
     ap.add_argument('extra', nargs='*', help='more recompiler options, after --')
     a = ap.parse_args()
 
-    subprocess.run(['cmake', '--preset', a.preset], cwd=REPO, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(['cmake', '--build', '--preset', a.preset], cwd=REPO, check=True)
-    runtime = os.path.join(REPO, 'build', a.preset, 'swr-runtime' + ('.exe' if WINDOWS else ''))
+    subprocess.run(['cmake', '--preset', PRESET], cwd=REPO, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(['cmake', '--build', '--preset', PRESET], cwd=REPO, check=True)
+    runtime = os.path.join(REPO, 'build', PRESET, 'swr-runtime' + ('.exe' if WINDOWS else ''))
     extra = list(a.extra)
     if '--cc' not in extra:
-        extra += ['--cc', COMPILERS[a.preset]]
+        extra += ['--cc', 'clang']
     cmd = [
         sys.executable,
         '-m',
@@ -53,17 +52,17 @@ def main():
     ] + extra
     rc = subprocess.run(cmd, cwd=REPO).returncode
     if rc == 0:
-        prebuild_shaders(a.preset, os.path.join(REPO, 'games', a.name + '_data', 'romfs'))
+        prebuild_shaders(os.path.join(REPO, 'games', a.name + '_data', 'romfs'))
     return rc
 
 
 NVN_SHADER_MAGIC = b'\x91\x68\x86\x19'
 
 
-def prebuild_shaders(preset, romfs):
+def prebuild_shaders(romfs):
     """Fills the Vulkan renderer's SPIR-V cache from the NVN shader files a game ships in its romfs (Catherine has
     them in data/shaders_binary), so the first run compiles fewer shaders while playing."""
-    shaderc = os.path.join(REPO, 'build', preset, 'swr-shaderc' + ('.exe' if WINDOWS else ''))
+    shaderc = os.path.join(REPO, 'build', PRESET, 'swr-shaderc' + ('.exe' if WINDOWS else ''))
     if not os.path.isfile(shaderc) or not os.path.isdir(romfs):
         return
     cache = os.path.join(REPO, 'games', 'shader_cache', 'spirv')

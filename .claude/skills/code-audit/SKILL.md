@@ -290,16 +290,15 @@ List each fix: `file:line` — what changed.
 
 ### 6. Build Verification
 
-Build with both presets, and run the game through the scenes the changes affect (`swr-build` and `swr-run` skills). If either fails, treat each error as CRITICAL, fix, rebuild. Do not proceed until both are green.
+Build, and run the game through the scenes the changes affect (`swr-build` and `swr-run` skills). If either fails, treat each error as CRITICAL, fix, rebuild. Do not proceed until both are green.
 
 ```bash
-cmake --preset gcc && cmake --build --preset gcc
-cmake --preset clang && cmake --build --preset clang
+cmake --preset default && cmake --build --preset default
 scripts/format.sh --check
 tools/run_game.py Catherine --runs 3 --dump work/Catherine
 ```
 
-- Upstream builds with `-w`, so a clean build says nothing about warnings. Build a changed file once with warnings on (`gcc -O2 -Wall -Wextra -fsyntax-only -Iruntime -Ideps/linux/include FILE`) and check none come from the change.
+- Upstream builds with `-w`, so a clean build says nothing about warnings. Build a changed file once with warnings on (its line from `build/default/compile_commands.json`, with `-Wall -Wextra -fsyntax-only`) and check none come from the change.
 - A fix for a crash or a race is run until the evidence is statistical: the crash rate before and after, with the run counts, goes in the commit message.
 - Memory-safety fixes also get an AddressSanitizer build (`-DCMAKE_C_FLAGS=-fsanitize=address` in a separate build dir) and a run.
 - The game module only needs recompiling (`scripts/recomp.py`) when `switchrecomp/codegen.py`, `a64.py`, anything in `runtime/abi/` changed.

@@ -23,7 +23,7 @@ def main():
     ap.add_argument('input', help='game folder (exefs/ + romfs/) or .nro file')
     ap.add_argument('-o', '--out', help='output name (no extension)')
     ap.add_argument('--outdir', help='output folder')
-    ap.add_argument('--cc', help='C compiler (gcc, clang, tcc, x86_64-w64-mingw32-gcc)')
+    ap.add_argument('--cc', help='C compiler (clang, x86_64-w64-mingw32-clang, tcc)')
     ap.add_argument('-O', default='2', help='optimization level (0-3)')
     ap.add_argument('--jobs', type=int, default=os.cpu_count() or 4)
     ap.add_argument('--chunk', type=int, default=30000, help='instructions per C file')
@@ -79,7 +79,7 @@ def main():
         return
     cc = toolchain.find_cc(a.cc, target_win)
     if not cc:
-        raise SystemExit('No C compiler found (gcc, clang or tcc).')
+        raise SystemExit('No C compiler found (clang or tcc).')
     say('Compiling with %s (-O%s, %d at a time)...' % (os.path.basename(cc), a.O, a.jobs))
     extra = []
     if a.native and not toolchain.is_tcc(cc):

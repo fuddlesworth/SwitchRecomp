@@ -11,25 +11,36 @@ from (v142) is the tag `upstream-v142`.
 
 Use only games and keys dumped from your own console. None are included, and none may be committed here.
 
-## Linux
+## Linux and FreeBSD
 
 ### Requirements
 
-- GCC 16 or Clang 23, CMake 3.20 or newer, Ninja, Make, NASM, Python 3.12 or newer, Git
+- Clang 23 (FreeBSD's own Clang works too), CMake 3.25 or newer, Ninja, NASM, Python 3.12 or newer, Git
 - SDL3 development files, and a GPU and driver with Vulkan 1.3
 - `uv`, only to run the formatter
 
 ### Setup
 
 ```bash
-git clone --recurse-submodules https://github.com/fuddlesworth/SwitchRecomp.git
+git clone https://github.com/fuddlesworth/SwitchRecomp.git
 cd SwitchRecomp
-python3 scripts/bootstrap.py
+cmake --preset default && cmake --build --preset default
 ```
 
-`scripts/bootstrap.py` builds OpenH264, glslang and hactool from the pinned submodules in `third_party/` into
-`deps/`. Run it again after a submodule changes. `--target win64` cross-builds the Windows libraries with MinGW-w64
-(then `cmake --preset mingw-cross` builds the Windows runtime).
+The first configure downloads the third-party libraries (OpenH264, glslang, the Vulkan headers, volk, VMA and
+hactool) with [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake). Each is pinned to a release and its SHA-256 in
+`cmake/dependencies.cmake`, and kept in `.cache/cpm` for every build folder after that. They are built with the
+runtime. Only Clang is supported: a plain `cmake -B build` picks it too. `cmake --preset windows-cross` builds the
+Windows runtime with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw).
+
+### The nightly AppImage
+
+Every commit on `main` that builds everywhere is released as `SwitchRecomp-x86_64.AppImage` under the
+[nightly](https://github.com/fuddlesworth/SwitchRecomp/releases/tag/nightly) prerelease. It is the runtime with every
+library it needs, made with [pkgforge's tools](https://github.com/pkgforge-dev/Anylinux-AppImages), and runs on any
+Linux. Like the runtime the build makes, it finds a game by its own name: copy it next to the game's code as
+`games/Catherine.AppImage` (or just `games/Catherine`) to run `games/Catherine_code.so`. Recompiling the game still
+takes a clone of this repository and Clang. `scripts/make-appimage.sh` is what makes it.
 
 ### Recompiling a game
 
@@ -41,11 +52,11 @@ python3 scripts/recomp.py work/Catherine Catherine                      # -> gam
 cd games && ./Catherine
 ```
 
-`--preset clang` builds with Clang instead of GCC. The runtime draws with Vulkan, so the GPU needs Vulkan 1.3. The first recompile of a big game takes several minutes. After that, a runtime
+The runtime draws with Vulkan, so the GPU needs Vulkan 1.3. The first recompile of a big game takes several minutes. After that, a runtime
 change only needs a runtime build, which copies the new runtime next to every game in `games/`:
 
 ```bash
-cmake --preset gcc && cmake --build --preset gcc
+cmake --build --preset default
 ```
 
 The window runs natively on Wayland, and on X11 (`SDL_VIDEO_DRIVER=x11` picks X11 on a Wayland desktop). Controls
@@ -63,20 +74,16 @@ are the same as on Windows (below).
 In PowerShell:
 
 ```powershell
-git clone --recurse-submodules https://github.com/fuddlesworth/SwitchRecomp.git
+git clone https://github.com/fuddlesworth/SwitchRecomp.git
 cd SwitchRecomp
 powershell -ExecutionPolicy Bypass -File scripts\bootstrap.ps1
-```
-
-`scripts\bootstrap.ps1` downloads w64devkit (GCC, Make, CMake, Ninja), NASM and Python into `deps\tools`, checks each
-download against its pinned SHA-256, and builds the libraries and hactool with them. `-Compiler clang` also downloads
-llvm-mingw and builds everything with Clang. Nothing is installed on the system.
-
-In every new PowerShell window, put those tools on PATH first:
-
-```powershell
 . scripts\env.ps1
+cmake --preset default; cmake --build --preset default
 ```
+
+`scripts\bootstrap.ps1` downloads llvm-mingw (Clang), CMake, Ninja, NASM and Python into `deps\tools` and checks each
+download against its pinned SHA-256. Nothing is installed on the system. The CMake build fetches and builds the
+libraries, as on Linux. In every new PowerShell window, run `. scripts\env.ps1` first to put those tools on PATH.
 
 ### Recompiling a game
 
@@ -88,8 +95,7 @@ python scripts\recomp.py work\Catherine Catherine                      # -> game
 cd games; .\Catherine.exe
 ```
 
-Use `--preset clang` if you set up with `-Compiler clang`. A runtime change only needs
-`cmake --preset gcc; cmake --build --preset gcc`.
+A runtime change only needs `cmake --build --preset default`.
 
 Controls: any controller SDL knows works like a Switch controller, by position. Keyboard: arrows for the D-pad,
 WASD for the left stick, IJKL for the right stick, X or Space for A, Z for B, C for X, V for Y, Q and E for L and R,
@@ -97,8 +103,8 @@ WASD for the left stick, IJKL for the right stick, X or Space for A, Z for B, C 
 FPS limit, F5 writes the state of every game thread to the log, F11 or Alt+Enter toggles fullscreen, and Escape
 quits.
 
-The window and input go through SDL3 on Windows too (the bootstrap builds it), with the same two renderers as on
-Linux.
+The window and input go through SDL3 on Windows too (the CMake build fetches SDL3 and links it statically), with the
+same two renderers as on Linux.
 
 ## Settings and logs
 
@@ -131,7 +137,7 @@ frame gets from the game to the screen.
 | Disassemble game code | `tools/disasm.py work/Catherine NvRmStreamFlushSync` |
 | Run the game for a set time with scripted input and a screenshot | `./Catherine --seconds=60 --script=15000:400,16000:1 --shot=out` |
 | Import a new MZ Labs release | `scripts/import-upstream.sh SwitchRecomp_v143.zip v143`, then `git merge upstream` |
-| Record the shaders a run translates, then check them for Vulkan | `SWR_SHADER_CORPUS=dir ./Catherine`, then `build/vk/swr-shaderc dir --validate` |
+| Record the shaders a run translates, then check them for Vulkan | `SWR_SHADER_CORPUS=dir ./Catherine`, then `build/default/swr-shaderc dir --validate` |
 
 The `upstream` branch holds the MZ Labs releases: each one as released (tagged `upstream-vN`) and then formatted like
 `main`, so merging a release into `main` only shows what it changed.
@@ -140,12 +146,12 @@ The `upstream` branch holds the MZ Labs releases: each one as released (tagged `
 | --- | --- |
 | `switchrecomp/` | The recompiler (`python3 -m switchrecomp`): loading, analysis, ARM64 to C, building the game module |
 | `runtime/` | The runtime: kernel, services, GPU, video, platform backends |
-| `scripts/` | Bootstrap (and the Windows toolchain download), extraction, recompiling, formatting, upstream imports |
+| `scripts/` | The Windows toolchain download, extraction, recompiling, formatting, upstream imports |
 | `docs/` | How the parts fit together |
 | `tools/` | Debugging tools |
-| `third_party/` | Pinned submodules, built by `scripts/bootstrap.py` |
-| `.github/workflows/` | CI: formatting, and builds on Linux (GCC, Clang, cross to Windows) and Windows (GCC, Clang) |
-| `deps/`, `build/`, `work/`, `games/` | Built libraries and tools, build trees, extracted dumps and recompiled games, none of them in git |
+| `cmake/` | The third-party libraries (`dependencies.cmake`, fetched with CPM.cmake) and the deploy step |
+| `.github/workflows/` | CI: formatting, and Clang builds on Linux, FreeBSD and Windows, natively and cross-built from Linux |
+| `.cache/`, `deps/`, `build/`, `work/`, `games/` | Downloaded libraries, the Windows toolchain, build trees, extracted dumps and recompiled games, none of them in git |
 
 ## License and credits
 
@@ -153,14 +159,15 @@ SwitchRecomp is © 2026 MZ Labs, under the Apache License 2.0. [LICENSE](LICENSE
 [NOTICE](NOTICE) the credit that every copy and derived work keeps. This fork is under the same terms. The source
 files' headers still name the release's `LICENSE.txt` and `NOTICE.txt`, which are `LICENSE` and `NOTICE` here.
 
-The Apache license covers only the SwitchRecomp code. Third-party components keep their own licenses:
+The Apache license covers only the SwitchRecomp code. Third-party components keep their own licenses, found in each
+package CPM.cmake downloads (`.cache/cpm/<name>/`, from the URLs in `cmake/dependencies.cmake`):
 
 | Component | Used for | License |
 | --- | --- | --- |
-| OpenH264 (Cisco) | Game videos | BSD 2-Clause, `third_party/openh264/LICENSE` |
-| hactool (SciresM) | Extracting dumps | ISC, `third_party/hactool/LICENSE` |
-| glslang (Khronos) | Vulkan shaders to SPIR-V | BSD 3-Clause, MIT and Apache 2.0, and a parser under GPL 3 with the Bison exception, `third_party/glslang/LICENSE.txt` |
-| Vulkan-Headers (Khronos) | Vulkan definitions | Apache 2.0, `third_party/Vulkan-Headers/LICENSE.md` |
-| volk (Arseny Kapoulkine) | Loading Vulkan | MIT, `third_party/volk/LICENSE.md` |
-| Vulkan Memory Allocator (AMD) | GPU memory for the Vulkan renderer | MIT, `third_party/VulkanMemoryAllocator/LICENSE.txt` |
-| SDL3 | Window and input (the sdl3 backend): the system's on Linux, built from the submodule on Windows | zlib, `third_party/SDL/LICENSE.txt` |
+| OpenH264 (Cisco) | Game videos | BSD 2-Clause |
+| hactool (SciresM) | Extracting dumps | ISC |
+| glslang (Khronos) | Vulkan shaders to SPIR-V | BSD 3-Clause, MIT and Apache 2.0, and a parser under GPL 3 with the Bison exception |
+| Vulkan-Headers (Khronos) | Vulkan definitions | Apache 2.0 |
+| volk (Arseny Kapoulkine) | Loading Vulkan | MIT |
+| Vulkan Memory Allocator (AMD) | GPU memory for the Vulkan renderer | MIT |
+| SDL3 | Window and input (the sdl3 backend): the system's on Linux and FreeBSD, built with the runtime on Windows | zlib |

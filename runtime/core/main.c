@@ -74,17 +74,17 @@ static int load_code(void) {
         return -1;
     }
 #if defined(_WIN32)
-    { /* tell gcc from tcc builds by the PE linker version (ld 2.x vs tcc 6.0). tcc code is a lot slower */
+    { /* tell clang from tcc builds by the PE linker version (lld 14.0 vs tcc 6.0). tcc code is a lot slower */
         const u8* b = (const u8*)h;
         u32 lf;
         memcpy(&lf, b + 0x3C, 4);
         u8 mj = b[lf + 24 + 2], mn = b[lf + 24 + 3];
         g_code_tcc = mj == 6 && mn == 0;
         if (g_code_tcc)
-            LOG("code: %s_code.dll was compiled with TCC. It runs several times slower than with GCC: recompile with GCC (SwitchRecomp, compiler GCC) for much better performance\n",
+            LOG("code: %s_code.dll was compiled with TCC. It runs several times slower than with Clang: recompile it with Clang for much better performance\n",
                 g_exename);
         else
-            LOG("code: %s_code.dll compiled with GCC (linker %u.%u)\n", g_exename, mj, mn);
+            LOG("code: %s_code.dll compiled with Clang (linker %u.%u)\n", g_exename, mj, mn);
     }
 #endif
     g_mod = f();
@@ -120,7 +120,7 @@ static void split_path(const char* argv0) {
     const char* base = s ? s + 1 : p;
     strncpy(g_exename, base, 255);
     char* dot = strrchr(g_exename, '.');
-    if (dot && (!strcmp(dot, ".exe") || !strcmp(dot, ".EXE"))) *dot = 0;
+    if (dot && (!strcmp(dot, ".exe") || !strcmp(dot, ".EXE") || !strcmp(dot, ".AppImage"))) *dot = 0;
     if (s) {
         s[1] = 0;
         strncpy(g_exedir, p, 1023);
@@ -129,7 +129,13 @@ static void split_path(const char* argv0) {
 }
 
 int swr_main(int argc, char** argv) {
-    split_path(argv[0]);
+    /* In an AppImage argv[0] points into its mount (APPDIR). APPIMAGE is the file that was run, so a copy named after
+       the game (games/Catherine or games/Catherine.AppImage) finds games/Catherine_code.so like the bare runtime does.
+       Both variables are inherited, so they only count when this runtime is the one inside the mount */
+    const char *appimage = getenv("APPIMAGE"), *appdir = getenv("APPDIR");
+    int in_appimage =
+        appimage && *appimage && appdir && *appdir && argv[0] && !strncmp(argv[0], appdir, strlen(appdir));
+    split_path(in_appimage ? appimage : argv[0]);
     char ini[1400];
     snprintf(ini, sizeof ini, "%s%s.ini", g_exedir, g_exename);
     ini_open(ini);

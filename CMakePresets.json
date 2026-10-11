@@ -12,17 +12,8 @@
       }
     },
     {
-      "name": "gcc",
-      "displayName": "GCC",
-      "inherits": "base",
-      "cacheVariables": {
-        "CMAKE_C_COMPILER": "gcc",
-        "CMAKE_CXX_COMPILER": "g++"
-      }
-    },
-    {
-      "name": "clang",
-      "displayName": "Clang",
+      "name": "default",
+      "displayName": "Clang, for this machine",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang",
@@ -30,29 +21,26 @@
       }
     },
     {
-      "name": "mingw-cross",
-      "displayName": "Windows, cross-built with MinGW-w64",
+      "name": "windows-cross",
+      "displayName": "Windows, cross-built with llvm-mingw",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_SYSTEM_NAME": "Windows",
-        "CMAKE_C_COMPILER": "x86_64-w64-mingw32-gcc",
-        "CMAKE_CXX_COMPILER": "x86_64-w64-mingw32-g++",
+        "CMAKE_SYSTEM_PROCESSOR": "x86_64",
+        "CMAKE_C_COMPILER": "x86_64-w64-mingw32-clang",
+        "CMAKE_CXX_COMPILER": "x86_64-w64-mingw32-clang++",
         "CMAKE_RC_COMPILER": "x86_64-w64-mingw32-windres"
       }
     }
   ],
   "buildPresets": [
     {
-      "name": "gcc",
-      "configurePreset": "gcc"
+      "name": "default",
+      "configurePreset": "default"
     },
     {
-      "name": "clang",
-      "configurePreset": "clang"
-    },
-    {
-      "name": "mingw-cross",
-      "configurePreset": "mingw-cross"
+      "name": "windows-cross",
+      "configurePreset": "windows-cross"
     }
   ]
 }

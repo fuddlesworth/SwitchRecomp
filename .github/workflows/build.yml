@@ -6,8 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Linux jobs run in Arch Linux, which has the same GCC 16, Clang 23 and clang-format 23 as development. The Windows
-# jobs start from a bare runner and get every tool from scripts/bootstrap.ps1, the way a Windows user does.
+# Linux jobs run in Arch Linux, which has the same Clang 23 and clang-format 23 as development. The Windows job starts
+# from a bare runner and gets every tool from scripts/bootstrap.ps1, the way a Windows user does. The third-party
+# libraries come from CPM.cmake at configure time; their downloads are cached between runs (.cache/cpm).
 jobs:
   format:
     name: Formatting
@@ -23,31 +24,24 @@ jobs:
           scripts/format.sh --check
 
   linux:
-    name: Linux (${{ matrix.preset }})
+    name: Linux
     runs-on: ubuntu-latest
     container: archlinux:latest
-    strategy:
-      fail-fast: false
-      matrix:
-        preset: [gcc, clang]
     steps:
       - name: Install tools
-        run: pacman -Syu --noconfirm --needed base-devel cmake ninja nasm python git clang sdl3
+        run: pacman -Syu --noconfirm --needed cmake ninja nasm python git clang sdl3
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
         with:
-          submodules: true
-      - name: Bootstrap
-        run: |
-          git config --global --add safe.directory '*'
-          CC=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} CXX=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }} \
-            python scripts/bootstrap.py
+          path: .cache/cpm
+          key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
       - name: Build the runtime
         run: |
-          cmake --preset ${{ matrix.preset }}
-          cmake --build --preset ${{ matrix.preset }}
+          cmake --preset default
+          cmake --build --preset default
       - name: Build the headless backend too
         run: |
-          cmake -B build/headless -G Ninja -DSWR_BACKEND=headless -DSWR_DEPLOY=OFF -DCMAKE_C_COMPILER=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} -DCMAKE_CXX_COMPILER=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }}
+          cmake --preset default -B build/headless -DSWR_BACKEND=headless -DSWR_DEPLOY=OFF
           cmake --build build/headless
       - name: Check the Python scripts
         run: |
@@ -58,8 +52,60 @@ jobs:
           python tools/run_game.py --help > /dev/null
       - uses: actions/upload-artifact@v4
         with:
-          name: swr-runtime-linux-${{ matrix.preset }}
-          path: build/${{ matrix.preset }}/swr-runtime
+          name: swr-runtime-linux
+          path: build/default/swr-runtime
+
+  appimage:
+    name: Linux AppImage
+    runs-on: ubuntu-latest
+    # pkgforge's Arch image and tools (https://github.com/pkgforge-dev/Anylinux-AppImages), see scripts/make-appimage.sh
+    container: ghcr.io/pkgforge-dev/archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
+      - name: Install the packaging tools
+        uses: pkgforge-dev/anylinux-setup-action@b2d1ce4216f71162e00ae58fa11ee9aeb723d0d5 # v5
+      - name: Install the build tools and the debloated Mesa
+        run: |
+          pacman -Syu --noconfirm --needed cmake ninja nasm python clang sdl3 libx11 mesa vulkan-icd-loader
+          get-debloated-pkgs --add-common --prefer-nano
+      - name: Build and install into /usr
+        run: |
+          git config --global --add safe.directory '*'
+          cmake --preset default -DSWR_DEPLOY=OFF -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build --preset default
+          cmake --install build/default
+      - name: Make the AppImage
+        run: |
+          VERSION=$(git describe --always) scripts/make-appimage.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AppImage-x86_64
+          path: dist
+
+  freebsd:
+    name: FreeBSD
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
+      - name: Build the runtime
+        uses: vmactions/freebsd-vm@v1.5.8
+        with:
+          release: '15.1'
+          usesh: true
+          prepare: pkg install -y cmake ninja nasm python3 sdl3
+          run: |
+            cmake --preset default
+            cmake --build --preset default
 
   windows-cross:
     name: Windows, cross-built on Linux
@@ -67,41 +113,44 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install tools
-        run: pacman -Syu --noconfirm --needed base-devel cmake ninja nasm python git mingw-w64-gcc
+        run: pacman -Syu --noconfirm --needed cmake ninja nasm python git
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
         with:
-          submodules: true
-      - name: Bootstrap
+          path: .cache/cpm
+          key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
+      - name: Install llvm-mingw
         run: |
-          git config --global --add safe.directory '*'
-          python scripts/bootstrap.py --target win64
+          curl -sSLf -o /tmp/llvm-mingw.tar.xz \
+            https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64.tar.xz
+          echo "5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4  /tmp/llvm-mingw.tar.xz" | sha256sum -c
+          tar -xJf /tmp/llvm-mingw.tar.xz -C /opt
+          echo /opt/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin >> "$GITHUB_PATH"
       - name: Build the runtime
         run: |
-          cmake --preset mingw-cross
-          cmake --build --preset mingw-cross
+          cmake --preset windows-cross
+          cmake --build --preset windows-cross
 
   windows:
-    name: Windows (${{ matrix.compiler }})
+    name: Windows
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        compiler: [gcc, clang]
     defaults:
       run:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
         with:
-          submodules: true
-      - name: Bootstrap
-        run: .\scripts\bootstrap.ps1 -Compiler ${{ matrix.compiler }}
+          path: .cache/cpm
+          key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
+      - name: Install the toolchain
+        run: .\scripts\bootstrap.ps1
       - name: Build the runtime
         run: |
           . .\scripts\env.ps1 -Isolated
-          cmake --preset ${{ matrix.compiler }}
+          cmake --preset default
           if ($LASTEXITCODE) { exit 1 }
-          cmake --build --preset ${{ matrix.compiler }}
+          cmake --build --preset default
           if ($LASTEXITCODE) { exit 1 }
       - name: Check the Python scripts
         run: |
@@ -112,5 +161,22 @@ jobs:
           if ($LASTEXITCODE) { exit 1 }
       - uses: actions/upload-artifact@v4
         with:
-          name: swr-runtime-windows-${{ matrix.compiler }}
-          path: build/${{ matrix.compiler }}/swr-runtime.exe
+          name: swr-runtime-windows
+          path: build/default/swr-runtime.exe
+
+  # Every push to main that builds everywhere replaces the rolling "nightly" prerelease with that commit's AppImage
+  release:
+    name: Nightly release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [format, linux, appimage, freebsd, windows-cross, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AppImage-x86_64
+      - name: Release the AppImage
+        uses: pkgforge-dev/make-nightly-appimage-release@17cbe90fc0796286e424619a54a82a3a880efe4c # v1.1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
