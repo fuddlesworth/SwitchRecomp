@@ -152,6 +152,7 @@ static int make_own(Vb* e, const u8* src) {
 
 int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
     if (!len) return 0;
+    if (vk_compute_gpu_src(gva, len, buf, off)) return 1; /* a compute result that hasn't landed yet */
     u32 k = (u32)((gva >> 6) ^ (gva >> 20) ^ len) & (VBH - 1);
     Vb* e = g_vbh[k];
     for (; e; e = e->next)

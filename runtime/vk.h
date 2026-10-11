@@ -232,6 +232,8 @@ VkShaderModule vk_module(const char* glsl, int stage); /* a module from GLSL of 
 void vk_dispatch(GpuChannel* ch, const u32* q, u64 code);
 void vk_compute_land(void);                      /* pending compute results into guest memory, now */
 void vk_compute_before_write(u64 gva, u64 size); /* gpu.c's g_gpu_before_write */
+/* a pending compute result covering [gva, gva + len): the arena buffer and offset to read it from on the GPU */
+int vk_compute_gpu_src(u64 gva, u64 len, VkBuffer* buf, u64* off);
 
 /* vk_render.c */
 void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
