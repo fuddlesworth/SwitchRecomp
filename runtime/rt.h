@@ -429,6 +429,7 @@ void gpu_present(u64 gpu_addr_or_cpu, u32 nvmap_handle, u32 w, u32 h, u32 stride
                  u32 block_h_log2, u64 cpu_addr);
 u64 nvmap_addr(u32 handle);
 u64 gmmu_translate(u64 gva);
+u32 syncpt_alloc(void);
 u32 syncpt_read(u32 id);
 void syncpt_incr(u32 id);
 int syncpt_wait(u32 id, u32 thresh, i64 timeout_ns);

@@ -114,9 +114,11 @@ int syncpt_wait(u32 id, u32 thresh, i64 timeout) {
     pm_unlock(&g_sync_lk);
     return 1;
 }
-static u32 syncpt_alloc(void) {
+/* every syncpoint user (GPU channels here, host1x channels in host1x.c) allocates here, so ids stay unique and low.
+   NVIDIA's stream library sizes its per-syncpoint tables at 128 (NvRmChannelNumSyncPoints is a stub that fails) */
+u32 syncpt_alloc(void) {
     static u32 next = 20;
-    return next++;
+    return __atomic_fetch_add(&next, 1, __ATOMIC_RELAXED);
 }
 
 /* nvhost-ctrl events = async syncpoint waits */

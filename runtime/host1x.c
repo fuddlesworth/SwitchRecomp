@@ -605,14 +605,15 @@ static void run_words(H1Ch* ch, const u32* w, u32 n) {
 }
 
 /* ------------------------------------------------------------ channel ioctls */
+/* syncpoints come from nvdrv's allocator: NvRmStream indexes a 128-entry table by syncpoint id, and an id past it
+   (upstream used 200) writes beyond the table into the game's heap */
 static H1Ch g_ch[2];
-static u32 g_ch_syncpt_next = 200;
 u32 host1x_ioctl(int is_vic, u32 cmd, u8* d, u32 n) {
     h_init();
     pm_lock(&g_hlk);
     H1Ch* ch = &g_ch[is_vic ? 1 : 0];
     ch->is_vic = is_vic;
-    if (!ch->syncpt) ch->syncpt = g_ch_syncpt_next++;
+    if (!ch->syncpt) ch->syncpt = syncpt_alloc();
     u32 r = 0, grp = (cmd >> 8) & 0xFF, nr = cmd & 0xFF;
     if (grp == 0x48) { /* SET_NVMAP_FD etc */
     } else if (grp == 0)
