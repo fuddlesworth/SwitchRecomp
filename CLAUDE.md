@@ -58,9 +58,9 @@ file holds the rules sessions get wrong and points to the skills that carry the 
 | Name addresses / disassemble game code | `tools/symbols.py work/Catherine ADDR...` / `tools/disasm.py work/Catherine FUNC` |
 | Format / check | `scripts/format.sh` / `scripts/format.sh --check` |
 
-Clang is the only compiler: the configure stops on any other, and the recompiler builds game code with Clang (or tcc
-on Windows). The third-party libraries are CPM packages pinned in `cmake/dependencies.cmake`, downloaded once into
-`.cache/cpm`, and built in the same tree as the runtime.
+Clang is the only compiler: the configure stops on any other, and the recompiler builds game code with Clang too. The
+third-party libraries are CPM packages pinned in `cmake/dependencies.cmake`, downloaded once into `.cache/cpm`, and
+built in the same tree as the runtime.
 
 The runtime finds its game module by its own file name, so each game has a copy of the runtime named after it, made
 by the build's deploy step. Game code (`_code.so`) only needs recompiling when `switchrecomp/codegen.py`, `a64.py` or anything in

@@ -4,7 +4,7 @@
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Helpers that get compiled into the game code module: FP with exact arm semantics (saturation, NaN
    handling, min/max, recip estimates), the AdvSIMD ops we don't emit inline, crypto (AES/SHA/CRC/PMULL)
-   and sysregs. No libm on purpose, this has to build the same with gcc, clang and tcc. */
+   and sysregs. No libm on purpose, this has to build the same on every Clang target. */
 #include "cpu.h"
 
 /* The helpers by topic, in the order they depend on each other (the module compiles this as one file) */

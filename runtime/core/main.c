@@ -47,7 +47,6 @@ __attribute__((weak)) const SwrModule* swr_module_static(void);
 #else
 const SwrModule* swr_module_static(void) __attribute__((weak));
 #endif
-int g_code_tcc;
 static int load_code(void) {
     if (swr_module_static) {
         g_mod = swr_module_static();
@@ -77,20 +76,6 @@ static int load_code(void) {
         WARN("%s is not a SwitchRecomp module\n", p);
         return -1;
     }
-#if defined(_WIN32)
-    { /* tell clang from tcc builds by the PE linker version (lld 14.0 vs tcc 6.0). tcc code is a lot slower */
-        const u8* b = (const u8*)h;
-        u32 lf;
-        memcpy(&lf, b + 0x3C, 4);
-        u8 mj = b[lf + 24 + 2], mn = b[lf + 24 + 3];
-        g_code_tcc = mj == 6 && mn == 0;
-        if (g_code_tcc)
-            LOG("code: %s_code.dll was compiled with TCC. It runs several times slower than with Clang: recompile it with Clang for much better performance\n",
-                g_exename);
-        else
-            LOG("code: %s_code.dll compiled with Clang (linker %u.%u)\n", g_exename, mj, mn);
-    }
-#endif
     g_mod = f();
     return 0;
 }

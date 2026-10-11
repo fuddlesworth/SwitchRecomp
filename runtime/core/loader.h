@@ -32,7 +32,6 @@ typedef struct SwrModule {
 extern const SwrModule* g_mod;
 extern GuestFn* g_disp;
 extern GuestFn swr_interp_entry;
-extern int g_code_tcc; /* the module was built with TCC */
 int loader_load(void);
 extern u64 g_code_lo, g_code_hi;
 

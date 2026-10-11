@@ -32,72 +32,6 @@ u32 swr_crc32(u32 acc, u64 val, int bytes, int castagnoli) {
     return acc;
 }
 
-#if defined(__TINYC__)
-/* tcc has no __atomic but does have inline asm. Exclusives need a real lock cmpxchg here since the
-   kernel side touches the same words (mutex/condvar) with real atomics; a spinlock-emulated CAS isn't
-   atomic against that. */
-u32 swr_cas64(u64* p, u64 o, u64 n) {
-    u64 prev = o;
-    __asm__ __volatile__("lock; cmpxchgq %2,%1" : "+a"(prev), "+m"(*p) : "r"(n) : "memory", "cc");
-    return prev == o;
-}
-u32 swr_cas32(u32* p, u32 o, u32 n) {
-    u32 prev = o;
-    __asm__ __volatile__("lock; cmpxchgl %2,%1" : "+a"(prev), "+m"(*p) : "r"(n) : "memory", "cc");
-    return prev == o;
-}
-u32 swr_cas16(u16* p, u16 o, u16 n) {
-    u16 prev = o;
-    __asm__ __volatile__("lock; cmpxchgw %2,%1" : "+a"(prev), "+m"(*p) : "r"(n) : "memory", "cc");
-    return prev == o;
-}
-u32 swr_cas8(u8* p, u8 o, u8 n) {
-    u8 prev = o;
-    __asm__ __volatile__("lock; cmpxchgb %2,%1" : "+a"(prev), "+m"(*p) : "q"(n) : "memory", "cc");
-    return prev == o;
-}
-/* cmpxchg16b clobbers rbx (and we use rdi); tcc won't save them so the asm does */
-u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
-    u64 a[5];
-    u64 r;
-    a[0] = (u64)p;
-    a[1] = o0;
-    a[2] = o1;
-    a[3] = n0;
-    a[4] = n1;
-    if (((u64)p) & 15) {
-        u32 ok = swr_cas64(p, o0, n0);
-        if (ok && !swr_cas64(p + 1, o1, n1)) {
-            swr_cas64(p, n0, o0);
-            ok = 0;
-        }
-        return ok;
-    } /* unaligned, shouldn't happen */
-    __asm__ __volatile__("push %%rbx\n\t"
-                         "push %%rdi\n\t"
-                         "movq 8(%%rsi),%%rax\n\t"
-                         "movq 16(%%rsi),%%rdx\n\t"
-                         "movq 24(%%rsi),%%rbx\n\t"
-                         "movq 32(%%rsi),%%rcx\n\t"
-                         "movq (%%rsi),%%rdi\n\t"
-                         "lock; cmpxchg16b (%%rdi)\n\t"
-                         "sete %%al\n\t"
-                         "movzbq %%al,%%rax\n\t"
-                         "pop %%rdi\n\t"
-                         "pop %%rbx"
-                         : "=a"(r)
-                         : "S"(a)
-                         : "rcx", "rdx", "memory", "cc");
-    return (u32)r;
-}
-#if defined(_WIN32)
-#include <windows.h>
-static volatile LONG g_fz;
-void swr_fence(void) { InterlockedExchange(&g_fz, 0); } /* xchg is a full barrier on x86 (no __faststorefence in tcc) */
-#else
-void swr_fence(void) { __asm__ __volatile__("mfence" : : : "memory"); }
-#endif
-#else
 u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
 #if defined(__x86_64__) && defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16)
     unsigned __int128 o = ((unsigned __int128)o1 << 64) | o0, n = ((unsigned __int128)n1 << 64) | n0;
@@ -110,7 +44,6 @@ u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
     return 1;
 #endif
 }
-#endif
 
 /* ================================================================ system */
 #define SYSREG(op0, op1, crn, crm, op2) ((((op0) & 1) << 14) | ((op1) << 11) | ((crn) << 7) | ((crm) << 3) | (op2))

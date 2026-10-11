@@ -18,56 +18,32 @@ from . import ABI_DIR, REPO
 
 def find_cc(pref=None, target_win=False):
     cands = [pref] if pref else []
-    if target_win:
-        # windows: prefer the bundled tcc\, builds in seconds
-        cands += (['tcc'] if sys.platform.startswith('win') else []) + ['x86_64-w64-mingw32-clang', 'clang', 'tcc']
-    else:
-        cands += ['clang', 'tcc']
+    cands += ['x86_64-w64-mingw32-clang', 'clang'] if target_win else ['clang']
     for c in cands:
         if not c:
             continue
         p = shutil.which(c) or (c if os.path.isfile(c) else None)
-        if not p:
-            # portable tcc/python next to us
-            for d in (os.path.join(REPO, 'tcc'),):
-                q = os.path.join(d, c + ('.exe' if sys.platform.startswith('win') else ''))
-                if os.path.isfile(q):
-                    p = q
-                    break
         if p:
             return p
     return None
 
 
-def is_tcc(cc):
-    return 'tcc' in os.path.basename(cc).lower()
-
-
-def tcc_b(cc):
-    # bundled tcc keeps include\ and lib\ next to the exe
-    d = os.path.dirname(os.path.abspath(cc))
-    return ['-B', d] if os.path.isdir(os.path.join(d, 'include')) else []
-
-
 def compile_all(files, cc, opt, outdir, target_win, jobs, say, extra_flags=()):
     objs = []
     base = [cc]
-    if is_tcc(cc):
-        flags = ['-w', '-I', ABI_DIR] + tcc_b(cc)
-    else:
-        flags = [
-            '-O' + opt,
-            '-fno-strict-aliasing',
-            '-fwrapv',
-            '-w',
-            '-I',
-            ABI_DIR,
-            '-foptimize-sibling-calls',
-            '-fno-semantic-interposition',
-        ]
-        if not target_win:
-            flags += ['-fPIC', '-fvisibility=hidden']
-        flags += list(extra_flags)
+    flags = [
+        '-O' + opt,
+        '-fno-strict-aliasing',
+        '-fwrapv',
+        '-w',
+        '-I',
+        ABI_DIR,
+        '-foptimize-sibling-calls',
+        '-fno-semantic-interposition',
+    ]
+    if not target_win:
+        flags += ['-fPIC', '-fvisibility=hidden']
+    flags += list(extra_flags)
     t0 = time.time()
     done = [0]
 
@@ -103,7 +79,7 @@ def compile_all(files, cc, opt, outdir, target_win, jobs, say, extra_flags=()):
 
 def link_module(objs, cc, out, target_win, say):
     # big games have hundreds of objects and windows caps command lines at ~32K, so use an @rsp file
-    # (clang and tcc both take it) with short relative names
+    # with short relative names
     bdir = os.path.dirname(os.path.abspath(objs[0])) if objs else '.'
     names = [os.path.relpath(os.path.abspath(o), bdir).replace('\\', '/') for o in objs]
     rsp = os.path.join(bdir, 'objects.rsp')
@@ -112,14 +88,8 @@ def link_module(objs, cc, out, target_win, say):
     out = os.path.abspath(out)
     if os.path.isfile(cc):
         cc = os.path.abspath(cc)
-    if is_tcc(cc):
-        cmd = [cc, '-shared', '-o', out] + tcc_b(cc) + ['@objects.rsp']
-    else:
-        cmd = [cc, '-shared', '-o', out, '@objects.rsp']
-        if not target_win:
-            cmd += ['-lm']
-        else:
-            cmd += ['-static-libgcc']
+    cmd = [cc, '-shared', '-o', out, '@objects.rsp']
+    cmd += ['-static-libgcc'] if target_win else ['-lm']
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=bdir)
     if r.returncode:
         raise SystemExit('Linking failed:\n' + r.stderr[-4000:])

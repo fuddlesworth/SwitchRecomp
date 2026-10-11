@@ -21,29 +21,16 @@ typedef int64_t i64;
 typedef float f32;
 typedef double f64;
 
-/* prologue of every generated function. On gcc/clang guest memory comes in as a restrict param so stores
-   through it can't alias c->x (restrict on a local doesn't buy anything). tcc gets the plain version */
-#if defined(__TINYC__)
-#define SWR_FN(n)                                                                                                      \
-    void n(CPU* c, u64 e) {                                                                                            \
-        u8* const M = c->mem;
-#else
+/* prologue of every generated function. Guest memory comes in as a restrict param so stores through it can't alias
+   c->x (restrict on a local doesn't buy anything) */
 #define SWR_FN(n)                                                                                                      \
     static void n##_b(CPU* __restrict__ c, u8* __restrict__ M, u64 e);                                                 \
     void n(CPU* __restrict__ c, u64 e) { n##_b(c, c->mem, e); }                                                        \
     static void n##_b(CPU* __restrict__ c, u8* __restrict__ M, u64 e) {
-#endif
-#if defined(__TINYC__)
-#define RESTRICT
-#define LIKELY(x)   (x)
-#define UNLIKELY(x) (x)
-#define SWR_INLINE  static inline
-#else
 #define RESTRICT    __restrict__
 #define LIKELY(x)   __builtin_expect(!!(x), 1)
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
 #define SWR_INLINE  static inline __attribute__((always_inline))
-#endif
 
 /* the version of the contract between a game module and the runtime (this header, cpu_helpers.c, RtAPI and the
    module descriptor). The recompiler stamps it into each module, the runtime refuses a module with another one */
@@ -248,42 +235,11 @@ SWR_INLINE u64 ext64(u64 x, u32 opt, u32 sh) {
 }
 
 /* ---- bits ---- */
-#if defined(__TINYC__)
-SWR_INLINE u32 clz64(u64 x) {
-    u32 n = 0;
-    if (!x) return 64;
-    while (!(x >> 63)) {
-        x <<= 1;
-        n++;
-    }
-    return n;
-}
-SWR_INLINE u32 clz32(u32 x) {
-    u32 n = 0;
-    if (!x) return 32;
-    while (!(x >> 31)) {
-        x <<= 1;
-        n++;
-    }
-    return n;
-}
-SWR_INLINE u32 popc8(u8 x) {
-    u32 n = 0;
-    while (x) {
-        n += x & 1;
-        x >>= 1;
-    }
-    return n;
-}
-SWR_INLINE u32 bswap32(u32 x) { return (x >> 24) | ((x >> 8) & 0xFF00) | ((x << 8) & 0xFF0000) | (x << 24); }
-SWR_INLINE u64 bswap64(u64 x) { return ((u64)bswap32((u32)x) << 32) | bswap32((u32)(x >> 32)); }
-#else
 SWR_INLINE u32 clz64(u64 x) { return x ? (u32)__builtin_clzll(x) : 64; }
 SWR_INLINE u32 clz32(u32 x) { return x ? (u32)__builtin_clz(x) : 32; }
 SWR_INLINE u32 popc8(u8 x) { return (u32)__builtin_popcount(x); }
 SWR_INLINE u32 bswap32(u32 x) { return __builtin_bswap32(x); }
 SWR_INLINE u64 bswap64(u64 x) { return __builtin_bswap64(x); }
-#endif
 SWR_INLINE u32 cls64(u64 x) { return clz64(x ^ ((u64)((i64)x >> 1))) - 1; }
 SWR_INLINE u32 cls32(u32 x) { return clz32(x ^ ((u32)((i32)x >> 1))) - 1; }
 SWR_INLINE u64 rbit64(u64 x) {
@@ -315,7 +271,7 @@ SWR_INLINE i32 sdiv32(i32 a, i32 b) {
 
 /* ---- 64x64 high multiply ---- */
 SWR_INLINE u64 umulh64(u64 a, u64 b) {
-#if defined(__SIZEOF_INT128__) && !defined(__TINYC__)
+#if defined(__SIZEOF_INT128__)
     return (u64)(((unsigned __int128)a * b) >> 64);
 #else
     u64 al = (u32)a, ah = a >> 32, bl = (u32)b, bh = b >> 32;
@@ -433,15 +389,6 @@ u64 v_expand_imm(u32 op, u32 cmode, u32 imm8);
 SWR_INLINE void dc_zva(u8* M, u64 a) { memset(MP(a & ~63ull), 0, 64); }
 
 /* ---- LDXR/STXR: value-based monitor using CAS ---- */
-#if defined(__TINYC__)
-u32 swr_cas64(u64* p, u64 o, u64 n);
-u32 swr_cas32(u32* p, u32 o, u32 n);
-u32 swr_cas16(u16* p, u16 o, u16 n);
-u32 swr_cas8(u8* p, u8 o, u8 n);
-u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1);
-#define SWR_FENCE() swr_fence()
-void swr_fence(void);
-#else
 SWR_INLINE u32 swr_cas64(u64* p, u64 o, u64 n) {
     return __atomic_compare_exchange_n(p, &o, n, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 }
@@ -456,7 +403,6 @@ SWR_INLINE u32 swr_cas8(u8* p, u8 o, u8 n) {
 }
 u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1);
 #define SWR_FENCE() __atomic_thread_fence(__ATOMIC_SEQ_CST)
-#endif
 SWR_INLINE u64 ldx(CPU* c, u8* M, u64 a, u32 sz) {
     u64 v;
     switch (sz) {
@@ -561,17 +507,11 @@ void swr_msr(CPU* c, u32 sysreg, u64 v);
     } while (0)
 #define SETHB(d, e) SETH(d, e)
 #define FPRM        ((int)((c->fpcr >> 22) & 3))
-#if defined(__TINYC__)
-#define CBAR()                                                                                                         \
-    do {                                                                                                               \
-    } while (0)
-#else
-#define CBAR() __asm__ __volatile__("" ::: "memory")
-#endif
+#define CBAR()      __asm__ __volatile__("" ::: "memory")
 #define YIELD()                                                                                                        \
     do {                                                                                                               \
     } while (0)
-#if defined(__FMA__) && !defined(__TINYC__)
+#if defined(__FMA__)
 #define FMLA32(d, a, b) __builtin_fmaf((a), (b), (d))
 #define FMLA64(d, a, b) __builtin_fma((a), (b), (d))
 #else

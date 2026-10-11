@@ -24,7 +24,7 @@ def main():
     ap.add_argument('input', help='game folder (exefs/ + romfs/) or .nro file')
     ap.add_argument('-o', '--out', help='output name (no extension)')
     ap.add_argument('--outdir', help='output folder')
-    ap.add_argument('--cc', help='C compiler (clang, x86_64-w64-mingw32-clang, tcc)')
+    ap.add_argument('--cc', help='C compiler (clang, x86_64-w64-mingw32-clang)')
     ap.add_argument('-O', default='2', help='optimization level (0-3)')
     ap.add_argument('--jobs', type=int, default=os.cpu_count() or 4)
     ap.add_argument('--chunk', type=int, default=30000, help='instructions per C file')
@@ -80,12 +80,12 @@ def main():
         return
     cc = toolchain.find_cc(a.cc, target_win)
     if not cc:
-        raise SystemExit('No C compiler found (clang or tcc).')
+        raise SystemExit('No C compiler found (clang).')
     say('Compiling with %s (-O%s, %d at a time)...' % (os.path.basename(cc), a.O, a.jobs))
     extra = []
-    if a.native and not toolchain.is_tcc(cc):
+    if a.native:
         extra.append('-march=native')
-    if os.environ.get('SWR_CFLAGS') and not toolchain.is_tcc(cc):
+    if os.environ.get('SWR_CFLAGS'):
         extra += os.environ['SWR_CFLAGS'].split()  # e.g. -march for someone else's cpu
     objs = toolchain.compile_all(files, cc, a.O, build, target_win, a.jobs, say, extra)
     modout = base + ('_code.dll' if target_win else '_code.so')
