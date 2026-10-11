@@ -1,0 +1,111 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Linux jobs run in Arch Linux, which has the same GCC 16, Clang 23 and clang-format 23 as development. The Windows
+# jobs start from a bare runner and get every tool from scripts/bootstrap.ps1, the way a Windows user does.
+jobs:
+  format:
+    name: Formatting
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed clang git uv bash
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          scripts/format.sh --check
+
+  linux:
+    name: Linux (${{ matrix.preset }})
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [gcc, clang]
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed base-devel cmake ninja nasm python git clang libx11 mesa
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Bootstrap
+        run: |
+          git config --global --add safe.directory '*'
+          CC=${{ matrix.preset == 'clang' && 'clang' || 'gcc' }} CXX=${{ matrix.preset == 'clang' && 'clang++' || 'g++' }} \
+            python scripts/bootstrap.py
+      - name: Build the runtime
+        run: |
+          cmake --preset ${{ matrix.preset }}
+          cmake --build --preset ${{ matrix.preset }}
+      - name: Check the Python scripts
+        run: |
+          python -m compileall -q switchrecomp.py codegen.py a64.py nxloader.py scripts tools
+          python scripts/extract.py --help > /dev/null
+          python scripts/recomp.py --help > /dev/null
+          python tools/run_game.py --help > /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swr-runtime-linux-${{ matrix.preset }}
+          path: build/${{ matrix.preset }}/swr-runtime
+
+  windows-cross:
+    name: Windows, cross-built on Linux
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed base-devel cmake ninja nasm python git mingw-w64-gcc
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Bootstrap
+        run: |
+          git config --global --add safe.directory '*'
+          python scripts/bootstrap.py --target win64
+      - name: Build the runtime
+        run: |
+          cmake --preset mingw-cross
+          cmake --build --preset mingw-cross
+
+  windows:
+    name: Windows (${{ matrix.compiler }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Bootstrap
+        run: .\scripts\bootstrap.ps1 -Compiler ${{ matrix.compiler }}
+      - name: Build the runtime
+        run: |
+          . .\scripts\env.ps1 -Isolated
+          cmake --preset ${{ matrix.compiler }}
+          if ($LASTEXITCODE) { exit 1 }
+          cmake --build --preset ${{ matrix.compiler }}
+          if ($LASTEXITCODE) { exit 1 }
+      - name: Check the Python scripts
+        run: |
+          . .\scripts\env.ps1 -Isolated
+          python scripts\extract.py --help > $null
+          if ($LASTEXITCODE) { exit 1 }
+          python scripts\recomp.py --help > $null
+          if ($LASTEXITCODE) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swr-runtime-windows-${{ matrix.compiler }}
+          path: build/${{ matrix.compiler }}/swr-runtime.exe
