@@ -43,7 +43,7 @@ from it.
 | `kernel/` | The Horizon kernel, emulated at a high level: handles and kernel objects, threads, synchronization and address arbitration, the SVC dispatch, the guest address space (`mem.c`) and IPC (`ipc.c`) |
 | `hle/` | The system services the game talks to over IPC, one file per family (am, set, time, acc, audio, hid, fs, vi...), and nvdrv, the GPU driver's device files |
 | `gpu/` | The GPU front end (GPFIFO, the 3D, compute, 2D, DMA and inline-to-memory engines), the shader translator (`shader/`), the renderer interface and the renderers (`vk/`, and `null/` for the headless build) |
-| `video/` | host1x: the video decoder (NVDEC, with OpenH264) and the video image compositor (VIC) |
+| `video/` | host1x: the video decoder (NVDEC, with FFmpeg's libavcodec) and the video image compositor (VIC) |
 | `platform/` | The operating system layer (`plat_posix.c`, `plat_win32.c`) and the window backend (`backend/sdl3.c`, or `headless.c` for tests) |
 
 ### Threads and memory

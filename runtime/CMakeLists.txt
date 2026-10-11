@@ -39,7 +39,7 @@ swr_component(hle hle/services.c hle/audren.c hle/pl.c hle/sm.c hle/am.c hle/set
               hle/hid.c hle/vi.c hle/nvdrv.c)
 swr_component(video video/host1x.c video/nvdec.c video/vic.c)
 if(SWR_H264)
-    target_link_libraries(swr_video PRIVATE openh264)
+    target_link_libraries(swr_video PRIVATE FFmpeg::avcodec)
 endif()
 swr_component(gpu gpu/gpu.c gpu/engines.c gpu/mme.c gpu/compute.c gpu/fermi2d.c gpu/dma.c gpu/maxwell3d.c gpu/renderer.c)
 
@@ -73,7 +73,7 @@ set_source_files_properties("${volk_SOURCE_DIR}/volk.c" gpu/vk/vma.cpp PROPERTIE
 add_executable(swr-runtime)
 list(TRANSFORM components PREPEND swr_)
 target_link_libraries(swr-runtime PRIVATE ${components})
-# OpenH264 and glslang are C++: link with the C++ driver. It goes in the build folder itself, where
+# glslang is C++: link with the C++ driver. It goes in the build folder itself, where
 # scripts/recomp.py and CI look for it
 set_target_properties(swr-runtime PROPERTIES LINKER_LANGUAGE CXX RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 if(WIN32)

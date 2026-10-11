@@ -34,12 +34,12 @@ function(swr_quiet)
 endfunction()
 
 if(SWR_H264)
-    # OpenH264 builds with Make or Meson, so cmake/openh264.cmake builds its decoder from the sources
-    CPMAddPackage(NAME openh264 VERSION 2.6.0
-                  URL https://github.com/cisco/openh264/archive/refs/tags/v2.6.0.tar.gz
-                  URL_HASH SHA256=558544ad358283a7ab2930d69a9ceddf913f4a51ee9bf1bfb9e377322af81a69
+    # FFmpeg builds with its own configure and make, which cmake/ffmpeg.cmake runs
+    CPMAddPackage(NAME FFmpeg VERSION 9.0.2
+                  URL https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+                  URL_HASH SHA256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
                   DOWNLOAD_ONLY YES)
-    include("${CMAKE_SOURCE_DIR}/cmake/openh264.cmake")
+    include("${CMAKE_SOURCE_DIR}/cmake/ffmpeg.cmake")
 endif()
 
 if(SWR_VULKAN)

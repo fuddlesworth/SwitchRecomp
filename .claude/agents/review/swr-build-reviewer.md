@@ -28,7 +28,7 @@ The orchestrator applies your fixes without re-deriving them. A confident causal
 - **Say plainly when you could not verify.** "I could not confirm X without running it" routes the item to a real check (a run, a repeat-run crash rate, a sanitizer build) instead of a blind edit.
 
 ## Expertise to apply
-- **Fail loudly**: a missing dependency, a failed step or an empty result must stop the script with a message, not produce a build that silently lacks a feature (OpenH264 once did).
+- **Fail loudly**: a missing dependency, a failed step or an empty result must stop the script with a message, not produce a build that silently lacks a feature (the H.264 decoder once did).
 - **Shell**: quoting, `set -euo pipefail` pitfalls (pipelines, `$(...)` in conditions), paths with spaces (game dumps have them), temporary files cleaned up on every exit.
 - **Git safety**: the import script must never touch the working tree or `main`; nothing may stage keys, dumps or `games/`; every CPM package pinned to a release URL and its SHA-256.
 - **Docs match the code**: every command in README.md, CLAUDE.md and the skills must exist and do what the text says. Run `--help` or read the script to check, never assume.

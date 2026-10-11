@@ -13,9 +13,6 @@
 #include "platform/plat.h"
 #include <stdlib.h>
 #include <string.h>
-#ifndef SWR_NO_H264
-#include "wels/codec_api.h"
-#endif
 
 /* host1x.c */
 u8* iova_ptr(u64 iova, u64 len);

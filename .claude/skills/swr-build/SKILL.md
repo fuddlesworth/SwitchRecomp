@@ -9,10 +9,11 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
 
 1. `cmake --preset default && cmake --build --preset default`, into `build/default`. The configure fetches the
    third-party packages (`cmake/dependencies.cmake`) into `.cache/cpm` the first time, so a fresh clone needs the
-   network once. They build in the same tree as the runtime: OpenH264 and hactool from our own CMake scripts
-   (`cmake/openh264.cmake`, `cmake/hactool.cmake`, since theirs are Makefiles), the others through their CMake.
+   network once. They build in the same tree as the runtime: hactool from our own CMake script (`cmake/hactool.cmake`, since
+   its own is a Makefile), FFmpeg with its own configure and make run by `cmake/ffmpeg.cmake` (logs in
+   `build/default/ffmpeg_build-prefix/src/ffmpeg_build-stamp/`), the others through their CMake.
    Clang only: any other compiler stops the configure. On Windows, `scripts\bootstrap.ps1` downloads the toolchain
-   (llvm-mingw, CMake, Ninja, NASM, Python) into `deps\tools` once, and `. scripts\env.ps1` puts it on PATH in a new
+   (llvm-mingw, CMake, Ninja, NASM, Python, and w64devkit for the sh and GNU make FFmpeg needs) into `deps\tools` once, and `. scripts\env.ps1` puts it on PATH in a new
    PowerShell window.
 2. `build/default/hactool` is what `scripts/extract.py` runs (it builds that target when it's missing).
 3. The build's last step copies the runtime to `games/<Game>` for every `games/<Game>_code.so`. That is the binary
@@ -22,8 +23,8 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
 
 | What happens | Why | What to do |
 | --- | --- | --- |
-| Movies stay black, the log says no H.264 decoder | A runtime built some other way than CMake (upstream's recompiler had its own build) drops OpenH264 without a word | Build the runtime with CMake (`scripts/recomp.py` does), which always builds OpenH264 in unless `-DSWR_H264=OFF`. |
-| Movies decode slowly, the configure warned about NASM | OpenH264 falls back to its C code without NASM | Install `nasm` and configure a new build folder. |
+| Movies stay black, the log says no H.264 decoder | A runtime built some other way than CMake (upstream's recompiler had its own build) drops the H.264 decoder without a word | Build the runtime with CMake (`scripts/recomp.py` does), which always builds FFmpeg in unless `-DSWR_H264=OFF`. |
+| Movies decode slowly, the configure warned about NASM | FFmpeg is built without its assembly when NASM is missing | Install `nasm` and configure a new build folder. |
 | A fix has no effect | The game ran an old runtime: the build didn't deploy (no `_code.so` in `games/` yet), or the game was already running | Check the deploy lines. A running game keeps its old copy (the deploy renames over it). |
 | Two build folders disagree on what is deployed | Every build folder with `SWR_DEPLOY` on deploys to the same `games/` | The last build wins. Configure extra folders with `-DSWR_DEPLOY=OFF`. |
 | A test binary next to the game was overwritten | The deploy targets every `*_code.so` in `games/`, symlinks included | Keep A/B copies outside `games/`, or don't build while they exist. |
@@ -94,8 +95,9 @@ scripts/recomp.py work/Catherine Catherine                  # runtime and game m
 A `CPMAddPackage` in `cmake/dependencies.cmake` with the release archive's URL (a tag, or a commit for projects
 without one) and its `URL_HASH SHA256=`. Get the hash from the release asset's digest (`gh api
 repos/OWNER/REPO/releases/tags/TAG --jq '.assets[].digest'`) or by downloading the archive once, never by trusting
-the next configure. Prefer `DOWNLOAD_ONLY` plus our own targets for projects without CMake (OpenH264, hactool) or
-with a CMake too old for CMake 4, `EXCLUDE_FROM_ALL YES SYSTEM YES` for the rest, and `swr_quiet(target...)` on what it
+the next configure. Prefer `DOWNLOAD_ONLY` plus our own targets for projects without CMake (FFmpeg, hactool) or
+with a CMake too old for CMake 4, `EXCLUDE_FROM_ALL YES` for the rest (not `SYSTEM`: a system copy of the headers
+found through an `-I` in CFLAGS would win over `-isystem` ones), and `swr_quiet(target...)` on what it
 builds. `OPTIONS` are cache variables of the whole build, not just that package. Then the license in README.md's
 table, and the version in the commit message. CI caches `.cache/cpm` on the file's hash.
 

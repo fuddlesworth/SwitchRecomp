@@ -29,7 +29,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install tools
-        run: pacman -Syu --noconfirm --needed cmake ninja nasm python git clang sdl3
+        run: pacman -Syu --noconfirm --needed cmake ninja make nasm python git clang sdl3
       - uses: actions/checkout@v7
       - uses: actions/cache@v5
         with:
@@ -72,7 +72,7 @@ jobs:
         uses: pkgforge-dev/anylinux-setup-action@b2d1ce4216f71162e00ae58fa11ee9aeb723d0d5 # v5
       - name: Install the build tools and the debloated Mesa
         run: |
-          pacman -Syu --noconfirm --needed cmake ninja nasm python clang sdl3 libx11 mesa vulkan-icd-loader
+          pacman -Syu --noconfirm --needed cmake ninja make nasm python clang sdl3 libx11 mesa vulkan-icd-loader
           get-debloated-pkgs --add-common --prefer-nano
       - name: Build and install into /usr
         run: |
@@ -104,7 +104,7 @@ jobs:
           usesh: true
           # A mirror caught mid-sync answers Not Found for some packages: refresh the catalogue and try once more
           prepare: |
-            pkg install -y cmake ninja nasm python3 sdl3 || { sleep 30; pkg update -f && pkg install -y cmake ninja nasm python3 sdl3; }
+            pkg install -y cmake ninja gmake nasm python3 sdl3 || { sleep 30; pkg update -f && pkg install -y cmake ninja gmake nasm python3 sdl3; }
           run: |
             cmake --preset default
             cmake --build --preset default
@@ -115,7 +115,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install tools
-        run: pacman -Syu --noconfirm --needed cmake ninja nasm python git
+        run: pacman -Syu --noconfirm --needed cmake ninja make nasm python git
       - uses: actions/checkout@v7
       - uses: actions/cache@v5
         with:

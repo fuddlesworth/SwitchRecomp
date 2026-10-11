@@ -78,7 +78,7 @@ by the build's deploy step. Game code (`_code.so`) only needs recompiling when `
 | GPU | `runtime/gpu/`: `gpu.c` (GPFIFO), `engines.c` (3D engine methods), `mme.c` (macros), `compute.c`, `fermi2d.c`, `dma.c`, `maxwell3d.c`, `renderer.h` (the `Renderer` table every renderer fills in, `g_renderer`), `renderer.c` (state the renderers share), `shader/` (Maxwell to GLSL: `shader.c` walks a program, `decode.c` the instruction table, `translate.c` each instruction, `corpus.c`), `texture/astc.c`, `null/` (headless) |
 | Vulkan renderer | `runtime/gpu/vk/`: `vk.h` (lists the parts), `device.c` (instance, device, queues, swapchain, VMA), `cmd.c` (frames in flight, staging), `surface.c` and `format.c` (render targets, formats), `texture.c` (textures, samplers), `buffer.c` (guest memory as buffers), `pipeline.c` (shader modules, pipelines), `render.c` (rendering passes, clears, draws), `compute.c` (compute on the compute queue, results landing in guest memory), `renderer.c` (its side of the renderer interface, presenting), `spirv.c` (GLSL to SPIR-V with glslang, SPIR-V cache); Vulkan-Headers, volk, glslang and VMA are CPM packages (`cmake/dependencies.cmake`) |
 | Shader corpus | `SWR_SHADER_CORPUS=dir` records each translated shader; `build/<dir>/swr-shaderc dir --validate` translates it, compiles it to SPIR-V and validates it (`--out DIR` from two builds, diffed, shows a translator change kept the output) |
-| Video | `runtime/video/`: `host1x.c` (channels, IOVA, ioctls), `nvdec.c` (H.264 with OpenH264), `vic.c` |
+| Video | `runtime/video/`: `host1x.c` (channels, IOVA, ioctls), `nvdec.c` (H.264 with FFmpeg's libavcodec), `vic.c` |
 | Platform | `runtime/platform/`: `plat.c` (logging, fatal), `plat_posix.c` and `plat_win32.c` (threads, locks, time, memory, files per OS), `profiler_win32.c`, `backend/` (`sdl3.c` on Linux and Windows, `headless.c`, `android.c`), `recorder_win32.c` (F7) |
 
 Each folder under `runtime/` is one CMake object library (`runtime/CMakeLists.txt`), and includes are written from `runtime/`
@@ -126,8 +126,8 @@ comments and developer docs under `.claude/` are out of scope.
 - Services that "do nothing" can still stall a game: CRI's movie player waits for released audio buffers.
 - NVN dual vertex programs: VertexA (slot 0) writes the position, VertexB the varyings. Missing A means a black
   screen with every draw call succeeding.
-- The recompiler's old runtime build dropped OpenH264 silently when the library was missing, and movies stayed black.
-  The runtime is only built by CMake now, which fetches it with the other libraries.
+- The recompiler's old runtime build dropped the H.264 decoder (then OpenH264) silently when the library was missing,
+  and movies stayed black. The runtime is only built by CMake now, which fetches FFmpeg with the other libraries.
 - Submodule pins went wrong for a week of commits (a `git submodule add` records the default branch's tip, not the
   tag checked out afterwards). The libraries are CPM packages now (`cmake/dependencies.cmake`), each a release URL with
   its SHA-256: a bump changes both, and the hash is checked against the download. CPM's `OPTIONS` become cache

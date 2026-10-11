@@ -2,8 +2,13 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
-/* NVDEC: H.264 decoding with OpenH264, from the SPS and PPS the game passes in registers */
+/* NVDEC: H.264 decoding with FFmpeg's libavcodec, from the SPS and PPS the game passes in registers */
 #include "video/host1x_int.h"
+#ifndef SWR_NO_H264
+#include <libavcodec/avcodec.h>
+#include <libavutil/error.h>
+#include <libavutil/frame.h>
+#endif
 /* ------------------------------------------------------------ H.264: SPS/PPS rebuilt from nvdec_h264_pic_s */
 typedef struct {
     u8* p;
@@ -160,7 +165,9 @@ static u32 build_headers(const u8* ps, u8* out, u32 cap) {
 
 /* ------------------------------------------------------------ decoder and the last picture */
 #ifndef SWR_NO_H264
-static ISVCDecoder* g_dec;
+static AVCodecContext* g_dec;
+static AVPacket* g_pkt;
+static AVFrame* g_frame;
 #endif
 static int g_dec_fail;
 u8* g_fy;
@@ -179,29 +186,38 @@ static int dec_open(void) {
 #else
     if (g_dec) return 1;
     if (g_dec_fail) return 0;
-    if (WelsCreateDecoder(&g_dec) || !g_dec) {
+    const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+    g_dec = codec ? avcodec_alloc_context3(codec) : NULL;
+    g_pkt = av_packet_alloc();
+    g_frame = av_frame_alloc();
+    if (g_dec) {
+        /* NVDEC returns each job's picture with the job: one thread and low delay make the decoder do the same,
+           instead of holding pictures back for frame threading or reordering */
+        g_dec->thread_count = 1;
+        g_dec->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    }
+    if (!g_dec || !g_pkt || !g_frame || avcodec_open2(g_dec, codec, NULL) < 0) {
         g_dec_fail = 1;
-        LOG("video: OpenH264 decoder could not be created\n");
+        avcodec_free_context(&g_dec);
+        LOG("video: the FFmpeg H.264 decoder could not be opened\n");
         return 0;
     }
-    SDecodingParam p;
-    memset(&p, 0, sizeof p);
-    p.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_AVC;
-    p.eEcActiveIdc = ERROR_CON_SLICE_COPY;
-    if ((*g_dec)->Initialize(g_dec, &p)) {
-        g_dec_fail = 1;
-        LOG("video: OpenH264 decoder initialize failed\n");
-        return 0;
-    }
-    LOG("video: H.264 decoder ready (OpenH264, NVDEC jobs are decoded on the CPU)\n");
+    LOG("video: H.264 decoder ready (FFmpeg %s, NVDEC jobs are decoded on the CPU)\n", av_version_info());
     return 1;
 #endif
 }
 #ifndef SWR_NO_H264
-static void keep_frame(unsigned char** pl, SBufferInfo* bi) {
-    u32 w = (u32)bi->UsrData.sSystemBuffer.iWidth, h = (u32)bi->UsrData.sSystemBuffer.iHeight;
-    int sy = bi->UsrData.sSystemBuffer.iStride[0], sc = bi->UsrData.sSystemBuffer.iStride[1];
+/* The picture as VIC reads it: a luma plane and one interleaved chroma plane (NV12), from FFmpeg's planar 4:2:0 */
+static void keep_frame(const AVFrame* f) {
+    u32 w = (u32)f->width, h = (u32)f->height;
+    int sy = f->linesize[0], sc = f->linesize[1];
+    const u8* const* pl = (const u8* const*)f->data;
     if (!w || !h || w > 4096 || h > 4096) return;
+    if (f->format != AV_PIX_FMT_YUV420P && f->format != AV_PIX_FMT_YUVJ420P) {
+        static int said;
+        if (!said++) LOG("video: the decoder gave pixel format %d, not 4:2:0, which VIC can't take\n", f->format);
+        return;
+    }
     u32 need = w * h;
     if (g_fcap < need) {
         free(g_fy);
@@ -309,11 +325,16 @@ void nvdec_execute(u32* r) {
             o += slen;
         }
     }
-    unsigned char* pl[3] = {0, 0, 0};
-    SBufferInfo bi;
-    memset(&bi, 0, sizeof bi);
-    DECODING_STATE st = (*g_dec)->DecodeFrameNoDelay(g_dec, buf, (int)o, pl, &bi);
-    if (bi.iBufferStatus == 1 && pl[0]) keep_frame(pl, &bi);
+    /* st is nonzero when the decoder rejected the job: the status the game reads below says so */
+    g_pkt->data = buf;
+    g_pkt->size = (int)o;
+    int st = avcodec_send_packet(g_dec, g_pkt) < 0;
+    int out = 0;
+    while (avcodec_receive_frame(g_dec, g_frame) == 0) {
+        keep_frame(g_frame);
+        av_frame_unref(g_frame);
+        out = 1;
+    }
     /* nvdec_status_s at method 0x424. players check it, an all-zero status means the frame failed */
     {
         u64 st_iova = (u64)r[0x424 / 4] << 8;
@@ -334,7 +355,7 @@ void nvdec_execute(u32* r) {
         if (said < 3 || (st && said < 8)) {
             said++;
             LOG("video: NVDEC H.264 job: %ux%u MBs, %u bytes, decoder state %x, picture %s (%ux%u)\n", rd32(ps, 0x64),
-                rd32(ps, 0x68), slen, (unsigned)st, bi.iBufferStatus == 1 ? "out" : "pending", g_fw, g_fh);
+                rd32(ps, 0x68), slen, (unsigned)st, out ? "out" : "pending", g_fw, g_fh);
         }
     }
 #endif
