@@ -67,9 +67,9 @@ static int load_code(void) {
         WARN("dlopen: %s\n", dlerror());
 #endif
         WARN("Cannot find the recompiled code: %s\n", p);
-        WARN("The runtime runs the game it is named after, from the game's folder: a copy named Catherine next to "
-             "Catherine_code.so runs that game. Or name the game with --game=PATH, for example "
-             "--game=games/Catherine.\n");
+        WARN("The runtime runs the game it is named after, from the game's folder: a copy named Game next to "
+             "Game_code.so runs that game. Or name the game with --game=PATH, for example "
+             "--game=games/Game.\n");
         return -1;
     }
     ModFn f = (ModFn)plat_dl_sym(h, "swr_module");
@@ -165,7 +165,7 @@ int swr_main(int argc, char** argv) {
     if (game && is_dump(game))
         fatal("%s is a game dump. SwitchRecomp does not run dumps: it runs a game recompiled from one. Extract and "
               "recompile it first with a clone of the repository (scripts/extract.py, then scripts/recomp.py, as "
-              "the README describes), then point --game at the result, for example --game=games/Catherine.",
+              "the README describes), then point --game at the result, for example --game=games/Game.",
               game);
     split_path(game ? game : in_appimage ? appimage : argv[0]);
     char ini[1400];

@@ -3,9 +3,9 @@
 # Copyright 2026 the SwitchRecomp fork contributors
 """Runs a recompiled game unattended, one or more times, and summarizes each run.
 
-    tools/run_game.py Catherine                          # one 60 s run of the New Game script
-    tools/run_game.py Catherine --runs 5 --seconds 45    # five runs, for an intermittent bug
-    tools/run_game.py Catherine --script 15000:400 --out /tmp/x
+    tools/run_game.py Game                               # one 60 s run of the New Game script
+    tools/run_game.py Game --runs 5 --seconds 45         # five runs, for an intermittent bug
+    tools/run_game.py Game --script 15000:400 --out /tmp/x
 
 Each run writes run<N>.log and run<N>.png (the last frame) into --out (default: a new folder in /tmp). The summary
 line has the exit, the crash site (game pc and the symbol, with --dump), the last FPS line and the frame count.
@@ -55,12 +55,16 @@ def summarize(log, dump):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    ap.add_argument('game', help='name of the game in games/ (the runtime copy, e.g. Catherine)')
+    ap.add_argument('game', help='name of the game in games/ (the runtime copy, e.g. Game)')
     ap.add_argument('--runs', type=int, default=1)
     ap.add_argument('--seconds', type=int, default=60)
-    ap.add_argument('--script', default=NEW_GAME, help='button script, "" for none (default: Catherine New Game)')
+    ap.add_argument(
+        '--script',
+        default=NEW_GAME,
+        help='button script, "" for none (default: the New Game script of the game the fork is tested with)',
+    )
     ap.add_argument('--out', help='folder for logs and screenshots')
-    ap.add_argument('--dump', help='extracted game folder, to name crash sites (e.g. work/Catherine)')
+    ap.add_argument('--dump', help='extracted game folder, to name crash sites (e.g. work/Game)')
     ap.add_argument('args', nargs='*', help='more runtime options, e.g. --fps_limit=0')
     a = ap.parse_args()
 
