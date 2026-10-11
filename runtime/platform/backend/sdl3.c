@@ -273,7 +273,7 @@ void video_poll(void) {
 void frontend_frame(void) {
     if (g_shot_req) {
         g_shot_req = 0;
-        char p[256];
+        char p[1200];
         time_t now = time(NULL);
         struct tm t;
 #ifdef _WIN32
@@ -281,9 +281,10 @@ void frontend_frame(void) {
 #else
         localtime_r(&now, &t);
 #endif
-        plat_mkdir("captures");
-        snprintf(p, sizeof p, "captures/screenshot_%04d%02d%02d_%02d%02d%02d", t.tm_year + 1900, t.tm_mon + 1,
-                 t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
+        snprintf(p, sizeof p, "%scaptures", g_exedir);
+        plat_mkdir(p);
+        snprintf(p, sizeof p, "%scaptures/screenshot_%04d%02d%02d_%02d%02d%02d", g_exedir, t.tm_year + 1900,
+                 t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
         g_renderer->screenshot(p);
     }
     u64 el = plat_ns() - g_start;

@@ -26,6 +26,7 @@ The runtime options behind it, for a run by hand from `games/`:
 | `--script=ms:hex,...` | Press buttons at those times, each held 300 ms (`--press_len=` changes it) |
 | `-v` | Log every IPC call (`<service> cmd N (in ...) -> rc`): huge, grep it |
 | `--fps_limit=0` | Unlimited frame rate |
+| `--game=PATH` | Run the game PATH names (`games/Catherine` runs `games/Catherine_code.so`) instead of the one the runtime is named after. Caches, captures and logs still go next to the game |
 
 The SDL3 backend runs on Wayland when the desktop has it. `SDL_VIDEO_DRIVER=x11` runs it on X11 instead: test a
 platform change on both.

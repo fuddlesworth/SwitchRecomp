@@ -66,6 +66,9 @@ static int load_code(void) {
         WARN("dlopen: %s\n", dlerror());
 #endif
         WARN("Cannot find the recompiled code: %s\n", p);
+        WARN("The runtime runs the game it is named after, from the game's folder: a copy named Catherine next to "
+             "Catherine_code.so runs that game. Or name the game with --game=PATH, for example "
+             "--game=games/Catherine.\n");
         return -1;
     }
     ModFn f = (ModFn)plat_dl_sym(h, "swr_module");
@@ -121,6 +124,10 @@ static void split_path(const char* argv0) {
     strncpy(g_exename, base, 255);
     char* dot = strrchr(g_exename, '.');
     if (dot && (!strcmp(dot, ".exe") || !strcmp(dot, ".EXE") || !strcmp(dot, ".AppImage"))) *dot = 0;
+    /* --game=games/Catherine_code.so names the same game as --game=games/Catherine */
+    size_t n = strlen(g_exename);
+    if (n > 8 && (!strcmp(g_exename + n - 8, "_code.so"))) g_exename[n - 8] = 0;
+    if (n > 9 && (!strcmp(g_exename + n - 9, "_code.dll"))) g_exename[n - 9] = 0;
     if (s) {
         s[1] = 0;
         strncpy(g_exedir, p, 1023);
@@ -135,7 +142,12 @@ int swr_main(int argc, char** argv) {
     const char *appimage = getenv("APPIMAGE"), *appdir = getenv("APPDIR");
     int in_appimage =
         appimage && *appimage && appdir && *appdir && argv[0] && !strncmp(argv[0], appdir, strlen(appdir));
-    split_path(in_appimage ? appimage : argv[0]);
+    /* --game=PATH names the game the way the runtime's own name does (games/Catherine runs games/Catherine_code.so
+       with games/Catherine_data/), so one runtime or AppImage runs any game without a copy named after it */
+    const char* game = NULL;
+    for (int i = 1; i < argc; i++)
+        if (!strncmp(argv[i], "--game=", 7) && argv[i][7]) game = argv[i] + 7;
+    split_path(game ? game : in_appimage ? appimage : argv[0]);
     char ini[1400];
     snprintf(ini, sizeof ini, "%s%s.ini", g_exedir, g_exename);
     ini_open(ini);

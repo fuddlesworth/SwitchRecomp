@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "core/main.h"
 #include "gpu/gpu.h"
 #include "gpu/shader/shader.h"
 #include "platform/log.h"
@@ -13,7 +14,9 @@
 #include "gpu/vk/vk.h"
 #include "gpu/vk/spirv.h"
 
-#define PCACHE_PATH "shader_cache/vk_pipelines.bin"
+/* The caches live in shader_cache/ next to the games, shared by all of them, wherever the runtime was started from */
+static char g_pcache_path[1200], g_pcache_tmp[1210];
+char g_vk_spirv_dir[1100];
 static int g_pcache_dirty; /* pipelines made since the cache was last written */
 
 VkPipelineLayout g_vk_playout;
@@ -58,12 +61,17 @@ void vk_pipeline_init(void) {
                                      .pushConstantRangeCount = 1,
                                      .pPushConstantRanges = &pc};
     VK_OK(vkCreatePipelineLayout(g_vk.dev, &pl, NULL, &g_vk_playout));
-    plat_mkdir("shader_cache");
-    plat_mkdir("shader_cache/spirv");
+    char dir[1100];
+    snprintf(dir, sizeof dir, "%sshader_cache", g_exedir);
+    plat_mkdir(dir);
+    snprintf(g_vk_spirv_dir, sizeof g_vk_spirv_dir, "%s/spirv", dir);
+    plat_mkdir(g_vk_spirv_dir);
+    snprintf(g_pcache_path, sizeof g_pcache_path, "%s/vk_pipelines.bin", dir);
+    snprintf(g_pcache_tmp, sizeof g_pcache_tmp, "%s.tmp", g_pcache_path);
     /* the driver's compiled pipelines from earlier runs; it ignores data from another device or driver version */
     VkPipelineCacheCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     void* data = NULL;
-    FILE* f = fopen(PCACHE_PATH, "rb");
+    FILE* f = fopen(g_pcache_path, "rb");
     if (f) {
         fseek(f, 0, SEEK_END);
         long n = ftell(f);
@@ -179,7 +187,7 @@ VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, 
                  s->si.first_unsupported);
         size_t nw = 0;
         char err[2048] = "";
-        u32* spv = src ? vk_spirv_cached(src, stage, "shader_cache/spirv", &nw, err, sizeof err) : NULL;
+        u32* spv = src ? vk_spirv_cached(src, stage, g_vk_spirv_dir, &nw, err, sizeof err) : NULL;
         if (spv) {
             VkShaderModuleCreateInfo mi = {
                 .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = nw * 4, .pCode = spv};
@@ -215,7 +223,7 @@ VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, 
 VkShaderModule vk_module(const char* glsl, int stage) {
     size_t nw = 0;
     char err[1024] = "";
-    u32* spv = vk_spirv_cached(glsl, stage, "shader_cache/spirv", &nw, err, sizeof err);
+    u32* spv = vk_spirv_cached(glsl, stage, g_vk_spirv_dir, &nw, err, sizeof err);
     if (!spv) {
         WARN("vulkan: an internal shader didn't compile: %s\n", err);
         return VK_NULL_HANDLE;
@@ -377,15 +385,15 @@ void vk_pipeline_save(void) {
     if (vkGetPipelineCacheData(g_vk.dev, g_pcache, &n, NULL) != VK_SUCCESS || !n) return;
     void* d = malloc(n);
     if (d && vkGetPipelineCacheData(g_vk.dev, g_pcache, &n, d) == VK_SUCCESS) {
-        FILE* f = fopen(PCACHE_PATH ".tmp", "wb");
+        FILE* f = fopen(g_pcache_tmp, "wb");
         if (f) {
             int ok = fwrite(d, 1, n, f) == n;
             fclose(f);
             if (ok) {
-                remove(PCACHE_PATH); /* rename doesn't replace on Windows */
-                rename(PCACHE_PATH ".tmp", PCACHE_PATH);
+                remove(g_pcache_path); /* rename doesn't replace on Windows */
+                rename(g_pcache_tmp, g_pcache_path);
             } else
-                remove(PCACHE_PATH ".tmp");
+                remove(g_pcache_tmp);
         }
     }
     free(d);

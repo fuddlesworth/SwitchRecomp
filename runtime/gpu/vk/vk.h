@@ -198,6 +198,7 @@ typedef struct VkSh {
 extern VkPipelineLayout g_vk_playout;
 extern VkDescriptorSetLayout g_vk_dslayout;
 void vk_pipeline_init(void);
+extern char g_vk_spirv_dir[1100]; /* shader_cache/spirv next to the games, set by vk_pipeline_init */
 /* the shader at gva (after a VertexA program at gva_a, or 0). The masks key integer inputs: attributes for the
    vertex stage, textures and render target outputs for the fragment stage */
 VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, u32 rt_int, u32 rt_sint);
