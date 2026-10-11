@@ -49,6 +49,20 @@ mingw-cross`. Upstream code that only Windows compiles (`backend_win32.c`, `rec_
 `plat.c`) has relied on implicit declarations that `-w` hid and that GCC 14+ and Clang reject: a missing header shows
 up only there.
 
+The SDL3 backend and the Vulkan renderer build for Windows too: `cmake --preset mingw-cross -B build/mingw-vk
+-DSWR_BACKEND=sdl3 -DSWR_GPU=vulkan -DSWR_DEPLOY=OFF` (the bootstrap builds a static SDL3 into `deps/win64/sdl3`).
+
+To run a Windows build, use Wine with a game module built for Windows, kept out of `games/`:
+- `switchrecomp.py work/Catherine -o Catherine --outdir build/wingame --target win64 --cc x86_64-w64-mingw32-gcc
+  --runtime build/mingw-vk/swr-runtime.exe`. Make `build/wingame/Catherine_data/romfs` a symlink to the Linux copy
+  first, or it copies 13 GB.
+- Use a prefix of its own, made without the Mono and Gecko installers, which otherwise wait for a click with nothing
+  on screen: `WINEPREFIX=$PWD/build/wineprefix WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all wineboot -i`, and
+  the same variables for `wine Catherine.exe --seconds=20 --shot=shot`. The log is `Catherine.log` next to it.
+- What works under Wine 11.19 here: the win32 backend (OpenGL) and the SDL3 backend with Vulkan. SDL3 can't open an
+  OpenGL window under that Wine at all ("No matching GL pixel format available", even in a ten-line SDL program), so
+  the SDL3 backend with OpenGL is only checked by building it.
+
 ## When the game module must be recompiled
 
 Only when the generated code or its contract changed: `codegen.py`, `a64.py`, `nxloader.py`, `runtime/cpu.h`,

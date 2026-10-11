@@ -9,6 +9,9 @@
 #endif
 #include <SDL3/SDL.h>
 #include <time.h>
+#ifdef _WIN32
+static char g_title[256]; /* the window title without the status the Windows-only parts add to it */
+#endif
 
 static SDL_Window* g_win;
 #ifndef SWR_VULKAN
@@ -49,8 +52,13 @@ int video_has_gl(void) { return 1; }
 #endif
 
 void video_init(const char* title) {
+#ifdef _WIN32
+    snprintf(g_title, sizeof g_title, "%s", title);
+#endif
     /* let Mesa run its own glthread so driver work isn't on our GPU thread (Deck, AMD/Intel on Linux) */
+#ifndef _WIN32
     if (!getenv("SWR_NO_GLTHREAD")) setenv("mesa_glthread", "true", 0);
+#endif
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) fatal("SDL could not start its video: %s", SDL_GetError());
 #ifdef SWR_VULKAN
     g_win = SDL_CreateWindow(title, g_ww, g_wh, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
@@ -185,6 +193,30 @@ static void set_fullscreen(int on) {
     g_fullscreen = on;
     SDL_SetWindowFullscreen(g_win, on);
 }
+#ifdef _WIN32
+/* what the Windows-only parts of the runtime expect from a backend (plat.c, the F7 recorder and LSFG in gpu_gl.c).
+   The GPU thread reports state changes; the window title follows on the main thread (video_poll) */
+void win_fatal_box(const char* msg) { SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "SwitchRecomp", msg, g_win); }
+volatile int g_rec_toggle;
+static volatile int g_rec_on, g_lsfg_mult, g_title_dirty;
+void backend_rec_state(int on) {
+    g_rec_on = on;
+    g_title_dirty = 1;
+}
+void backend_lsfg_state(int on, int mult) {
+    g_lsfg_mult = on ? mult : 0;
+    g_title_dirty = 1;
+}
+static void title_update(void) {
+    if (!g_title_dirty) return;
+    g_title_dirty = 0;
+    char t[300];
+    int m = g_lsfg_mult;
+    snprintf(t, sizeof t, "%s%s%s", g_title, g_rec_on ? " [REC]" : "", m ? (m == 3 ? " [LSFG x3]" : " [LSFG x2]") : "");
+    SDL_SetWindowTitle(g_win, t);
+}
+#endif
+
 static void hotkey(SDL_Keycode k) {
     switch (k) {
         case SDLK_F1: {
@@ -209,6 +241,9 @@ static void hotkey(SDL_Keycode k) {
             gpu_gl_dump_rts();
             break;
         }
+#if defined(_WIN32) && !defined(SWR_VULKAN)
+        case SDLK_F7: g_rec_toggle = 1; break;
+#endif
 #ifndef SWR_VULKAN
         case SDLK_F8: {
             extern volatile int g_shot8_req;
@@ -243,6 +278,9 @@ static i32 up(i32 v) { return v == -32768 ? 32767 : -v; }
 
 void video_poll(void) {
     SDL_Event e;
+#ifdef _WIN32
+    title_update();
+#endif
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
             case SDL_EVENT_QUIT: g_quit = 1; break;
@@ -326,7 +364,11 @@ void frontend_frame(void) {
         char p[256];
         time_t now = time(NULL);
         struct tm t;
+#ifdef _WIN32
+        localtime_s(&t, &now);
+#else
         localtime_r(&now, &t);
+#endif
         plat_mkdir("captures");
         snprintf(p, sizeof p, "captures/screenshot_%04d%02d%02d_%02d%02d%02d", t.tm_year + 1900, t.tm_mon + 1,
                  t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
