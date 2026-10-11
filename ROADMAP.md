@@ -182,8 +182,13 @@ underneath. What can change is how much of the hardware is emulated and how well
         later screens match by eye. Only OpenGL has LSFG, dynamic resolution, the F7 recorder and F8 screenshots.
         On Windows the default backend is still win32 (OpenGL), until the SDL3 backend has run on real Windows
         (Phase 4); with `-DSWR_BACKEND=sdl3` it is the same as on Linux, and runs Catherine on Vulkan under Wine.
-- [ ] Texture and buffer cache tracking: invalidation on CPU writes and correct write-back, which is the same area
-      as the Phase 2 crash.
+- [x] Texture and buffer cache tracking. On Linux the guest's memory is registered with a userfaultfd in
+      asynchronous write-protect mode, and `PAGEMAP_SCAN` lists the pages written since a range was last scanned
+      (`plat_ww_scan`; Windows has `GetWriteWatch` with `SWR_WW`). The Vulkan caches scan a texture or buffer when they
+      use it and re-read it only when it was written, instead of checking contents on a back-off that could miss a
+      change for several frames: a movie's frames now reach their texture every frame. Results land in guest memory
+      with the rule from Phase 2, and render targets are written back before any CPU-side copy reads them. OpenGL
+      keeps its content checks.
 - [ ] Research: NVN-level emulation. The game reaches NVN through `nvnBootstrapLoader` and
       `nvnDeviceGetProcAddress`, so the recompiled code could be pointed at our own NVN implementation on Vulkan.
       That skips command-buffer decoding and most of the register-level emulation. NVN has around 800 entry points,

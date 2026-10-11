@@ -11,6 +11,7 @@ typedef struct Vb {
     u64 gw;    /* GPU-side write log position at the last check */
     u64 frame; /* the staging frame buf/off point into, when not own */
     int own;   /* buf is this entry's own buffer */
+    u32 wseen; /* write-tracking clock when it last matched memory */
     VkBuffer buf;
     VmaAllocation mem;
     u64 off;
@@ -20,6 +21,52 @@ typedef struct Vb {
 static Vb* g_vbh[VBH];
 extern u64 g_gw_gen;
 extern int gpu_mem_dirty_since(u64 since, u64 a, u64 sz);
+
+/* written-page tracking (plat_ww_scan): a generation per 4K page of guest memory, bumped when a scan finds it
+   written. A cache entry remembers the clock when it last matched memory, and is stale only if a page in its range
+   has a newer generation. Scanning re-protects what it reports, and the shared table keeps that from hiding a change
+   from another entry over the same memory. The table has a leaf of 1024 pages per 4 MB that has been written, with
+   the newest generation in the leaf beside it so whole leaves are skipped */
+#define WW_LEAF_SHIFT 22
+static u32* g_wleaf[AS_SIZE >> WW_LEAF_SHIFT];
+static u32 g_wleaf_max[AS_SIZE >> WW_LEAF_SHIFT];
+static u32 g_wclock = 1;
+static int g_ww = -1; /* -1 not tried yet, 0 not available, 1 on */
+static void ww_mark(u8* p, u64 n) {
+    u64 o = (u64)(p - g_mem);
+    if (o >= AS_SIZE || !n) return;
+    for (u64 pg = o >> 12, e = (o + n - 1) >> 12; pg <= e && pg < (AS_SIZE >> 12); pg++) {
+        u64 l = pg >> (WW_LEAF_SHIFT - 12);
+        if (!g_wleaf[l] && !(g_wleaf[l] = calloc(1u << (WW_LEAF_SHIFT - 12), 4))) continue;
+        g_wleaf[l][pg & ((1u << (WW_LEAF_SHIFT - 12)) - 1)] = g_wclock;
+        g_wleaf_max[l] = g_wclock;
+    }
+}
+int vk_written_since(const u8* host, u64 len, u32 since) {
+    if (!g_ww || !host || !len) return -1;
+    if (g_ww < 0) {
+        g_ww = plat_ww_scan(g_mem, 4096, ww_mark) == 0;
+        LOG("vulkan: %s\n",
+            g_ww ? "write tracking on (caches skip unchanged memory)" : "no write tracking (caches check contents)");
+        if (!g_ww) return -1;
+    }
+    g_wclock++;
+    if (plat_ww_scan((u8*)host, len, ww_mark) < 0) {
+        g_ww = 0;
+        LOG("vulkan: write tracking failed, caches check contents\n");
+        return -1;
+    }
+    u64 o = (u64)(host - g_mem);
+    for (u64 pg = o >> 12, e = (o + len - 1) >> 12; pg <= e;) {
+        u64 l = pg >> (WW_LEAF_SHIFT - 12), lend = (l + 1) << (WW_LEAF_SHIFT - 12);
+        if (g_wleaf[l] && g_wleaf_max[l] > since)
+            for (u64 q = pg; q <= e && q < lend; q++)
+                if (g_wleaf[l][q & ((1u << (WW_LEAF_SHIFT - 12)) - 1)] > since) return 1;
+        pg = lend;
+    }
+    return 0;
+}
+u32 vk_ww_now(void) { return g_wclock; }
 
 static u8* g_tmp;
 static u64 g_tmp_cap;
@@ -116,18 +163,27 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
             use(e, buf, off);
             return 1;
         }
-        /* own buffers that stayed the same for long: checked every few submits, big ones sampled in between */
-        if (e->own && e->stable >= 16 && len >= (64u << 10) && g_vk_epoch - e->chk_epoch < 8) {
+        /* with write tracking, an own buffer is checked only when its memory was written */
+        int w = e->own ? vk_written_since(gmem_ptr(gva, len), len, e->wseen) : -1;
+        if (w == 0) {
             e->epoch = g_vk_epoch;
             use(e, buf, off);
             return 1;
         }
-        if (e->own && e->stable >= 32 && len < (64u << 10) && g_vk_epoch - e->chk_epoch < 4) {
+        /* without it: own buffers that stayed the same for long are checked every few submits, big ones sampled in
+           between */
+        if (w < 0 && e->own && e->stable >= 16 && len >= (64u << 10) && g_vk_epoch - e->chk_epoch < 8) {
             e->epoch = g_vk_epoch;
             use(e, buf, off);
             return 1;
         }
-        if (e->own && e->stable >= 64 && len >= 4096 && g_vk_epoch - e->chk_epoch < (e->stable >= 256 ? 240u : 64u)) {
+        if (w < 0 && e->own && e->stable >= 32 && len < (64u << 10) && g_vk_epoch - e->chk_epoch < 4) {
+            e->epoch = g_vk_epoch;
+            use(e, buf, off);
+            return 1;
+        }
+        if (w < 0 && e->own && e->stable >= 64 && len >= 4096 &&
+            g_vk_epoch - e->chk_epoch < (e->stable >= 256 ? 240u : 64u)) {
             if (g_vk_epoch - e->schk < 4 || sample_hash(gva, len) == e->shash) {
                 if (g_vk_epoch - e->schk >= 4) e->schk = g_vk_epoch;
                 e->epoch = g_vk_epoch;
@@ -136,6 +192,7 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
             }
         }
     }
+    u32 wnow = vk_ww_now();
     const u8* src = guest_bytes(gva, len);
     if (!src) return 0;
     u64 h = vk_hash(src, len);
@@ -156,6 +213,7 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
     }
     e->epoch = e->chk_epoch = g_vk_epoch;
     e->gw = g_gw_gen;
+    e->wseen = wnow;
     if (e->stable >= 63 && len >= 4096) {
         e->shash = sample_hash(gva, len);
         e->schk = g_vk_epoch;
