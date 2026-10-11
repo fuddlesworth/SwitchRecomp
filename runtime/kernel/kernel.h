@@ -45,6 +45,7 @@ struct KThread {
     int prio;
     int core;       /* the core it runs on, what svcGetCurrentProcessorNumber reports */
     int ideal_core; /* as svcSetThreadCoreMask set it: -1 when the game doesn't care */
+    u32 yields;     /* svcSleepThread yields, every 64th of which is a host one */
     u64 affinity;
     u64 tls;
     u64 entry, arg, stack_top;

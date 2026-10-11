@@ -82,9 +82,14 @@ static void swr_svc_(CPU* c, u32 imm) {
             t->sleep_lr = x[30];
             t->sleep_n++;
             memcpy(t->sleep_x, x, sizeof t->sleep_x);
-            if (ns <= 0)
-                plat_yield();
-            else
+            if (ns <= 0) {
+                /* a yield (0, -1, -2). On the console it returns at once when nothing else waits for the core, and
+                   Tears of the Kingdom's frame tasks yield between every work item. sched_yield can give up the
+                   rest of a time slice to any thread sharing the host CPU, about 2 ms each here, which made its
+                   loading take minutes. Guest threads run in parallel on the host, so a yield returns at once, with
+                   every 64th in a row still a real one so a spin loop can't starve a thread on its host CPU */
+                if (!(++t->yields & 63)) plat_yield();
+            } else
                 plat_sleep_ns(ns);
             return;
         }
