@@ -17,7 +17,9 @@ if (-not (Test-Path (Join-Path $clang 'clang.exe'))) {
 }
 
 $paths = @($clang, (Join-Path $tools 'cmake-4.4.4-windows-x86_64\bin'), (Join-Path $tools 'ninja-1.13.2'),
-           (Join-Path $tools 'nasm-3.02'), (Join-Path $tools 'python'))
+           (Join-Path $tools 'nasm-3.02'), (Join-Path $tools 'python'),
+           # last, so its GCC, CMake and Ninja never come first: FFmpeg's build only needs its sh and make
+           (Join-Path $tools 'w64devkit\bin'))
 $env:CC = 'clang'; $env:CXX = 'clang++'
 
 if ($Isolated) {

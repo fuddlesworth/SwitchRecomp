@@ -26,7 +26,7 @@ How the pieces fit:
   command buffers. `runtime/gpu/` decodes them (`gpu.c`, the engines, `maxwell3d.c`), `gpu/shader/` translates
   Maxwell shader binaries to GLSL, and the Vulkan renderer (`gpu/vk/`) draws.
   The front end reaches the active one through `g_renderer`, a table of about 20 operations (`gpu/renderer.h`).
-- **Video**: `runtime/video/` emulates NVDEC and VIC, with OpenH264 doing the H.264 decode.
+- **Video**: `runtime/video/` emulates NVDEC and VIC, with FFmpeg's libavcodec doing the H.264 decode.
 
 ## Phase 0: repository and build
 
@@ -44,8 +44,8 @@ How the pieces fit:
       `$APPIMAGE`, so a copy named after a game finds the game's code as the bare runtime does.
 - [x] Scripts for the whole pipeline: extract a dump, recompile, deploy the runtime into `games/`.
 - [x] Formatting: clang-format 23 and ruff through `scripts/format.sh`, applied to the whole history.
-- [x] Windows: `scripts/bootstrap.ps1` downloads a pinned, checksummed toolchain (llvm-mingw, CMake, Ninja, NASM and
-      Python) so a Windows machine needs only Git. CMake builds the Windows runtime natively or cross-built with
+- [x] Windows: `scripts/bootstrap.ps1` downloads a pinned, checksummed toolchain (llvm-mingw, CMake, Ninja, NASM,
+      Python, and w64devkit for FFmpeg's shell and make) so a Windows machine needs only Git. CMake builds the Windows runtime natively or cross-built with
       llvm-mingw.
 - [x] CI on every push and pull request: formatting, Linux, FreeBSD, Windows from a bare runner, and the Linux to
       Windows cross build, all with Clang.
@@ -55,6 +55,8 @@ How the pieces fit:
       `NOTICE` replace the release's `.txt` files.
 - [x] The fork is GPL-3.0-or-later since 2026-10-11, so code from yuzu and its forks can be ported. MZ Labs' files
       keep their Apache-2.0 headers and NOTICE, with `LICENSE.apache`.
+- [x] FFmpeg's libavcodec decodes the NVDEC H.264 jobs instead of OpenH264: FFmpeg 9.0.2, built from source with only
+      the H.264, VP8 and VP9 decoders, so VP8 and VP9 videos only need NVDEC's side now.
 
 ## Phase 1: Claude Code setup
 

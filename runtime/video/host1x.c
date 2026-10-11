@@ -3,7 +3,7 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* nvhost-nvdec / nvhost-vic (host1x channels).
-   We parse the host1x stream, decode NVDEC H.264 jobs with OpenH264 (SPS/PPS get rebuilt from the
+   We parse the host1x stream, decode NVDEC H.264 jobs with FFmpeg (SPS/PPS get rebuilt from the
    picture setup the game fills in) and VIC jobs copy the last decoded picture into the output surface.
    Struct layouts / method offsets come from NVIDIA's open-gpu-doc (nvdec_drv.h, clc5b0.h, VIC). */
 #include "video/host1x.h"

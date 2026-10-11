@@ -15,7 +15,8 @@ Use only games and keys dumped from your own console. None are included, and non
 
 ### Requirements
 
-- Clang 23 (FreeBSD's own Clang works too), CMake 3.25 or newer, Ninja, NASM, Python 3.12 or newer, Git
+- Clang 23 (FreeBSD's own Clang works too), CMake 3.25 or newer, Ninja, GNU make (`gmake` on FreeBSD), NASM,
+  Python 3.12 or newer, Git
 - SDL3 development files, and a GPU and driver with Vulkan 1.3
 - `uv`, only to run the formatter
 
@@ -27,7 +28,7 @@ cd SwitchRecomp
 cmake --preset default && cmake --build --preset default
 ```
 
-The first configure downloads the third-party libraries (OpenH264, glslang, the Vulkan headers, volk, VMA and
+The first configure downloads the third-party libraries (FFmpeg, glslang, the Vulkan headers, volk, VMA and
 hactool) with [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake). Each is pinned to a release and its SHA-256 in
 `cmake/dependencies.cmake`, and kept in `.cache/cpm` for every build folder after that. They are built with the
 runtime. Only Clang is supported: a plain `cmake -B build` picks it too. `cmake --preset windows-cross` builds the
@@ -84,7 +85,8 @@ powershell -ExecutionPolicy Bypass -File scripts\bootstrap.ps1
 cmake --preset default; cmake --build --preset default
 ```
 
-`scripts\bootstrap.ps1` downloads llvm-mingw (Clang), CMake, Ninja, NASM and Python into `deps\tools` and checks each
+`scripts\bootstrap.ps1` downloads llvm-mingw (Clang), CMake, Ninja, NASM, Python and w64devkit (for the shell and
+make that FFmpeg's build uses) into `deps\tools` and checks each
 download against its pinned SHA-256. Nothing is installed on the system. The CMake build fetches and builds the
 libraries, as on Linux. In every new PowerShell window, run `. scripts\env.ps1` first to put those tools on PATH.
 
@@ -174,7 +176,7 @@ Third-party components keep their own licenses, found in each package CPM.cmake 
 
 | Component | Used for | License |
 | --- | --- | --- |
-| OpenH264 (Cisco) | Game videos | BSD 2-Clause |
+| FFmpeg (libavcodec, libavutil) | Game videos (H.264, with VP8 and VP9 built in) | LGPL 2.1 or later |
 | hactool (SciresM) | Extracting dumps | ISC |
 | glslang (Khronos) | Vulkan shaders to SPIR-V | BSD 3-Clause, MIT and Apache 2.0, and a parser under GPL 3 with the Bison exception |
 | Vulkan-Headers (Khronos) | Vulkan definitions | Apache 2.0 |
