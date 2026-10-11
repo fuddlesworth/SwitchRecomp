@@ -256,6 +256,47 @@ static void unsupported(Ctx* c, const char* name, u64 w) {
 
 static void inst(Ctx* c, u32 idx, u64 w, const Op* op);
 
+/* RED and ATOM: an atomic on global memory, at register ra plus off, of the 32-bit value in rv (size 0 u32, 1 s32,
+   3 f32), returning the old value to dst unless it is RZ. Operations: add min max inc dec and or xor, exch, safeadd */
+static void global_atomic(Ctx* c, u64 w, const char* name, u32 ra, u32 rv, i32 off, u32 sz, u32 op, u32 dst) {
+    if (op == 10) op = 0; /* SAFEADD */
+    if (!c->gtag[ra] || (sz != 0 && sz != 1 && sz != 3) || op > 8 || (sz == 3 && op != 0 && op != 8)) {
+        c->si->uses_global = 1;
+        unsupported(c, name, w);
+        if (dst != 255) setr(c, dst, "0u");
+        return;
+    }
+    int gi = c->gtag[ra] - 1;
+    c->si->uses_global = 1;
+    c->si->gbuf_wmask |= 1u << gi;
+    emitl(c, "{ uint o_ = (%s + %uu - %s) >> 2u; uint v_ = %s; uint old_;", R(c, ra), (u32)off,
+          CB(c, 0, c->si->gbuf_cbuf_off[gi]), R(c, rv));
+    c->indent++;
+    static const char* direct[9] = {"atomicAdd",     NULL, NULL, NULL, NULL, "atomicAnd", "atomicOr", "atomicXor",
+                                    "atomicExchange"};
+    if (sz != 3 ? direct[op] != NULL : op == 8)
+        emitl(c, "old_ = %s(g%d.d[o_], v_);", direct[op], gi);
+    else if (sz == 0 && (op == 1 || op == 2))
+        emitl(c, "old_ = %s(g%d.d[o_], v_);", op == 1 ? "atomicMin" : "atomicMax", gi);
+    else {
+        /* signed min/max, inc, dec and f32 add: a compare-and-swap loop */
+        const char* nv = sz == 3   ? "floatBitsToUint(uintBitsToFloat(old_) + uintBitsToFloat(v_))"
+                         : op == 1 ? "uint(min(int(old_), int(v_)))"
+                         : op == 2 ? "uint(max(int(old_), int(v_)))"
+                         : op == 3 ? "(old_ >= v_ ? 0u : old_ + 1u)"
+                                   : "((old_ == 0u || old_ > v_) ? v_ : old_ - 1u)";
+        emitl(c, "old_ = g%d.d[o_];", gi);
+        emitl(c, "for (;;) { uint p_ = atomicCompSwap(g%d.d[o_], old_, %s); if (p_ == old_) break; old_ = p_; }", gi,
+              nv);
+    }
+    if (dst != 255) {
+        emitl(c, "r%u = old_;", dst);
+        c->used_reg[dst] = 1;
+    }
+    c->indent--;
+    emitl(c, "}");
+}
+
 static void emit_guarded(Ctx* c, u32 idx, u64 w, const Op* op) {
     u32 pg = B(w, 16, 3), pn = B(w, 19, 1);
     int id = op->id;
@@ -1321,6 +1362,66 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 }
                 break;
             }
+        case O_RED: /* no result: value in bits 0-7, unsigned offset, size at 20, operation at 23 */
+            global_atomic(c, w, "RED", B(w, 8, 8), B(w, 0, 8), (i32)B(w, 28, 20), B(w, 20, 3), B(w, 23, 3), 255);
+            break;
+        case O_ATOM: /* result in bits 0-7, value in 20-27, signed offset, size at 49, operation at 52 */
+            global_atomic(c, w, "ATOM", a, B(w, 20, 8), (i32)(B(w, 28, 20) << 12) >> 12, B(w, 49, 3), B(w, 52, 4), d);
+            break;
+        case O_VMNMX: {
+            /* VMNMX: min or max (bit 56) of A and B, each a byte, half or word picked and sign- or zero-extended
+               (A select bits 36-38 with its sign at 48, B at 28-30 and 49; B is a register when bit 50 is set,
+               else a 16-bit immediate at 20), saturated (55, signed result format at 54), then merged with,
+               added to, or min/maxed with C (op at 51) */
+            u32 asel = B(w, 36, 3) | (B(w, 48, 1) << 3), bsel = B(w, 28, 3) | (B(w, 49, 1) << 3);
+            int as = asel >> 3, bs = bsel >> 3, mx = (int)B(w, 56, 1), sat = (int)B(w, 55, 1), dfmt = (int)B(w, 54, 1);
+            u32 vop = B(w, 51, 3);
+            const char *va, *vb;
+#define VSEL(x, sel)                                                                                                   \
+    ((sel & 7) < 4                                                                                                     \
+         ? T((sel & 8) ? "uint(bitfieldExtract(int(%s), %u, 8))" : "bitfieldExtract(%s, %u, 8)", x, (sel & 7) * 8)     \
+     : (sel & 7) < 6 ? T((sel & 8) ? "uint(bitfieldExtract(int(%s), %u, 16))" : "bitfieldExtract(%s, %u, 16)", x,      \
+                         ((sel & 7) - 4) * 16)                                                                         \
+                     : T("%s", x))
+            va = VSEL(R(c, a), asel);
+            if (B(w, 50, 1))
+                vb = VSEL(R(c, B(w, 20, 8)), bsel);
+            else {
+                u32 imm = B(w, 20, 16);
+                if (bs) imm = (u32)((i32)(imm << 16) >> 16);
+                vb = T("%uu", imm);
+            }
+#undef VSEL
+            /* a < b across signedness: a signed negative A is below any unsigned B, an unsigned B above INT_MAX
+               above any signed A */
+            const char* lt = as == bs ? T(as ? "(int(a_) < int(b_))" : "(a_ < b_)")
+                             : as     ? "(int(a_) < 0 || a_ < b_)"
+                                      : "(int(b_) >= 0 && a_ < b_)";
+            int rs = as == bs ? as : !mx; /* the result's signedness */
+            emitl(c, "{ uint a_ = %s; uint b_ = %s; uint r_ = %s ? %s : %s;", va, vb, lt, mx ? "b_" : "a_",
+                  mx ? "a_" : "b_");
+            c->indent++;
+            if (sat && dfmt && !rs) emitl(c, "r_ = min(r_, 0x7FFFFFFFu);");
+            if (sat && !dfmt && rs) emitl(c, "r_ = uint(max(int(r_), 0));");
+            const char* C = R(c, B(w, 39, 8));
+            switch (vop) {
+                case 0: emitl(c, "r_ = bitfieldInsert(%s, r_, 16, 16);", C); break;
+                case 1: emitl(c, "r_ = bitfieldInsert(%s, r_, 0, 16);", C); break;
+                case 2: emitl(c, "r_ = bitfieldInsert(%s, r_, 0, 8);", C); break;
+                case 3: emitl(c, "r_ = bitfieldInsert(%s, r_, 16, 8);", C); break;
+                case 4: emitl(c, "r_ = r_ + %s;", C); break;
+                case 5: emitl(c, dfmt ? "r_ = uint(min(int(r_), int(%s)));" : "r_ = min(r_, %s);", C); break;
+                case 6: emitl(c, dfmt ? "r_ = uint(max(int(r_), int(%s)));" : "r_ = max(r_, %s);", C); break;
+                default: break;
+            }
+            if (d != 255) {
+                emitl(c, "r%u = r_;", d);
+                c->used_reg[d] = 1;
+            }
+            c->indent--;
+            emitl(c, "}");
+            break;
+        }
         /* ---------------- textures */
         case O_TEXS: {
             u32 enc = B(w, 53, 4), ra = a, rb = B(w, 20, 8);
