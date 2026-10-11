@@ -1,6 +1,7 @@
 /* Frames in flight. Each frame has a command buffer that collects everything recorded until the next submit (a
-   present or a readback), a staging ring for uploads, and the resources to destroy once its work is done. Starting
-   to record a frame waits for its previous use to finish. */
+   present or a readback), a staging ring for uploads and for data draws read directly (vertices, indices, constant
+   buffers), descriptor pools, and the resources to destroy once its work is done. Starting to record a frame waits
+   for its previous use to finish. */
 #include "vk.h"
 
 typedef struct {
@@ -23,11 +24,41 @@ typedef struct {
     /* destroyed once this frame's work is done */
     Dead* dead;
     int ndead, capdead;
+    /* descriptor pools, reset when the frame is reused; pool[npool - 1] is the one allocating */
+    VkDescriptorPool pool_d[64];
+    int npool;
 } Frame;
 
 static Frame g_fr[VK_FRAMES];
 static u32 g_cur;
 static u64 g_frame_no;
+u32 g_vk_epoch, g_vk_present;
+
+u64 vk_hash(const void* p, u64 size) {
+    const u64* q = p;
+    u64 n = size / 8, i = 0;
+    u64 a = 0x9E3779B97F4A7C15ull, b = 0xC2B2AE3D27D4EB4Full, c = 0x165667B19E3779F9ull, d = 0x27D4EB2F165667C5ull;
+    for (; i + 3 < n; i += 4) {
+        a = (a ^ q[i]) * 0x100000001B3ull;
+        b = (b ^ q[i + 1]) * 0x100000001B3ull;
+        c = (c ^ q[i + 2]) * 0x100000001B3ull;
+        d = (d ^ q[i + 3]) * 0x100000001B3ull;
+    }
+    for (; i < n; i++) a = (a ^ q[i]) * 0x100000001B3ull;
+    for (u64 k = n * 8; k < size; k++) b = (b ^ ((const u8*)p)[k]) * 0x100000001B3ull;
+    return a ^ (b << 1) ^ (c << 2) ^ (d << 3) ^ size;
+}
+
+u64 vk_stage_align(void) {
+    static u64 al;
+    if (!al) {
+        const VkPhysicalDeviceLimits* l = &g_vk.props.limits;
+        al = 16;
+        if (l->minUniformBufferOffsetAlignment > al) al = l->minUniformBufferOffsetAlignment;
+        if (l->minStorageBufferOffsetAlignment > al) al = l->minStorageBufferOffsetAlignment;
+    }
+    return al;
+}
 
 static void dead_push(Frame* f, Dead d) {
     if (f->ndead == f->capdead) {
@@ -78,6 +109,11 @@ VkCommandBuffer vk_cmd(void) {
     if (!f->recording) {
         frame_wait(f);
         vkResetCommandPool(g_vk.dev, f->pool, 0);
+        for (int i = 0; i < f->npool; i++) vkResetDescriptorPool(g_vk.dev, f->pool_d[i], 0);
+        if (f->npool > 1) { /* keep the first pool, which is rarely too small */
+            for (int i = 1; i < f->npool; i++) vkDestroyDescriptorPool(g_vk.dev, f->pool_d[i], NULL);
+            f->npool = 1;
+        }
         f->stage_used = 0;
         VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
@@ -99,9 +135,12 @@ u8* vk_stage(u64 size, u64 align, VkBuffer* buf, u64* off) {
         while (cap < size) cap *= 2;
         VkBufferCreateInfo bci = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                                   .size = cap,
-                                  .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                  .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                                           VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                   .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
-        VmaAllocationCreateInfo aci = {.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+        /* written once from the CPU, read by the GPU: device-local when the CPU can map it (resizable BAR) */
+        VmaAllocationCreateInfo aci = {.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                                                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
                                        .usage = VMA_MEMORY_USAGE_AUTO};
         VmaAllocationInfo info;
@@ -153,6 +192,43 @@ void vk_finish(void) {
 }
 
 u64 vk_frame_number(void) { return g_frame_no; }
+
+static VkDescriptorPool desc_pool_new(void) {
+    /* sized for the per-stage set layout (vk_pipeline.c): a few thousand draws a frame */
+    VkDescriptorPoolSize sz[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4096 * 6},
+                                 {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4096},
+                                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4096 * 6},
+                                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 512}};
+    VkDescriptorPoolCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                                     .maxSets = 4096,
+                                     .poolSizeCount = sizeof sz / sizeof sz[0],
+                                     .pPoolSizes = sz};
+    VkDescriptorPool p = VK_NULL_HANDLE;
+    VK_OK(vkCreateDescriptorPool(g_vk.dev, &ci, NULL, &p));
+    return p;
+}
+VkDescriptorSet vk_desc_alloc(VkDescriptorSetLayout layout) {
+    vk_cmd(); /* the pools are reset when the frame starts */
+    Frame* f = &g_fr[g_cur];
+    for (int tries = 0; tries < 2; tries++) {
+        if (!f->npool || tries) {
+            if (f->npool == (int)(sizeof f->pool_d / sizeof f->pool_d[0])) return VK_NULL_HANDLE;
+            f->pool_d[f->npool++] = desc_pool_new();
+        }
+        VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                          .descriptorPool = f->pool_d[f->npool - 1],
+                                          .descriptorSetCount = 1,
+                                          .pSetLayouts = &layout};
+        VkDescriptorSet set;
+        VkResult r = vkAllocateDescriptorSets(g_vk.dev, &ai, &set);
+        if (r == VK_SUCCESS) return set;
+        if (r != VK_ERROR_OUT_OF_POOL_MEMORY && r != VK_ERROR_FRAGMENTED_POOL) {
+            VK_OK(r);
+            return VK_NULL_HANDLE;
+        }
+    }
+    return VK_NULL_HANDLE;
+}
 
 void vk_defer_image(VkImage img, VmaAllocation a, VkImageView v1, VkImageView v2) {
     dead_push(&g_fr[g_cur], (Dead){.img = img, .mem = a, .v1 = v1, .v2 = v2});

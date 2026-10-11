@@ -1,10 +1,10 @@
 /* Vulkan renderer: the interface the GPU front end calls when a renderer is active (g_gl, named after the GL
    renderer it was written for), and presenting.
 
-   Done so far: render targets, clears, write-backs to and reloads from guest memory, and presenting the game's
-   framebuffer from its render target (or from memory, converted on the CPU, when no render target holds it).
-   Draws, blits and compute are counted but not done yet (ROADMAP.md, Phase 6). Submits are processed on the
-   thread that makes them, like the no-GL build, under vk_lock(). */
+   Done so far: render targets, clears, draws (vk_render.c), write-backs to and reloads from guest memory, and
+   presenting the game's framebuffer from its render target (or from memory, converted on the CPU, when no render
+   target holds it). Blits and compute aren't done yet (ROADMAP.md, Phase 6). Submits are processed on the thread
+   that makes them, like the no-GL build, under vk_lock(). */
 #include "vk.h"
 
 int g_gl = 1;
@@ -23,6 +23,7 @@ static u32 g_last_w, g_last_h;
 void gpu_vk_start(void) {
     if (!vk_init()) fatal("Vulkan could not start (see the log). Build with -DSWR_GPU=gl to use OpenGL.");
     vk_cmd_init();
+    vk_pipeline_init();
     VkSemaphoreCreateInfo sci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (int i = 0; i < VK_FRAMES; i++) VK_OK(vkCreateSemaphore(g_vk.dev, &sci, NULL, &g_acquired[i]));
 }
@@ -33,7 +34,8 @@ int gpu_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
     (void)n;
     (void)syncpt;
     (void)incs;
-    return 0; /* processed now, on the submitting thread */
+    __atomic_add_fetch(&g_vk_epoch, 1, __ATOMIC_RELAXED); /* memory may have changed since the last submit */
+    return 0;                                             /* processed now, on the submitting thread */
 }
 void r3d_clear_gl(GpuChannel* ch, u32 v) {
     vk_lock();
@@ -41,22 +43,18 @@ void r3d_clear_gl(GpuChannel* ch, u32 v) {
     vk_unlock();
 }
 void r3d_draw_gl(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 bv, u32 bi, u32 instances) {
-    (void)indexed;
-    (void)topology;
-    (void)first;
-    (void)count;
-    (void)bv;
-    (void)bi;
-    (void)instances;
     g_draws++;
     vk_lock();
-    vk_render_draw(ch);
+    vk_render_draw(ch, indexed, topology, first, count, bv, bi, instances);
     vk_unlock();
 }
+/* a constant buffer bound to a stage: v bit 0 valid, bits 4-8 the slot; address and size from 0x8E0-0x8E2 */
 void r3d_cb_bind_gl(GpuChannel* ch, int stage, u32 v) {
-    (void)ch;
-    (void)stage;
-    (void)v;
+    u32* r = ch->r3d;
+    u32 idx = (v >> 4) & 31;
+    if (stage > 4 || idx >= 18) return;
+    g_vk_cb[stage][idx] = (v & 1) ? ((u64)r[0x8E1] << 32) | r[0x8E2] : 0;
+    g_vk_cbsize[stage][idx] = (v & 1) ? r[0x8E0] : 0;
 }
 int r3d_blit_gl(void* s, void* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx, double sdy) {
     (void)s;
@@ -208,6 +206,13 @@ void gpu_gl_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u3
     g_last = src;
     g_last_w = bw;
     g_last_h = bh;
+    g_vk_present++;
+    vk_tex_frame();
+    vk_buf_frame();
+    if (g_vk_present % 600 == 0) {
+        extern u64 g_vk_drawn, g_vk_skipped;
+        LOG("vulkan: %llu draws, %llu skipped\n", (unsigned long long)g_vk_drawn, (unsigned long long)g_vk_skipped);
+    }
     vk_submit(g_acquired[slot], VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, g_vk.sc_done[idx]);
     VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                            .waitSemaphoreCount = 1,

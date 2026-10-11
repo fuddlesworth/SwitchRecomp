@@ -33,9 +33,11 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
 `SWR_SHADER_CORPUS=dir` (any renderer), then `build/vk/swr-shaderc dir --validate` for Vulkan, and `--gl --out` from
 two builds, diffed, to show the GL output didn't change. `SWR_VK_VALIDATION=1`
 turns on the Khronos validation layer when it is installed (Arch: `vulkan-validation-layers`, which the user
-installs). A screenshot (`--shot`, or run_game.py's) reads back the frame Vulkan presented. Until draws are
-recorded, Catherine's frames are black: to check a clear reaches the window, force a clear color temporarily and
-present a target the game clears (its framebuffer is only ever drawn to).
+installs). A screenshot (`--shot`, or run_game.py's) reads back the frame Vulkan presented, so the hash in the log
+compares directly with a GL run at the same frame: Catherine's Atlus logo (`--seconds 4 --script ""`) is
+pixel-identical. Compare later screens by eye, since the two renderers reach them at slightly different frames. The
+first run after a translator change compiles every shader to SPIR-V and starts slower, which can make the New Game
+script's timed presses miss; run again with the cache warm before suspecting the renderer.
 
 ## Windows
 
