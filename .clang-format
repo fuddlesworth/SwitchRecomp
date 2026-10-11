@@ -1,0 +1,38 @@
+# Format with clang-format 23 (scripts/format.sh checks the version). Upstream releases get the same formatting when
+# they are imported (scripts/import-upstream.sh), so merges only show real changes: change this file only together
+# with a reformat of both branches.
+BasedOnStyle: LLVM
+Language: Cpp
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 120
+UseTab: Never
+BreakBeforeBraces: Attach
+PointerAlignment: Left
+ReferenceAlignment: Left
+# The runtime is full of one-line helpers and switch tables; keep the short ones on one line
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortBlocksOnASingleLine: Always
+AllowShortEnumsOnASingleLine: true
+AlignTrailingComments:
+  Kind: Always
+  OverEmptyLines: 0
+AlignConsecutiveMacros: AcrossComments
+IndentCaseLabels: true
+# Include order matters in places (glfn.h after the GL headers): never reorder
+SortIncludes: Never
+# gpu_gl.c's SR(first, last) range list has no semicolons between items: without this, clang-format wraps it as
+# one expression and never settles. glfn.h's X-macro list has the same shape, but X is also a variable name
+# elsewhere, so scripts/format.sh leaves glfn.h alone instead
+StatementMacros: [SR]
+ReflowComments: false
+# Splitting a long string into adjacent literals changes no code but is more than whitespace
+BreakStringLiterals: false
+SpaceAfterCStyleCast: false
+Cpp11BracedListStyle: true
+KeepEmptyLines:
+  AtStartOfBlock: false
+MaxEmptyLinesToKeep: 1

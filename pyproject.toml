@@ -1,0 +1,7 @@
+# Settings for ruff, which scripts/format.sh runs through uvx. The project has no Python package to install.
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.format]
+quote-style = "single"
