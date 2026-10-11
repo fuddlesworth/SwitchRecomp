@@ -46,7 +46,8 @@ makes it.
 
 ### Recompiling a game
 
-Put `prod.keys` (and `title.keys`, for NSPs) in the repository root, or pass them with `--keys` and `--title-keys`.
+Put `prod.keys` (and `title.keys`, for NSPs) in the repository root or in `~/.switch`, or pass them with `--keys` and
+`--title-keys`.
 
 ```bash
 python3 scripts/extract.py "Catherine Full Body.xci" --name Catherine   # -> work/Catherine/{exefs,romfs}
@@ -89,7 +90,8 @@ libraries, as on Linux. In every new PowerShell window, run `. scripts\env.ps1` 
 
 ### Recompiling a game
 
-Put `prod.keys` (and `title.keys`, for NSPs) in the repository folder, or pass them with `--keys` and `--title-keys`.
+Put `prod.keys` (and `title.keys`, for NSPs) in the repository folder or in `%USERPROFILE%\.switch`, or pass them
+with `--keys` and `--title-keys`.
 
 ```powershell
 python scripts\extract.py "Catherine Full Body.xci" --name Catherine   # -> work\Catherine
