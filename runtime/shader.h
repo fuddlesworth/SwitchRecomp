@@ -51,4 +51,6 @@ typedef struct {
 char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si);
 extern int (*g_shader_cb_read)(u32 idx, u32 off, u32* out);
 u64 shader_hash(const u8* code, u32 max_bytes, u32* out_len);
+/* VertexA+VertexB -> one program (A then B) */
+int shader_merge_dual(const u8* a, const u8* b, u8* out, u32 max_bytes);
 #endif

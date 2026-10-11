@@ -2937,6 +2937,31 @@ u64 shader_hash(const u8* code, u32 max_bytes, u32* out_len) {
     return h;
 }
 
+/* VertexA + VertexB (NVN dual vertex programs, slot 0 + slot 1): one program that runs A then B like the hardware.
+   A's bundles go first and its EXITs become branches to B's first bundle; branches are relative so both keep working.
+   B's header is used (declarations come from what the code touches). 0 if it doesn't fit in max_bytes */
+int shader_merge_dual(const u8* a, const u8* b, u8* out, u32 max_bytes) {
+    if (!ops_ready) ops_init();
+    u32 la, lb;
+    shader_hash(a, max_bytes, &la);
+    shader_hash(b, max_bytes, &lb);
+    u32 bstart = 10 + ((la / 8 - 10 + 3) / 4) * 4; /* first bundle after A's last one */
+    if ((size_t)bstart * 8 + (lb - 80) > max_bytes) return 0;
+    memset(out, 0, max_bytes);
+    memcpy(out, b, 80);
+    memcpy(out + 80, a + 80, (size_t)bstart * 8 - 80);
+    memcpy(out + (size_t)bstart * 8, b + 80, lb - 80);
+    u64* w = (u64*)out;
+    for (u32 i = 11; i < bstart; i++) {
+        if (!IDX_OK(i)) continue;
+        const Op* op = decode(w[i]);
+        if (!op || op->id != O_EXIT) continue;
+        i32 off = ((i32)(bstart + 1) - (i32)(i + 1)) * 8; /* BRA keeps the EXIT's predicate */
+        w[i] = 0xE240000000000000ull | ((u64)((u32)off & 0xFFFFFF) << 20) | (w[i] & (0xFull << 16)) | 0xF;
+    }
+    return 1;
+}
+
 /* BRX targets from its jump table (LDC nearby -> cbuf). -1 if we can't tell */
 static int brx_targets(const u64* w, u32 i, u32 n, u32* out, int max) {
     if (!g_shader_cb_read) return -1;

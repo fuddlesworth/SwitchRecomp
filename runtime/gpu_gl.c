@@ -1654,6 +1654,8 @@ typedef struct Sh {
     struct WJob* sj;
     u32 clen;
     u64 qh;
+    u32 clen_a;
+    u64 qh_a;
     float lu[4];
     int lu_ok;
     u64 skey;
@@ -1662,7 +1664,7 @@ static Sh* shh[1024];
 /* per-address cache. shader_hash walks the whole program (~50us per stage per draw on big shaders),
    within a submit a quick hash of the same range is enough */
 typedef struct {
-    u64 gva;
+    u64 gva, gva_a;
     u32 key2, epoch;
     int stage;
     Sh* s;
@@ -1735,30 +1737,33 @@ static char* sh_post(char* src, int stage) {
     }
     return src;
 }
-static Sh* shader_get(u64 gva_code, int stage, u32 attr_int, u32 attr_sint) {
+/* code hash at gva over len bytes (fast revalidation) */
+static u64 sh_mem_hash(u64 gva, u32 len) {
+    u8* p = gmem_ptr(gva, len);
+    if (p) return fast_hash(p, len, 0);
+    u8* t = malloc(len ? len : 1);
+    gmem_read(gva, t, len);
+    u64 q = fast_hash(t, len, 0);
+    free(t);
+    return q;
+}
+/* gva_a: VertexA program that runs before this VertexB (0 = none) */
+static Sh* shader_get(u64 gva_code, u64 gva_a, int stage, u32 attr_int, u32 attr_sint) {
     st_shaders++;
     g_sh_bind = stage == ST_VS ? 0 : 4;
     g_shader_cb_read = sh_cb_read; /* BRX table is only used to mark targets, length doesn't change */
     u32 key2 =
         stage == ST_VS ? (attr_int ^ (attr_sint * 31)) : (attr_int * 0x9E3779B1u ^ attr_sint * 0x85EBCA6Bu ^ g_fs_rtk);
-    ShA* ca = &sha[(u32)((gva_code >> 6) ^ (gva_code >> 18) ^ ((u64)key2 * 0x9E3779B1u) ^ ((u32)stage << 11)) & 4095];
-    if (ca->s && ca->gva == gva_code && ca->stage == stage && ca->key2 == key2) {
+    ShA* ca =
+        &sha[(u32)((gva_code >> 6) ^ (gva_code >> 18) ^ (gva_a >> 4) ^ ((u64)key2 * 0x9E3779B1u) ^ ((u32)stage << 11)) &
+             4095];
+    if (ca->s && ca->gva == gva_code && ca->gva_a == gva_a && ca->stage == stage && ca->key2 == key2) {
         if (ca->epoch == g_submit_epoch) {
             st_sh_fast++;
             return ca->s;
         }
         Sh* s = ca->s;
-        u8* p = gmem_ptr(gva_code, s->clen);
-        u64 q;
-        if (p)
-            q = fast_hash(p, s->clen, 0);
-        else {
-            u8* t2 = malloc(s->clen ? s->clen : 1);
-            gmem_read(gva_code, t2, s->clen);
-            q = fast_hash(t2, s->clen, 0);
-            free(t2);
-        }
-        if (q == s->qh) {
+        if (sh_mem_hash(gva_code, s->clen) == s->qh && (!gva_a || sh_mem_hash(gva_a, s->clen_a) == s->qh_a)) {
             ca->epoch = g_submit_epoch;
             st_sh_fast++;
             return s;
@@ -1766,16 +1771,35 @@ static Sh* shader_get(u64 gva_code, int stage, u32 attr_int, u32 attr_sint) {
     }
     u8* code = gmem_ptr(gva_code, 0x10000);
     u8* tmp = NULL;
+    u32 len, len_a = 0;
+    u64 qh, qh_a = 0;
     if (!code) {
         tmp = malloc(0x10000);
         gmem_read(gva_code, tmp, 0x10000);
         code = tmp;
     }
-    u32 len;
-    u64 h = shader_hash(code, 0x10000, &len);
+    shader_hash(code, 0x10000, &len);
+    qh = fast_hash(code, len, 0);
+    if (gva_a) { /* VertexA + VertexB: translate the merged program */
+        u8* ca_ = malloc(0x10000);
+        gmem_read(gva_a, ca_, 0x10000);
+        shader_hash(ca_, 0x10000, &len_a);
+        qh_a = fast_hash(ca_, len_a, 0);
+        u8* m = malloc(0x10000);
+        if (shader_merge_dual(ca_, code, m, 0x10000)) {
+            free(tmp);
+            tmp = m;
+            code = m;
+        } else
+            free(m);
+        free(ca_);
+    }
+    u32 mlen;
+    u64 h = shader_hash(code, 0x10000, &mlen);
     for (Sh* s = shh[h & 1023]; s; s = s->next)
         if (s->hash == h && s->stage == stage && s->key2 == key2) {
             ca->gva = gva_code;
+            ca->gva_a = gva_a;
             ca->key2 = key2;
             ca->stage = stage;
             ca->epoch = g_submit_epoch;
@@ -1789,8 +1813,11 @@ static Sh* shader_get(u64 gva_code, int stage, u32 attr_int, u32 attr_sint) {
     s->key2 = key2;
     st_sh_new++;
     s->clen = len;
-    s->qh = fast_hash(code, len, 0);
+    s->qh = qh;
+    s->clen_a = len_a;
+    s->qh_a = qh_a;
     ca->gva = gva_code;
+    ca->gva_a = gva_a;
     ca->key2 = key2;
     ca->stage = stage;
     ca->epoch = g_submit_epoch;
@@ -3729,7 +3756,7 @@ static Sh* fs_get_keyed(GpuChannel* ch, u64 addr) {
     g_fs_rtk = 0;
     g_fs_rtm = 0;
     g_fs_rts = 0;
-    Sh* s0 = shader_get(addr, ST_FS, 0, 0);
+    Sh* s0 = shader_get(addr, 0, ST_FS, 0, 0);
     if (!s0) return s0;
     u32 tm = 0, ts = 0;
     int nt = s0->si.ntex;
@@ -3758,7 +3785,7 @@ static Sh* fs_get_keyed(GpuChannel* ch, u64 addr) {
     g_fs_rtm = rm;
     g_fs_rts = rs;
     g_fs_rtk = rm * 0x27D4EB2Fu ^ rs * 0x165667B1u ^ 0x5A5A0000u;
-    Sh* s = shader_get(addr, ST_FS, tm, ts);
+    Sh* s = shader_get(addr, 0, ST_FS, tm, ts);
     g_fs_rtk = 0;
     g_fs_rtm = 0;
     g_fs_rts = 0;
@@ -4590,14 +4617,15 @@ void r3d_draw_gl(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count
         }
     }
     /* stage slots: 0 VertexA, 1 VertexB, 2 TessCtrl, 3 TessEval, 4 Geometry, 5 Fragment.
-     VertexB is always on even with the enable bit clear (NVN doesn't set it) */
+     VertexB is always on even with the enable bit clear (NVN doesn't set it). An enabled VertexA runs first
+     (it usually writes the position, B the varyings), so both are translated as one program */
     g_last_r3d = r;
     for (int i = 1; i < 6; i += 4) {
         u32 cfg = r[0x800 + i * 0x10];
         if (i != 1 && !(cfg & 1)) continue;
         u64 addr = code + r[0x801 + i * 0x10];
         if (i == 1)
-            TM(TM_SH, vs = shader_get(addr, ST_VS, attr_int, attr_sint));
+            TM(TM_SH, vs = shader_get(addr, (r[0x800] & 1) ? code + r[0x801] : 0, ST_VS, attr_int, attr_sint));
         else
             TM(TM_SH, fs = fs_get_keyed(ch, addr));
     }
