@@ -43,6 +43,7 @@ typedef struct {
     u64 addr;
 } Surf2D;
 int gmem_read(u64 gva, void* dst, u64 size);
+void gmem_read_code(u64 gva, void* dst, u64 size); /* a shader program: stops where guest memory does */
 int gmem_write(u64 gva, const void* src, u64 size);
 u8* gmem_ptr(u64 gva, u64 size);
 u32 gmem_r32(u64 gva);

@@ -40,7 +40,7 @@ void compute_method(GpuChannel* ch, u32 m, u32 v, int last) {
                     fclose(f);
                 }
                 u8* b = malloc(0x10000);
-                gmem_read(prog, b, 0x10000);
+                gmem_read_code(prog, b, 0x10000);
                 snprintf(p, sizeof p, "%scaptures/compute/c%02d_cs.bin", g_exedir, ns);
                 f = fopen(p, "wb");
                 if (f) {

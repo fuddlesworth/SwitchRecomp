@@ -136,14 +136,14 @@ VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, 
         }
     }
     u8* code = malloc(0x10000);
-    gmem_read(gva, code, 0x10000);
+    gmem_read_code(gva, code, 0x10000);
     u32 len, len_a = 0;
     u64 qh, qh_a = 0;
     shader_hash(code, 0x10000, &len);
     qh = vk_hash(code, len);
     if (gva_a) { /* VertexA + VertexB: one merged program */
         u8* a = malloc(0x10000);
-        gmem_read(gva_a, a, 0x10000);
+        gmem_read_code(gva_a, a, 0x10000);
         shader_hash(a, 0x10000, &len_a);
         qh_a = vk_hash(a, len_a);
         u8* m = malloc(0x10000);

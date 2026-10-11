@@ -35,6 +35,26 @@ int gmem_read(u64 gva, void* dst, u64 size) {
     return 0;
 }
 void (*g_ww_touch)(u64 cpu); /* GPU wrote guest memory, record it for write tracking */
+/* a shader program, read up to size bytes: the hardware fetches instructions only up to the program's end, but its
+   length isn't known before reading it. A program near the end of guest memory the game committed (Tears of the
+   Kingdom's compute programs end close to an uncommitted alias page) would fault a fixed-size read, so the read stops
+   at the first page with no guest memory behind it and the rest is zeros */
+void gmem_read_code(u64 gva, void* dst, u64 size) {
+    u64 n = 0;
+    while (n < size) {
+        u64 cpu = gmmu_translate(gva + n);
+        if (!cpu) break;
+        MemBlock b;
+        mem_query(cpu, &b);
+        if (b.state == MS_FREE || b.state == MS_INACCESSIBLE) break;
+        u64 run = b.addr + b.size - cpu; /* committed from here */
+        u64 page = 0x1000 - ((gva + n) & 0xFFF);
+        n += run < page ? run : page;
+    }
+    if (n > size) n = size;
+    gmem_read(gva, dst, n);
+    memset((u8*)dst + n, 0, size - n);
+}
 /* the renderer lands work it is holding (compute results) before the stream goes on past it: before a write of
    memory those results overlap (size > 0), and before anything the game can observe, like a semaphore release or a
    syncpoint (gpu_signal_point, size 0) */
