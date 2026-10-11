@@ -28,5 +28,5 @@ __pycache__/
 /bin/
 *.exe
 
-# OpenH264 built for Linux by an older manual setup. CMake builds it in build/ now.
-/runtime/oh264/lin/
+# Third-party libraries and tools built by scripts/bootstrap.sh
+/deps/

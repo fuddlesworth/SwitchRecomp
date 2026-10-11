@@ -305,10 +305,12 @@ def build_runtime(cc, out, target_win, backend, say, opt='2'):
     ]
     if gles or gl:
         srcs += [os.path.join(RT, 'bcn', 'bcn.cpp'), os.path.join(RT, 'bcn', 'bcdec.cpp')]
+    # third-party libraries built by scripts/bootstrap.sh
+    deps = os.path.join(HERE, 'deps', 'win64' if target_win else 'linux')
     # LSFG (uses the user's Lossless.dll), desktop GL only
     spvc = None
     if gl and backend in ('win32', 'x11'):
-        spvc = os.path.join(RT, 'spvc', 'win' if target_win else 'lin', 'libspvc.a')
+        spvc = os.path.join(deps, 'lib', 'libspvc.a')
         if os.path.isfile(spvc):
             srcs += [os.path.join(RT, 'lsfg.c'), os.path.join(RT, 'lsfg_spvc.cpp')]
         else:
@@ -318,7 +320,7 @@ def build_runtime(cc, out, target_win, backend, say, opt='2'):
     if target_win and backend == 'win32':
         srcs += [os.path.join(RT, 'rec_win32.c')]  # F7 recorder, Media Foundation
     # NVDEC/VIC video: link OpenH264 (BSD) statically if we have it for this target
-    oh = os.path.join(RT, 'oh264', 'win' if target_win else 'lin')
+    oh = os.path.join(deps, 'lib')
     h264 = os.path.isfile(os.path.join(oh, 'libdecoder.a')) and backend in ('win32', 'x11', 'headless')
     srcs += [os.path.join(RT, 'host1x.c')]
     cmd = (
@@ -333,9 +335,9 @@ def build_runtime(cc, out, target_win, backend, say, opt='2'):
             '-I',
             os.path.join(RT, 'bcn'),
             '-I',
-            os.path.join(RT, 'spvc'),
+            os.path.join(deps, 'include', 'spirv_cross'),
             '-I',
-            os.path.join(RT, 'oh264', 'include'),
+            os.path.join(deps, 'include'),
         ]
         + srcs
         + ['-o', out]
