@@ -51,7 +51,8 @@ if(SWR_BACKEND STREQUAL "headless")
     list(APPEND components null)
 else()
     swr_component(shader gpu/shader/shader.c gpu/texture/astc.c)
-    set(gl gpu/gl/renderer.c gpu/gl/load.c gpu/gl/glq.c gpu/gl/glq_gen.c
+    set(gl gpu/gl/renderer.c gpu/gl/formats.c gpu/gl/texture.c gpu/gl/programs.c gpu/gl/framebuffer.c gpu/gl/draw.c
+           gpu/gl/trace.c gpu/gl/capture.c gpu/gl/framegen.c gpu/gl/compute.c gpu/gl/load.c gpu/gl/glq.c gpu/gl/glq_gen.c
            "${CMAKE_SOURCE_DIR}/third_party/bcn/bcn.cpp" "${CMAKE_SOURCE_DIR}/third_party/bcn/bcdec.cpp")
     if(SWR_BACKEND STREQUAL "x11es")
         list(APPEND gl gpu/gl/overlay.c)
