@@ -3,11 +3,11 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* startup and the runtime-wide state main.c owns, the crash report (crash.c) and vi's CPU-side present (present.c) */
-#ifndef SWR_MAIN_H
-#define SWR_MAIN_H
+#ifndef SNX_MAIN_H
+#define SNX_MAIN_H
 #include "abi/cpu.h"
 
-int swr_main(int argc, char** argv);
+int snx_main(int argc, char** argv);
 extern char g_datadir[1024], g_exename[256], g_exedir[1024];
 extern volatile int g_quit;
 extern int g_frames;

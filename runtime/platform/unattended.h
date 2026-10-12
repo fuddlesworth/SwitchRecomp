@@ -4,8 +4,8 @@
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the unattended-run options both window backends take (unattended.c): seconds, frames, shot, shot_every, press,
    press_at, press_len, script. Also the stick handling the backends share */
-#ifndef SWR_UNATTENDED_H
-#define SWR_UNATTENDED_H
+#ifndef SNX_UNATTENDED_H
+#define SNX_UNATTENDED_H
 #include "abi/cpu.h"
 #include <stddef.h>
 

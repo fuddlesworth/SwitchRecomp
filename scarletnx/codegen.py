@@ -381,9 +381,9 @@ def gen_interp(step_mode=False):
     bodies = a64.gen_interp_cases()
     L = []
     fname = (
-        'u64 swr_step(CPU* RESTRICT c, u32 w, u64 pc)'
+        'u64 snx_step(CPU* RESTRICT c, u32 w, u64 pc)'
         if step_mode
-        else 'static void swr_interp(CPU* RESTRICT c, u64 e)'
+        else 'static void snx_interp(CPU* RESTRICT c, u64 e)'
     )
     L.append(fname + '{')
     L.append(' u8* const M=c->mem;')
@@ -423,7 +423,7 @@ def gen_interp(step_mode=False):
     else:
         L.append(' U_: c->pc=pc; c->rt->undef(c,pc,w); return;')
         L.append(' N_: pc+=4; continue;')
-        L.append(' J_: { GuestFn f_=swr_lookup(c,pc); if(f_!=swr_interp_entry){ f_(c,pc); return; } continue; }')
+        L.append(' J_: { GuestFn f_=snx_lookup(c,pc); if(f_!=snx_interp_entry){ f_(c,pc); return; } continue; }')
         L.append(' }')
         L.append('}')
     return '\n'.join(L)

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
-/* GLSL (from the Maxwell translator) to SPIR-V, with glslang. Shared by the Vulkan renderer and tools/swr_shaderc.c,
+   Copyright 2026 the ScarletNX contributors */
+/* GLSL (from the Maxwell translator) to SPIR-V, with glslang. Shared by the Vulkan renderer and tools/snx_shaderc.c,
    so it depends on nothing else of the runtime. */
 #include "gpu/shader/shader.h"
 #include "gpu/vk/spirv.h"
@@ -113,7 +113,7 @@ u32* vk_spirv_cached(const char* glsl, int stage, const char* cache_dir, size_t*
         /* written under a temporary name of this process's own and renamed, so a reader never sees half a file.
            Windows doesn't rename over a file: the one there (unreadable, or another process's copy of the same
            contents, the name being their hash) is removed first, and a reader in between only compiles again. Plain
-           rename and remove, as this file uses nothing else of the runtime (swr-shaderc links it alone) */
+           rename and remove, as this file uses nothing else of the runtime (snx-shaderc links it alone) */
         char tmp[1320];
 #ifdef _WIN32
         snprintf(tmp, sizeof tmp, "%s.%d.tmp", path, (int)_getpid());
@@ -143,13 +143,13 @@ char* vk_glsl_post(char* src, int stage) {
     const char* ret = NULL;
     if (stage == ST_FS && strstr(src, "out vec4 frag_color0")) {
         fn =
-            "layout(push_constant) uniform SWR_PC { layout(offset=16) vec4 swr_at; };\n"
-            "bool swr_atest(float a){ int f=int(swr_at.y); float r=swr_at.z;\n"
+            "layout(push_constant) uniform SNX_PC { layout(offset=16) vec4 snx_at; };\n"
+            "bool snx_atest(float a){ int f=int(snx_at.y); float r=snx_at.z;\n"
             "  if(f==0) return false; if(f==1) return a<r; if(f==2) return a==r; if(f==3) return a<=r; if(f==4) return a>r; if(f==5) return a!=r; if(f==6) return a>=r; return true; }\n";
-        ret = "{ if(swr_at.x!=0.0 && !swr_atest(frag_color0.w)) discard; return; }";
+        ret = "{ if(snx_at.x!=0.0 && !snx_atest(frag_color0.w)) discard; return; }";
     } else if (stage == ST_VS) {
-        fn = "layout(push_constant) uniform SWR_PC { vec4 swr_vp; };\n";
-        ret = "{ if(swr_vp.y!=0.0) gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5; return; }";
+        fn = "layout(push_constant) uniform SNX_PC { vec4 snx_vp; };\n";
+        ret = "{ if(snx_vp.y!=0.0) gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5; return; }";
     }
     char* p = fn ? strstr(src, "void main(){") : NULL;
     if (!p) return src;

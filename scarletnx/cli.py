@@ -2,7 +2,7 @@
 # Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
 # any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
 # This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE).
-"""The command line: python3 -m switchrecomp GAME_FOLDER [-o NAME] [--outdir DIR] [--cc CC] ...
+"""The command line: python3 -m scarletnx GAME_FOLDER [-o NAME] [--outdir DIR] [--cc CC] ...
 
 Output (next to the executable):
   Game.exe / Game       the runtime, copied from --runtime or built with CMake
@@ -37,7 +37,7 @@ def main():
     ap.add_argument('-q', '--quiet', action='store_true')
     a = ap.parse_args()
     say = (lambda m: None) if a.quiet else (lambda m: print(m, flush=True))
-    say('SwitchRecomp: use your own copy of the game. No games or keys are included.')
+    say('ScarletNX: use your own copy of the game. No games or keys are included.')
     target_win = a.target == 'win64' or (a.target == 'auto' and sys.platform.startswith('win'))
     mods, npdm, romfs = nxloader.load_program(a.input)
     for m in mods:
@@ -92,8 +92,8 @@ def main():
     extra = []
     if a.native and not toolchain.is_tcc(cc):
         extra.append('-march=native')
-    if os.environ.get('SWR_CFLAGS') and not toolchain.is_tcc(cc):
-        extra += os.environ['SWR_CFLAGS'].split()  # e.g. -march for someone else's cpu
+    if os.environ.get('SNX_CFLAGS') and not toolchain.is_tcc(cc):
+        extra += os.environ['SNX_CFLAGS'].split()  # e.g. -march for someone else's cpu
     objs = toolchain.compile_all(files, cc, a.O, target_win, a.jobs, say, extra)
     modout = base + ('_code.dll' if target_win else '_code.so')
     say('Linking %s ...' % os.path.basename(modout))

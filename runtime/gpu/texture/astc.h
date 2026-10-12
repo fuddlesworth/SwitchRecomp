@@ -3,8 +3,8 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* ASTC decoding on the CPU (astc.c) */
-#ifndef SWR_ASTC_H
-#define SWR_ASTC_H
+#ifndef SNX_ASTC_H
+#define SNX_ASTC_H
 #include "abi/cpu.h"
 
 /* a w x h image in bw x bh blocks, to RGBA8. srgb: the texture is sRGB, which expands endpoints differently */

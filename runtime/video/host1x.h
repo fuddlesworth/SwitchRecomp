@@ -3,8 +3,8 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* host1x (host1x.c): NVDEC and VIC, reached through nvdrv */
-#ifndef SWR_HOST1X_H
-#define SWR_HOST1X_H
+#ifndef SNX_HOST1X_H
+#define SNX_HOST1X_H
 #include "abi/cpu.h"
 
 /* one channel per nvdrv fd of /dev/nvhost-nvdec or /dev/nvhost-vic: its registers, syncpoints and (NVDEC) decoder.

@@ -136,13 +136,13 @@ Common audit-time patterns in this repo (C runtime, Python recompiler):
 
 | Goal | Command |
 |---|---|
-| Find every caller of a function (catch dead code) | `ast-grep --pattern 'FunctionName($$$)' --lang c runtime` and `grep -rnw 'FunctionName' runtime switchrecomp tools scripts` |
+| Find every caller of a function (catch dead code) | `ast-grep --pattern 'FunctionName($$$)' --lang c runtime` and `grep -rnw 'FunctionName' runtime scarletnx tools scripts` |
 | Find every use of a struct field | `ast-grep --pattern '$X.field' --lang c runtime` and `ast-grep --pattern '$X->field' --lang c runtime` |
 | Find every guard that only logs | `grep -rn -A2 'WARN(\|LOG(' runtime` and check each is followed by a `return` or other exit |
 | Find a guest address squeezed into 32 bits | `ast-grep --pattern '(u32)$X' --lang c runtime`, then check whether `$X` is a guest address or pointer |
 | Find every syncpoint id not from `syncpt_alloc()` | `grep -rn 'syncpt' runtime/video runtime/hle/nvdrv.c runtime/gpu` |
-| Find every service command a file answers | `grep -n 'case [0-9]*:' runtime/hle/am.c` (or the service's file) (each answer must match what the SDK caller reads, see the `swr-service` skill) |
-| Find every TODO/FIXME/HACK marker | `grep -rn 'TODO\|FIXME\|HACK\|XXX' runtime switchrecomp tools scripts` |
+| Find every service command a file answers | `grep -n 'case [0-9]*:' runtime/hle/am.c` (or the service's file) (each answer must match what the SDK caller reads, see the `snx-service` skill) |
+| Find every TODO/FIXME/HACK marker | `grep -rn 'TODO\|FIXME\|HACK\|XXX' runtime scarletnx tools scripts` |
 | Find a stale comment claim (e.g. "below 192") | `grep -rn "below 192" runtime` |
 | Find AI-ism punctuation in user-facing text | `grep -rn '—' README.md ROADMAP.md <changed user-facing files>`; then check for clause-joining `;` and stand-in ` - ` (exclude code comments and backticked code) |
 
@@ -158,7 +158,7 @@ Compute scope size from the inventory:
 For partitioned scopes:
 
 1. Group files by coherent domain (kernel and services, GPU and shaders, audio and video, platform backends, the recompiler and its ABI, build and scripts). 4-6 partitions is typical; aim for ≤15 files per partition.
-2. **Reviewer selection.** Check the available agent types for project-defined domain reviewers (in this repo, the `swr-*-reviewer` agents in `.claude/agents/review/`; each one's description names the directories/domains it covers). If any exist, partition boundaries SHOULD follow the specialists' domains, and each partition MUST be dispatched to the specialist whose description matches it — a specialist encodes stack expertise and past-bug patterns a generic reviewer lacks. Only for a partition no specialist covers (or when a project defines none) fall back to `subagent_type=general-purpose`. Dispatch ONE `Agent` call per partition; all Agent calls go in a SINGLE message so they run in parallel.
+2. **Reviewer selection.** Check the available agent types for project-defined domain reviewers (in this repo, the `snx-*-reviewer` agents in `.claude/agents/review/`; each one's description names the directories/domains it covers). If any exist, partition boundaries SHOULD follow the specialists' domains, and each partition MUST be dispatched to the specialist whose description matches it — a specialist encodes stack expertise and past-bug patterns a generic reviewer lacks. Only for a partition no specialist covers (or when a project defines none) fall back to `subagent_type=general-purpose`. Dispatch ONE `Agent` call per partition; all Agent calls go in a SINGLE message so they run in parallel.
 3. Each agent prompt MUST include:
    - The exact file paths in its partition (explicit paths, not a directory glob).
    - Instructions to read every file FULLY (no partial reads, no diff-only).
@@ -290,7 +290,7 @@ List each fix: `file:line` — what changed.
 
 ### 6. Build Verification
 
-Build, and run the game through the scenes the changes affect (`swr-build` and `swr-run` skills). If either fails, treat each error as CRITICAL, fix, rebuild. Do not proceed until both are green.
+Build, and run the game through the scenes the changes affect (`snx-build` and `snx-run` skills). If either fails, treat each error as CRITICAL, fix, rebuild. Do not proceed until both are green.
 
 ```bash
 cmake --preset default && cmake --build --preset default
@@ -300,8 +300,8 @@ tools/run_game.py Catherine --runs 3 --dump work/Catherine
 
 - The runtime builds with Clang's default warnings only, and a warning doesn't fail the build, so a clean-looking build says little. Build a changed file once with more warnings on (its line from `build/default/compile_commands.json`, with `-Wall -Wextra -fsyntax-only`) and check none come from the change.
 - A fix for a crash or a race is run until the evidence is statistical: the crash rate before and after, with the run counts, goes in the commit message.
-- Memory-safety fixes also get an AddressSanitizer build and a run. The runtime links as C++ (VMA), so the flag goes on the C, C++ and link lines, and the build stays out of `games/`: `cmake --preset default -B build/asan -DSWR_DEPLOY=OFF -DCMAKE_C_FLAGS=-fsanitize=address -DCMAKE_CXX_FLAGS=-fsanitize=address -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address && cmake --build build/asan`, then from `games/`: `../build/asan/swr-runtime --game=Catherine --seconds=60`.
-- The game module only needs recompiling (`scripts/recomp.py`) when `switchrecomp/codegen.py`, `a64.py`, `nxloader.py`, `module.py`, the module's flags in `toolchain.py`, or anything in `runtime/abi/` changed.
+- Memory-safety fixes also get an AddressSanitizer build and a run. The runtime links as C++ (VMA), so the flag goes on the C, C++ and link lines, and the build stays out of `games/`: `cmake --preset default -B build/asan -DSNX_DEPLOY=OFF -DCMAKE_C_FLAGS=-fsanitize=address -DCMAKE_CXX_FLAGS=-fsanitize=address -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address && cmake --build build/asan`, then from `games/`: `../build/asan/scarletnx --game=Catherine --seconds=60`.
+- The game module only needs recompiling (`scripts/recomp.py`) when `scarletnx/codegen.py`, `a64.py`, `nxloader.py`, `module.py`, the module's flags in `toolchain.py`, or anything in `runtime/abi/` changed.
 
 ### 7. Diff Review Before Commit
 
@@ -358,7 +358,7 @@ The audit runs in two phases with a hard boundary:
 ### Phase B — REMEDIATE (fix once, verify once)
 
 5. Fix the ledger in severity order, applying VERIFY BEFORE WRITE and compile-gating in small batches.
-6. Build green, and the game run through the scenes the fixes affect (`swr-run`): the repo has no test suite, so the runs are the tests.
+6. Build green, and the game run through the scenes the fixes affect (`snx-run`): the repo has no test suite, so the runs are the tests.
 7. A confirmation pass over the files you actually changed — not the whole inventory — to catch damage the remediation itself introduced. Fix what it finds, rebuild, run again.
 8. **Confirmation repeats until a round is clean.** If a confirmation round found anything at HIGH or above, the fixes for it are themselves unverified remediation and get their own round, scoped to that delta. Stop only when a round returns nothing at all. There is no round cap.
 9. Commit, verifying the message against the diff, and push.
@@ -452,7 +452,7 @@ For every public function newly introduced or non-trivially modified in this aud
 ```bash
 # Functions: find all call sites
 ast-grep --pattern 'FunctionName($$$)' --lang c runtime
-grep -rnw 'FunctionName' runtime switchrecomp tools scripts
+grep -rnw 'FunctionName' runtime scarletnx tools scripts
 ```
 
 - **Zero callers** → either remove the function, or document the call path preserving it (e.g., reached through a dispatch table like `svc_register`, the `Renderer` table in `gpu/renderer.h`, or the generated code's calls into `abi/cpu_helpers.c`). A function that this audit is the first to grep for callers is a function nobody else verified is used.

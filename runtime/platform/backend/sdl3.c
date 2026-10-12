@@ -61,7 +61,7 @@ void video_init(const char* title) {
     SDL_GetWindowSizeInPixels(g_win, &w, &h);
     wsize_set(w, h);
     if (!g_renderer->start())
-        fatal("Vulkan could not start (see the log). SwitchRecomp needs a GPU and driver with Vulkan 1.3.");
+        fatal("Vulkan could not start (see the log). ScarletNX needs a GPU and driver with Vulkan 1.3.");
     LOG("renderer: Vulkan\n");
     /* not for an unattended run: nobody is at the screen, and it would cover the desktop of whoever is */
     if (g_fullscreen_ini && !unattended_active()) set_fullscreen(1);
@@ -145,15 +145,15 @@ static void set_fullscreen(int on) {
 void win_fatal_box(const char* msg) {
     if (unattended_active()) return;
     if (SDL_IsMainThread()) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "SwitchRecomp", msg, g_win);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "ScarletNX", msg, g_win);
         return;
     }
 #ifdef _WIN32
     wchar_t w[4096]; /* on the stack: this also runs in the crash report, where the heap may be what broke */
     if (MultiByteToWideChar(CP_UTF8, 0, msg, -1, w, 4096))
-        MessageBoxW(NULL, w, L"SwitchRecomp", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        MessageBoxW(NULL, w, L"ScarletNX", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
     else
-        MessageBoxA(NULL, msg, "SwitchRecomp", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        MessageBoxA(NULL, msg, "ScarletNX", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
 #endif
 }
 
@@ -162,7 +162,7 @@ static void hotkey(SDL_Keycode k) {
         case SDLK_F1: {
             int fs = g_fullscreen;
             if (fs) set_fullscreen(0);
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "SwitchRecomp", HELP, g_win);
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "ScarletNX", HELP, g_win);
             if (fs) set_fullscreen(1);
             break;
         }

@@ -23,7 +23,7 @@ Use only games and keys dumped from your own console. None are included, and non
 ### Requirements
 
 - Clang 23 (FreeBSD's own Clang works too), CMake 3.25 or newer, Ninja, GNU make (`gmake` on FreeBSD), NASM (on
-  x86-64, unless you configure with `-DSWR_FFMPEG_ASM=OFF`, which builds FFmpeg without its assembly and decodes
+  x86-64, unless you configure with `-DSNX_FFMPEG_ASM=OFF`, which builds FFmpeg without its assembly and decodes
   movies more slowly), Python 3.12 or newer, Git
 - SDL3 development files, and a GPU and driver with Vulkan 1.3
 - `uv`, only to run the formatter
@@ -43,15 +43,15 @@ runtime. Only Clang is supported: a plain `cmake -B build` picks it too. `cmake 
 Windows runtime with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw).
 
 FFmpeg's own build can't work from a path with a space in it, so the configure stops when the checkout (or
-`CPM_SOURCE_CACHE`, if you set it) has one. Move it, or configure with `-DSWR_H264=OFF` to build without FFmpeg, which
+`CPM_SOURCE_CACHE`, if you set it) has one. Move it, or configure with `-DSNX_H264=OFF` to build without FFmpeg, which
 leaves the game's videos black and its Opus audio undecoded.
 
 ### The nightly AppImage
 
-Every commit on `main` that builds everywhere is released as `SwitchRecomp-x86_64.AppImage` under the
+Every commit on `main` that builds everywhere is released as `ScarletNX-x86_64.AppImage` under the
 [nightly](https://github.com/fuddlesworth/SwitchRecomp/releases/tag/nightly) prerelease. It is the runtime with every
 library it needs, made with [pkgforge's tools](https://github.com/pkgforge-dev/Anylinux-AppImages), and runs on any
-Linux. Point it at a game with `--game`, as in `./SwitchRecomp-x86_64.AppImage --game=games/Game`, which runs
+Linux. Point it at a game with `--game`, as in `./ScarletNX-x86_64.AppImage --game=games/Game`, which runs
 `games/Game_code.so` with `games/Game_data/`. Or copy it next to the game's code as
 `games/Game.AppImage` (or just `games/Game`): like the runtime the build makes, it then runs the game it is
 named after. It runs games that are already recompiled, not dumps: `--game` takes the recompiled game, never an XCI or
@@ -163,8 +163,8 @@ frame gets from the game to the screen.
 | Run the game for a set time with scripted input and a screenshot | `./Game --seconds=60 --script=15000:400,16000:1 --shot=out` |
 | Run it unattended several times and sum up each run (exit, crash site, frames and average FPS) | `tools/run_game.py Game --runs 5 --dump work/Game` |
 | Import a new MZ Labs release | `scripts/import-upstream.sh SwitchRecomp_v143.zip v143`, then port its changes by hand |
-| Record the shaders a run translates, then check them for Vulkan (needs `spirv-val`) | `SWR_SHADER_CORPUS=dir ./Game`, then `build/default/swr-shaderc dir --validate` |
-| Translate a game's own shader files into the SPIR-V cache ahead of time (`scripts/recomp.py` does it) | `build/default/swr-shaderc --nvn DIR --cache games/shader_cache/spirv` |
+| Record the shaders a run translates, then check them for Vulkan (needs `spirv-val`) | `SNX_SHADER_CORPUS=dir ./Game`, then `build/default/snx-shaderc dir --validate` |
+| Translate a game's own shader files into the SPIR-V cache ahead of time (`scripts/recomp.py` does it) | `build/default/snx-shaderc --nvn DIR --cache games/shader_cache/spirv` |
 
 The `upstream` branch holds the MZ Labs releases: each one as released (tagged `upstream-vN`) and then formatted like
 `main`, so the diff between two releases only shows what changed. This fork's code is laid out differently, so a
@@ -172,7 +172,7 @@ release's changes are ported into `main` by hand rather than merged.
 
 | Folder | What it holds |
 | --- | --- |
-| `switchrecomp/` | The recompiler (`python3 -m switchrecomp`): loading, analysis, ARM64 to C, building the game module |
+| `scarletnx/` | The recompiler (`python3 -m scarletnx`): loading, analysis, ARM64 to C, building the game module |
 | `runtime/` | The runtime: kernel, services, GPU, video, platform backends |
 | `scripts/` | The Windows toolchain download, extraction, recompiling, formatting, upstream imports, the AppImage |
 | `docs/` | How the parts fit together |
@@ -197,7 +197,7 @@ Games, keys and firmware are not part of this project.
 
 Third-party components keep their own licenses, found in each package CPM.cmake downloads (`.cache/cpm/<name>/`,
 from the URLs in `cmake/dependencies.cmake`). `cmake --install` puts this project's license files, and those of the
-libraries built into the runtime and hactool, in `share/licenses/switchrecomp`. The AppImage and the CI build
+libraries built into the runtime and hactool, in `share/licenses/scarletnx`. The AppImage and the CI build
 artifacts carry that folder.
 
 | Component | Used for | License |

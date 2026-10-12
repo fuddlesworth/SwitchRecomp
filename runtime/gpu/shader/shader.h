@@ -3,8 +3,8 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Maxwell (GM20B) shader -> GLSL 4.50 translator, for Vulkan (gpu/vk/spirv.c compiles the result to SPIR-V) */
-#ifndef SWR_SHADER_H
-#define SWR_SHADER_H
+#ifndef SNX_SHADER_H
+#define SNX_SHADER_H
 #include "abi/cpu.h"
 enum { ST_VS = 0, ST_TCS = 1, ST_TES = 2, ST_GS = 3, ST_FS = 4, ST_CS = 5 };
 #define SH_MAXTEX 32
@@ -45,19 +45,19 @@ typedef struct {
     u32 tex_int_mask, tex_sint_mask, rt_int_mask, rt_sint_mask; /* FS key: integer textures / outputs */
 } ShaderInfo;
 /* the GLSL is for Vulkan: one descriptor set per stage (shader_vk_set), bindings in it by kind */
-#define SWR_VKB_CB   0  /* 18 constant buffers */
-#define SWR_VKB_SSBO 18 /* 16 global memory buffers */
-#define SWR_VKB_TEX  34 /* 32 combined image samplers */
-#define SWR_VKB_IMG  66 /* 8 storage images (compute) */
-#define SWR_VKB_RS   74 /* fragment: 1/resolution scale (SWR_RS) */
-#define SWR_VKB_FMT  75 /* compute: image format classes (SWR_FMT) */
+#define SNX_VKB_CB   0  /* 18 constant buffers */
+#define SNX_VKB_SSBO 18 /* 16 global memory buffers */
+#define SNX_VKB_TEX  34 /* 32 combined image samplers */
+#define SNX_VKB_IMG  66 /* 8 storage images (compute) */
+#define SNX_VKB_RS   74 /* fragment: 1/resolution scale (SNX_RS) */
+#define SNX_VKB_FMT  75 /* compute: image format classes (SNX_FMT) */
 int shader_vk_set(int stage);
 /* malloc'd GLSL, or NULL */
 char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si);
 extern int (*g_shader_cb_read)(u32 idx, u32 off, u32* out);
 u64 shader_hash(const u8* code, u32 max_bytes, u32* out_len);
-/* shader corpus (SWR_SHADER_CORPUS=dir): each translated shader's code and its ShaderInfo inputs, so
-   tools/swr_shaderc.c can translate them again offline. The files only load into a build with the same ShaderInfo */
+/* shader corpus (SNX_SHADER_CORPUS=dir): each translated shader's code and its ShaderInfo inputs, so
+   tools/snx_shaderc.c can translate them again offline. The files only load into a build with the same ShaderInfo */
 int shader_corpus_save(const char* dir, const u8* code, u32 len, u32 max_bytes, int stage, const ShaderInfo* si,
                        u64 key);
 /* malloc'd code (max_bytes long, zero past len), or NULL */

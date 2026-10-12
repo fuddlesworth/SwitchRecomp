@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
+# Copyright 2026 the ScarletNX contributors
 # Format with clang-format 23 (scripts/format.sh checks the version). Upstream releases get the same formatting when
 # they are imported (scripts/import-upstream.sh), so the diff between two releases on the upstream branch
 # (upstream~2..upstream) shows only what changed, and they are ported to main by hand from it. Change this file only

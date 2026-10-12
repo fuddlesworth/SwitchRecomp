@@ -22,7 +22,7 @@ title-screen crash from Phase 2 still happened in about half the runs, was remov
 
 How the pieces fit:
 
-- **CPU**: the game's ARM64 code is translated to C once (the `switchrecomp` package) and built as
+- **CPU**: the game's ARM64 code is translated to C once (the `scarletnx` package) and built as
   `<Game>_code.so`. This part is a real recompilation.
 - **OS**: kernel, IPC and services are high-level emulation in `runtime/kernel/` and `runtime/hle/`.
 - **GPU**: emulated at the hardware level. The game's own NVN driver is recompiled with the game and writes Maxwell
@@ -68,7 +68,7 @@ How the pieces fit:
 
 - [x] `CLAUDE.md` with the project's rules: what never gets committed, how upstream code is changed, how a change
       is verified, licensing of reference code.
-- [x] Skills: `swr-build`, `swr-run`, `swr-crash`, `swr-service`, `import-upstream`, `record-lesson`, and the
+- [x] Skills: `snx-build`, `snx-run`, `snx-crash`, `snx-service`, `import-upstream`, `record-lesson`, and the
       `code-audit` loop.
 - [x] Six domain review agents for the audit loop (kernel and services, GPU, audio and video, platform,
       recompiler, build and tooling), and two read-only investigators (`crash-triage`, `sdk-scout`).
@@ -156,7 +156,7 @@ The game stalled the first time it met a shader (`waiting for shader=414` in a s
       pipeline cache (`shader_cache/vk_pipelines.bin`).
 - [x] Pre-translation at recomp time. Catherine ships its shaders as NVN files (`romfs/data/shaders_binary/*.vs`,
       `*.ps`): a control section, then the program at 2896 bytes, a vertex shader's VertexA and VertexB one after the
-      other. `swr-shaderc --nvn` translates them as the renderer would on first use (VertexA and VertexB merged) and
+      other. `snx-shaderc --nvn` translates them as the renderer would on first use (VertexA and VertexB merged) and
       fills the SPIR-V cache, and `scripts/recomp.py` runs it after recompiling. Of the shaders a first run to the
       cutscene uses, 134 of 149 fragment and 56 of 60 vertex shaders are already there. The rest depend on draw state
       (integer attributes, textures or outputs) or read constant buffers while translating. Pipelines still compile
@@ -176,7 +176,7 @@ underneath. What can change is how much of the hardware is emulated and how well
         (Wayland and X11), and the CPU path's frames shown on it. Nothing is drawn yet.
   - [x] Step 2, shaders: the Maxwell translator has a Vulkan mode (`#version 450`, one descriptor set per stage with
         the bindings in `shader.h`), compiled to SPIR-V with glslang 16.6 (built with the runtime), through
-        an on-disk SPIR-V cache. `SWR_SHADER_CORPUS` records the shaders a run translates, and `swr-shaderc` checks a
+        an on-disk SPIR-V cache. `SNX_SHADER_CORPUS` records the shaders a run translates, and `snx-shaderc` checks a
         corpus offline: 116 of Catherine's 117 shaders compile and pass `spirv-val` (the other uses a global load the
         translator can't place, in GL too), and the GL output is byte-identical to before.
   - [x] Step 3, drawing: render targets, textures, samplers, pipelines and draws, ported from `gpu_gl.c`, in slices.
@@ -214,7 +214,7 @@ underneath. What can change is how much of the hardware is emulated and how well
         Vulkan under Wine. OpenGL was removed on 2026-10-11 (below).
 - [x] Texture and buffer cache tracking. On Linux the guest's memory is registered with a userfaultfd in
       asynchronous write-protect mode, and `PAGEMAP_SCAN` lists the pages written since a range was last scanned
-      (`plat_ww_scan`, and `GetWriteWatch` with `SWR_WW` on Windows). The Vulkan caches scan a texture or buffer
+      (`plat_ww_scan`, and `GetWriteWatch` with `SNX_WW` on Windows). The Vulkan caches scan a texture or buffer
       when they use it and re-read it only when it was written, instead of checking contents on a back-off that could
       miss a change for several frames: a movie's frames now reach their texture every frame. Results land in guest
       memory with the rule from Phase 2, and render targets are written back before any CPU-side copy reads them.
@@ -273,8 +273,8 @@ hard fork from here (decided 2026-10-11): upstream releases are ported by hand r
 `import-upstream` skill), so files can be moved, split and renamed freely. Each step was its own PR, built in
 every variant and run on Catherine with both renderers while OpenGL was still there.
 
-- [x] The recompiler as a package (`switchrecomp/`, run as `python3 -m switchrecomp`), split by job. The runtime is
-      built only by CMake, so its source list lives in one place, and `SWR_ABI` in `cpu.h` is the one ABI version
+- [x] The recompiler as a package (`scarletnx/`, run as `python3 -m scarletnx`), split by job. The runtime is
+      built only by CMake, so its source list lives in one place, and `SNX_ABI` in `cpu.h` is the one ABI version
       both sides check.
 - [x] `runtime/` as a tree of components (`abi`, `core`, `kernel`, `hle`, `gpu` with `vk` and, until OpenGL went,
       `gl`, `video`, `platform`), with includes by path. Each is a CMake object library, apart from `abi`, which is

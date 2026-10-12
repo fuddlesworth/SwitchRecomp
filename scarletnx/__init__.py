@@ -2,11 +2,11 @@
 # Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
 # any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
 # This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE).
-"""SwitchRecomp: static recompiler for Switch games, AArch64 -> C -> native.
+"""ScarletNX: static recompiler for Switch games, AArch64 -> C -> native.
 
 The game code is translated to C ahead of time (plus a fallback interpreter built from the same instruction templates)
 and compiled into <Game>_code.so or .dll, which the runtime (runtime/, built with CMake) loads. Run it as
-`python3 -m switchrecomp`, or through scripts/recomp.py.
+`python3 -m scarletnx`, or through scripts/recomp.py.
 
     nxloader   NSO/NRO and NPDM loading, symbols
     a64        ARM64 instruction decoding and C templates
@@ -29,9 +29,9 @@ ABI_DIR = os.path.join(RUNTIME, 'abi')
 
 
 def abi_version():
-    """SWR_ABI from cpu.h: the runtime refuses a game module built against another one."""
+    """SNX_ABI from cpu.h: the runtime refuses a game module built against another one."""
     with open(os.path.join(ABI_DIR, 'cpu.h')) as f:
-        m = re.search(r'#define\s+SWR_ABI\s+(\d+)', f.read())
+        m = re.search(r'#define\s+SNX_ABI\s+(\d+)', f.read())
     if not m:
-        raise SystemExit('cpu.h has no SWR_ABI')
+        raise SystemExit('cpu.h has no SNX_ABI')
     return int(m.group(1))

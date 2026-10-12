@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
+# Copyright 2026 the ScarletNX contributors
 # Imports an MZ Labs SwitchRecomp release zip onto the `upstream` branch, without touching the working tree or the
 # current branch: one commit with the release as it is (tagged upstream-VERSION), then one with it formatted by
 # scripts/format.sh. Releases are ported to main by hand (import-upstream skill). Since every release is formatted the
@@ -37,7 +37,7 @@ trap 'rm -rf "$tmp"' EXIT
 unzip -q "$zip" -d "$tmp/x"
 src="$tmp/x/SwitchRecomp"
 if [ ! -d "$src/runtime" ]; then
-    echo "$zip has no SwitchRecomp/runtime folder" >&2
+    echo "$zip has no ScarletNX/runtime folder" >&2
     exit 1
 fi
 

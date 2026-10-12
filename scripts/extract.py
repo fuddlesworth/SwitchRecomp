@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
-"""Extracts a game dump into the exefs/ + romfs/ folder that the recompiler (python3 -m switchrecomp) reads, with the
+# Copyright 2026 the ScarletNX contributors
+"""Extracts a game dump into the exefs/ + romfs/ folder that the recompiler (python3 -m scarletnx) reads, with the
 hactool that the CMake build makes (build/default/hactool, built here when it is missing).
 
     scripts/extract.py "Game.xci"                                   # -> work/Game/{exefs,romfs}

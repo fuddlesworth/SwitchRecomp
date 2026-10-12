@@ -6,7 +6,7 @@
    setup struct (nvdec_h264_pic_s, its iova in register 0x404). Each NVDEC channel has its own decoder, and each
    picture goes into the output surface its job names, where VIC reads it */
 #include "video/host1x_int.h"
-#ifndef SWR_NO_H264
+#ifndef SNX_NO_H264
 #include <libavcodec/avcodec.h>
 #include <libavutil/error.h>
 #include <libavutil/frame.h>
@@ -178,7 +178,7 @@ typedef struct {
     u32 w, h;             /* the picture in pixels */
 } PicOut;
 struct NvdecCtx {
-#ifndef SWR_NO_H264
+#ifndef SNX_NO_H264
     AVCodecContext* dec;
     AVPacket* pkt;
     AVFrame* frame; /* FFmpeg's output, dropped */
@@ -192,13 +192,13 @@ struct NvdecCtx {
 #endif
     int fail; /* the decoder could not be opened */
 };
-#ifndef SWR_NO_H264
+#ifndef SNX_NO_H264
 static u32 g_vframes; /* pictures written, all channels: only for the log */
 #endif
 NvdecCtx* nvdec_new(void) { return calloc(1, sizeof(NvdecCtx)); }
 void nvdec_free(NvdecCtx* d) {
     if (!d) return;
-#ifndef SWR_NO_H264
+#ifndef SNX_NO_H264
     /* the references and the pictures the decoder still holds go with it: the game closed the stream */
     avcodec_free_context(&d->dec);
     av_packet_free(&d->pkt);
@@ -208,7 +208,7 @@ void nvdec_free(NvdecCtx* d) {
 #endif
     free(d);
 }
-#ifndef SWR_NO_H264
+#ifndef SNX_NO_H264
 /* FFmpeg's messages go to the game log at warning level and above, a limited number: by default they go to stderr
    at info level, outside the log, without end */
 static void ff_log(void* avcl, int level, const char* fmt, va_list vl) {
@@ -241,7 +241,7 @@ static int get_buf(AVCodecContext* c, AVFrame* f, int flags) {
 }
 #endif
 static int dec_open(NvdecCtx* d) {
-#ifdef SWR_NO_H264
+#ifdef SNX_NO_H264
     if (!d->fail) {
         d->fail = 1;
         LOG_LIMIT(1, "video: this build has no H.264 decoder (the game's videos stay black)\n");
@@ -276,7 +276,7 @@ static int dec_open(NvdecCtx* d) {
     return 1;
 #endif
 }
-#ifndef SWR_NO_H264
+#ifndef SNX_NO_H264
 /* bytes of a block linear plane `pitch` bytes wide and h rows high: whole GOBs (64 bytes by 8 rows), in blocks of
    8 << bh rows */
 static u64 bl_size(u32 pitch, u32 h, u32 bh) {
@@ -340,7 +340,7 @@ void nvdec_execute(NvdecCtx* d, const u32* r) {
         put_status(r, 0, 1);
         return;
     }
-#ifndef SWR_NO_H264
+#ifndef SNX_NO_H264
     /* SET_APPLICATION_ID (register 0x200) names the codec: 3 is H.264, which the game's TVMR library writes before
        every H.264 job (VP8 is 5, HEVC 7, VP9 9). Anything else fed to the H.264 decoder would only be garbage */
     u32 app = r[0x200 / 4];

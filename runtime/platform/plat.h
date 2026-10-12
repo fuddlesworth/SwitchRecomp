@@ -4,8 +4,8 @@
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the platform layer: threads, locks, time, virtual memory, files, libraries (plat_posix.c or plat_win32.c), logging
    and fatal errors (plat.c) */
-#ifndef SWR_PLAT_H
-#define SWR_PLAT_H
+#ifndef SNX_PLAT_H
+#define SNX_PLAT_H
 #include "abi/cpu.h"
 #include <stddef.h>
 #include <stdio.h>
@@ -55,7 +55,7 @@ i64 plat_tz_offset(void); /* local - UTC, seconds */
 u8* plat_vm_reserve(u64 size);
 /* written-page tracking by range: calls cb for each run of pages in [p, p+size) written since the range was last
    scanned, and starts tracking them again. -1 when the platform can't (then everything must be checked by content).
-   Linux: userfaultfd write protection (async) and PAGEMAP_SCAN; Windows: GetWriteWatch, with SWR_WW set */
+   Linux: userfaultfd write protection (async) and PAGEMAP_SCAN; Windows: GetWriteWatch, with SNX_WW set */
 int plat_ww_scan(u8* p, u64 size, void (*cb)(u8* p, u64 size));
 int plat_vm_commit(u8* p, u64 size);
 void plat_vm_decommit(u8* p, u64 size);

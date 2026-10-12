@@ -177,7 +177,7 @@ static void dump_unresolved(void) {
     if (shown) WARN("  %d unresolved imports in total\n", shown);
 }
 void kernel_dump_regs(CPU* c) {
-    if (c->pc < 0x1000 || getenv("SWR_UNRES")) dump_unresolved();
+    if (c->pc < 0x1000 || getenv("SNX_UNRES")) dump_unresolved();
     for (int i = 0; i < 31; i += 4)
         WARN("  x%-2d=%016llx x%-2d=%016llx x%-2d=%016llx x%-2d=%016llx\n", i, (unsigned long long)c->x[i], i + 1,
              (unsigned long long)c->x[i + 1], i + 2, (unsigned long long)c->x[i + 2], i + 3,

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
+# Copyright 2026 the ScarletNX contributors
 # Game dumps, keys and anything extracted from them. These belong to their owners and never go in git.
 *.xci
 *.nsp
@@ -18,8 +18,8 @@ romfs/
 /keys/
 /dumps/
 
-# Made from the game's files: shader corpora (SWR_SHADER_CORPUS), SPIR-V and GLSL dumps, screenshots
-*.swrs
+# Made from the game's files: shader corpora (SNX_SHADER_CORPUS), SPIR-V and GLSL dumps, screenshots
+*.snxs
 *.spv
 *.ppm
 vkshader_*.glsl

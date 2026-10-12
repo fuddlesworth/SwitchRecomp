@@ -239,7 +239,7 @@ static void ini_write(void) {
     FILE* f = fopen(tmp, "w");
     if (!f) return;
     fprintf(f, "; =====================================================================\n");
-    fprintf(f, "; SwitchRecomp settings for %s\n", g_mod && g_mod->title ? g_mod->title : g_exename);
+    fprintf(f, "; ScarletNX settings for %s\n", g_mod && g_mod->title ? g_mod->title : g_exename);
     fprintf(f, ";  Edit a value and save: most settings apply while the game runs.\n");
     fprintf(f, ";  docked, language, fullscreen, resolution, memory_gb and profile\n");
     fprintf(f, ";  apply when the game starts again.\n");

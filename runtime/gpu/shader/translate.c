@@ -21,7 +21,7 @@ static char* attr_read(Ctx* c, u32 addr, int is_output) {
         if (c->stage == ST_FS) {
             c->si->uses_position_in = 1;
             if (comp == 3) return "floatBitsToUint(1.0/gl_FragCoord.w)";
-            if (comp < 2) return T("floatBitsToUint(gl_FragCoord.%c*swr_rs.x)", "xy"[comp]);
+            if (comp < 2) return T("floatBitsToUint(gl_FragCoord.%c*snx_rs.x)", "xy"[comp]);
             return T("floatBitsToUint(gl_FragCoord.%c)", "xyzw"[comp]);
         }
         /* only vertex, fragment and compute programs get translated (no geometry or tessellation stage) */
@@ -64,7 +64,7 @@ static void attr_write(Ctx* c, u32 addr, const char* val) {
             return;
         case 0x64:
             c->si->writes_layer = 1;
-            emitl(c, "SWR_SET_LAYER(int(%s));", val);
+            emitl(c, "SNX_SET_LAYER(int(%s));", val);
             return;
         case 0x68: emitl(c, "/* viewport index */"); return;
     }
@@ -1750,7 +1750,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_SUST: {
             /* compute images. SUST -> imageStore, SULD -> texelFetch on the same texture.
        .P = formatted (mask 20..23), .D = raw bytes (size 20..22) converted using the format class
-       uniforms swr_ic / swr_tc the runtime sets at dispatch */
+       uniforms snx_ic / snx_tc the runtime sets at dispatch */
             u32 isd = B(w, 52, 1), bound = B(w, 51, 1), ty = B(w, 33, 3), ra = a, rdd = d;
             if (c->stage != ST_CS || ty == 1 || ty > 5) {
                 unsupported(c, id == O_SUST ? "SUST" : "SULD", w);
@@ -1803,7 +1803,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 }
                 if (ba) {
                     c->uses_img_raw = 1;
-                    crd = su_coords(c, ty, ra, T("int(%s) / swr_ib[%d]", R(c, ra), k), 0);
+                    crd = su_coords(c, ty, ra, T("int(%s) / snx_ib[%d]", R(c, ra), k), 0);
                 }
                 if (!isd) {
                     u32 m = B(w, 20, 4), r = rdd;
@@ -1816,7 +1816,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                     emitl(c, "imageStore(img%d, %s, vec4(%s, %s, %s, %s));", k, crd, cc[0], cc[1], cc[2], cc[3]);
                 } else {
                     c->uses_img_raw = 1;
-                    emitl(c, "imageStore(img%d, %s, swr_r2v(uvec4(%s, %s, %s, %s), %uu, %uu, swr_ic[%d]));", k, crd,
+                    emitl(c, "imageStore(img%d, %s, snx_r2v(uvec4(%s, %s, %s, %s), %uu, %uu, snx_ic[%d]));", k, crd,
                           R(c, rdd), nw > 1 ? R(c, rdd + 1) : "0u", nw > 2 ? R(c, rdd + 2) : "0u",
                           nw > 2 ? R(c, rdd + 3) : "0u", nw, sz, k);
                 }
@@ -1825,7 +1825,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 int ts = tex_slot2(c, off, tt, arr, 0, bl, bank);
                 if (ba) c->uses_img_raw = 1;
                 /* read through a sampler, where 1D is a 2D texture */
-                crd = su_coords(c, ty, ra, ba ? T("int(%s) / swr_tb[%d]", R(c, ra), ts) : T("int(%s)", R(c, ra)), 1);
+                crd = su_coords(c, ty, ra, ba ? T("int(%s) / snx_tb[%d]", R(c, ra), ts) : T("int(%s)", R(c, ra)), 1);
                 const char* f = T("texelFetch(tex%d, %s, 0)", ts, crd);
                 if (!isd) {
                     emitl(c, "{ vec4 t_ = %s;", f);
@@ -1835,7 +1835,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                     emitl(c, "}");
                 } else {
                     c->uses_img_raw = 1;
-                    emitl(c, "{ uvec4 t_ = swr_v2r(%s, %uu, swr_tc[%d]);", f, sz, ts);
+                    emitl(c, "{ uvec4 t_ = snx_v2r(%s, %uu, snx_tc[%d]);", f, sz, ts);
                     c->indent++;
                     for (u32 q = 0; q < nw; q++)
                         if (rdd != 255) setr(c, rdd + q, T("t_.%c", "xyzw"[q]));

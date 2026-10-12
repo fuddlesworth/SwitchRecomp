@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
+# Copyright 2026 the ScarletNX contributors
 # Puts the toolchain that scripts\bootstrap.ps1 downloaded on PATH for this PowerShell window, and sets CC and CXX to
 # its Clang. Dot-source it, after allowing scripts for this window (Windows runs none by default):
 #
@@ -32,4 +32,4 @@ if ($Isolated) {
 } else {
     $env:PATH = ($paths -join ';') + ';' + $env:PATH
 }
-Write-Host 'SwitchRecomp tools (Clang) are on PATH'
+Write-Host 'ScarletNX tools (Clang) are on PATH'

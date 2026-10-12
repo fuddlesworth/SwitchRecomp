@@ -72,7 +72,7 @@ def compile_all(files, cc, opt, target_win, jobs, say, extra_flags=()):
             flags += ['-fPIC', '-fvisibility=hidden']
         # no -frounding-math: the code is compiled for round to nearest, the only FPCR mode games were seen to use.
         # Under a directed mode Clang's folding can differ from the ARM result (FNMUL as (-a)*b, a conversion of 0 giving
-        # -0), so other modes are not supported and the runtime warns when a game selects one (swr_fpcr_apply)
+        # -0), so other modes are not supported and the runtime warns when a game selects one (snx_fpcr_apply)
         flags += list(extra_flags)
     t0 = time.time()
     done = [0]
@@ -145,12 +145,12 @@ def link_module(objs, cc, out, target_win):
 def build_runtime(target_win, say):
     """Builds the runtime with the CMake preset matching the target, and returns its path."""
     preset = 'windows-cross' if target_win and not sys.platform.startswith('win') else 'default'
-    # a build folder of its own: SWR_DEPLOY=OFF stays in the cache, and in the preset's folder it would silently stop
+    # a build folder of its own: SNX_DEPLOY=OFF stays in the cache, and in the preset's folder it would silently stop
     # the developer's own builds from deploying to games/
     bdir = os.path.join(REPO, 'build', preset + '-recomp')
     say('Building the runtime (CMake preset %s, in %s)...' % (preset, bdir))
-    for cmd in (['cmake', '--preset', preset, '-B', bdir, '-DSWR_DEPLOY=OFF'], ['cmake', '--build', bdir]):
+    for cmd in (['cmake', '--preset', preset, '-B', bdir, '-DSNX_DEPLOY=OFF'], ['cmake', '--build', bdir]):
         r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
         if r.returncode:
             raise SystemExit('Runtime build failed:\n' + (r.stdout + r.stderr)[-4000:])
-    return os.path.join(bdir, 'swr-runtime' + ('.exe' if target_win else ''))
+    return os.path.join(bdir, 'scarletnx' + ('.exe' if target_win else ''))

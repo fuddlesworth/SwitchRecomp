@@ -91,7 +91,7 @@ void frontend_frame(void) {
 /* plat.c's fatal error box: Windows only, and not in an unattended run, where nobody would close it */
 void win_fatal_box(const char* msg) {
 #if defined(_WIN32)
-    if (!unattended_active()) MessageBoxA(NULL, msg, "SwitchRecomp", MB_OK | MB_ICONERROR);
+    if (!unattended_active()) MessageBoxA(NULL, msg, "ScarletNX", MB_OK | MB_ICONERROR);
 #else
     (void)msg;
 #endif

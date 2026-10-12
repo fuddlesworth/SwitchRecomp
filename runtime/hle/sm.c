@@ -13,7 +13,7 @@ static int sm_disp(SvcObj* o, IpcCtx* c) {
             memcpy(name, c->raw, 8);
             SvcObj* s = svc_open(name);
             if (!s) {
-                WARN("sm: service '%s' does not exist in SwitchRecomp: using a stub\n", name);
+                WARN("sm: service '%s' does not exist in ScarletNX: using a stub\n", name);
                 s = svc_generic(name);
             }
             LOG("sm: GetServiceHandle(%s)\n", name);

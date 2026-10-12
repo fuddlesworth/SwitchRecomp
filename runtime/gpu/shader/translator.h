@@ -3,8 +3,8 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* what the shader translator's files in gpu/shader share */
-#ifndef SWR_TRANSLATOR_H
-#define SWR_TRANSLATOR_H
+#ifndef SNX_TRANSLATOR_H
+#define SNX_TRANSLATOR_H
 #include <string.h>
 #include <ctype.h>
 #include "gpu/shader/shader.h"

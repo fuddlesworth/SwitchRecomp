@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* GLSL to SPIR-V for the Vulkan renderer (glslang) */
-#ifndef SWR_VK_SPIRV_H
-#define SWR_VK_SPIRV_H
+#ifndef SNX_VK_SPIRV_H
+#define SNX_VK_SPIRV_H
 #include <stddef.h>
 #include "gpu/shader/shader.h"
 

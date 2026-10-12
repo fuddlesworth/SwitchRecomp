@@ -119,7 +119,7 @@ static void prof_write(void) {
             idle += g_pmod[i].n;
     }
     u64 act = g_ptot > idle ? g_ptot - idle : 1;
-    fprintf(f, "SwitchRecomp profile: %llu samples, %llu active (excluding waits). %% of active time\n\n",
+    fprintf(f, "ScarletNX profile: %llu samples, %llu active (excluding waits). %% of active time\n\n",
             (unsigned long long)g_ptot, (unsigned long long)act);
     fprintf(f, "modules:\n");
     for (int i = 0; i < g_npmod; i++) {

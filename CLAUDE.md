@@ -1,4 +1,4 @@
-# SwitchRecomp (Linux fork)
+# ScarletNX (Linux fork)
 
 A Linux-first fork of SwitchRecomp by MZ Labs, a static recompiler for Switch games: ARM64 code is translated to C
 and compiled into `<Game>_code.so`, and the runtime in `runtime/` emulates the OS (kernel, IPC, services) and the GPU
@@ -14,7 +14,7 @@ file holds the rules sessions get wrong and points to the skills that carry the 
   `games/` (code, data, saves, logs) and shader or texture dumps stay local. Commit messages and docs may quote
   addresses, symbol names and short disassembly, never extracted files. `.claude/hooks/guard.py` blocks the
   obvious ways.
-- **A build is not a test.** A runtime change is verified by running the game (`swr-run` skill) through the scene
+- **A build is not a test.** A runtime change is verified by running the game (`snx-run` skill) through the scene
   it affects, and the commit says what was run. A change meant to fix a crash is run enough times to show the crash
   is gone: the title-screen crash in ROADMAP.md Phase 2 is intermittent.
 - **Find the mechanism.** A fix explains why the game does what it does: what the game or SDK code expects
@@ -63,23 +63,23 @@ on Windows). The third-party libraries are CPM packages pinned in `cmake/depende
 `.cache/cpm`, and built in the same tree as the runtime.
 
 The runtime finds its game module by its own file name, so each game has a copy of the runtime named after it, made
-by the build's deploy step. Game code (`_code.so`) only needs recompiling when `switchrecomp/codegen.py`, `a64.py`,
+by the build's deploy step. Game code (`_code.so`) only needs recompiling when `scarletnx/codegen.py`, `a64.py`,
 `nxloader.py`, `module.py`, the module's compile flags in `toolchain.py` or anything in `runtime/abi/` changes (the
-ABI between generated code and runtime). A change there that keeps `SWR_ABI` (`cpu.h`) loads and runs the old code
-silently. Bumping `SWR_ABI` makes the runtime refuse every module built before it, so every game needs recompiling.
+ABI between generated code and runtime). A change there that keeps `SNX_ABI` (`cpu.h`) loads and runs the old code
+silently. Bumping `SNX_ABI` makes the runtime refuse every module built before it, so every game needs recompiling.
 
 ## Where things are
 
 | Area | Files |
 | --- | --- |
-| Recompiler (`switchrecomp/`, run as `python3 -m switchrecomp`) | `cli.py` (command line), `nxloader.py` (NSO/NRO, symbols), `codegen.py` + `a64.py` (ARM64 to C), `module.py` (the module's C files), `toolchain.py` (compiling the module, the runtime through CMake), `data.py` |
-| Generated-code ABI | `runtime/abi/`: `cpu.h` (with `SWR_ABI`), `cpu_helpers.c` (compiled into each game module, with the topic files it includes from `helpers/`: `fp.c`, `integer.c`, `simd.c`, `crypto.c`, `simd_mem.c`) |
+| Recompiler (`scarletnx/`, run as `python3 -m scarletnx`) | `cli.py` (command line), `nxloader.py` (NSO/NRO, symbols), `codegen.py` + `a64.py` (ARM64 to C), `module.py` (the module's C files), `toolchain.py` (compiling the module, the runtime through CMake), `data.py` |
+| Generated-code ABI | `runtime/abi/`: `cpu.h` (with `SNX_ABI`), `cpu_helpers.c` (compiled into each game module, with the topic files it includes from `helpers/`: `fp.c`, `integer.c`, `simd.c`, `crypto.c`, `simd_mem.c`) |
 | Startup | `runtime/core/`: `main.c` (startup, loading the game module), `options.c` (the .ini), `clock.c` (guest time), `rtapi.c` (what the game module calls), `crash.c`, `present.c` (vi's CPU-side present), `loader.c`, `entry.c` |
 | Kernel and memory | `runtime/kernel/`: `kernel.c` (handles, waits, events), `thread.c`, `sync.c` (mutexes, condition variables, address arbitration, WaitSynchronization), `svc.c` (the SVC dispatch), `svc_mem.c` (memory SVCs, GetInfo), `debug.c` (backtraces, dumps), `mem.c`, `ipc.c` (helpers `in32`, `out32`, `buf_in`, `buf_out`, `out_obj`...) |
 | Services | `runtime/hle/`: one file per service family (`sm.c`, `am.c`, `set.c`, `time.c`, `acc.c`, `audio.c` (hwopus decodes with FFmpeg), `misc.c` for the small ones, `services.c` registers them), `audren.c` (the audio renderer's update), `pl.c` (shared fonts), `hid.c`, `fs.c`, `vi.c`, `nvdrv.c` (nvhost devices, syncpoints) |
 | GPU | `runtime/gpu/`: `gpu.c` (GPFIFO), `engines.c` (3D engine methods), `mme.c` (macros), `compute.c`, `fermi2d.c`, `dma.c`, `maxwell3d.c`, `renderer.h` (the `Renderer` table every renderer fills in, `g_renderer`), `renderer.c` (state the renderers share), `shader/` (Maxwell to GLSL: `shader.c` walks a program, `decode.c` the instruction table, `translate.c` each instruction, `corpus.c`), `texture/astc.c`, `null/` (headless) |
 | Vulkan renderer | `runtime/gpu/vk/`: `vk.h` (lists the parts), `device.c` (instance, device, queues, swapchain, VMA), `cmd.c` (frames in flight, staging), `surface.c` and `format.c` (render targets, formats), `texture.c` (textures, samplers), `buffer.c` (guest memory as buffers), `pipeline.c` (shader modules, pipelines), `render.c` (rendering passes, clears, draws), `compute.c` (compute on the compute queue, results landing in guest memory), `renderer.c` (its side of the renderer interface, presenting), `spirv.c` (GLSL to SPIR-V with glslang, SPIR-V cache), `vma.cpp` (VMA's implementation); Vulkan-Headers, volk, glslang and VMA are CPM packages (`cmake/dependencies.cmake`) |
-| Shader corpus | `SWR_SHADER_CORPUS=dir` records each translated shader; `build/<dir>/swr-shaderc dir --validate` translates it, compiles it to SPIR-V and validates it with `spirv-val`, which must be on PATH (`--out DIR` from two builds, diffed, shows a translator change kept the output) |
+| Shader corpus | `SNX_SHADER_CORPUS=dir` records each translated shader; `build/<dir>/snx-shaderc dir --validate` translates it, compiles it to SPIR-V and validates it with `spirv-val`, which must be on PATH (`--out DIR` from two builds, diffed, shows a translator change kept the output) |
 | Video | `runtime/video/`: `host1x.c` (IOVA, ioctls, a channel per nvdrv NVDEC or VIC fd, each NVDEC one with its own decoder), `nvdec.c` (H.264 with FFmpeg's libavcodec, the picture written into the surface its job names), `vic.c` (composes from those surfaces in guest memory) |
 | Platform | `runtime/platform/`: `plat.c` (logging, fatal), `plat_posix.c` and `plat_win32.c` (threads, locks, time, memory, files per OS), `profiler_win32.c`, `runtime.rc` and `runtime.manifest` (the Windows UTF-8 code page), `unattended.c` (scripted input, timed exit, screenshots, shared by both backends), `backend/` (`sdl3.c` on Linux and Windows, `headless.c`) |
 
@@ -92,13 +92,13 @@ everything else is static. The build enforces it: `-Werror=missing-prototypes` a
 ## Skills and agents
 
 Skills in `.claude/skills/`:
-- `swr-build`: building the runtime and games, the deploy step, the two compilers, and what fails silently.
-- `swr-run`: running the game unattended: scripted input, screenshots, logs, repeat runs for intermittent bugs.
-- `swr-crash`: from a crash report or `svcBreak` to the mechanism, with the symbol and disassembly tools.
-- `swr-service`: implementing or fixing an HLE service against what the game's SDK code expects.
+- `snx-build`: building the runtime and games, the deploy step, the two compilers, and what fails silently.
+- `snx-run`: running the game unattended: scripted input, screenshots, logs, repeat runs for intermittent bugs.
+- `snx-crash`: from a crash report or `svcBreak` to the mechanism, with the symbol and disassembly tools.
+- `snx-service`: implementing or fixing an HLE service against what the game's SDK code expects.
 - `import-upstream`: bringing a new MZ Labs release into `main`.
 - `record-lesson`: where a lesson goes so the next session finds it.
-- `code-audit`: the multi-pass audit-and-fix loop, with the `swr-*-reviewer` agents in `.claude/agents/review/`.
+- `code-audit`: the multi-pass audit-and-fix loop, with the `snx-*-reviewer` agents in `.claude/agents/review/`.
 
 Agents in `.claude/agents/`, to keep disassembly and logs out of the main context:
 - `crash-triage` (read-only): symbolizes and disassembles a crash, and reports the mechanism with its evidence.

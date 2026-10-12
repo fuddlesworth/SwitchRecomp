@@ -4,8 +4,8 @@
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the HLE kernel: objects and handles, events (kernel.c), threads (thread.c), shared memory and GetInfo (svc_mem.c),
    the dumps (debug.c). What only the kernel's own files use is in kernel_int.h */
-#ifndef SWR_KERNEL_H
-#define SWR_KERNEL_H
+#ifndef SNX_KERNEL_H
+#define SNX_KERNEL_H
 #include "abi/cpu.h"
 #include "platform/plat.h"
 
@@ -89,7 +89,7 @@ void kevent_signal(KEvent* e);
 void kevent_clear(KEvent* e);
 KThread* kthread_cur(void);
 void kernel_run_main(u64 entry, u64 stack_size, int prio, int core);
-void swr_svc(CPU* c, u32 imm);
+void snx_svc(CPU* c, u32 imm);
 extern PMutex g_klock;
 extern u64 g_title_id;
 extern u64 g_sysres_size;

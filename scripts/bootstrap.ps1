@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
-# Sets up a Windows machine for SwitchRecomp with nothing installed: downloads the toolchain into deps\tools, each file
+# Copyright 2026 the ScarletNX contributors
+# Sets up a Windows machine for ScarletNX with nothing installed: downloads the toolchain into deps\tools, each file
 # pinned and checked against its SHA-256. The third-party libraries come with the CMake build (cmake\dependencies.cmake).
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\bootstrap.ps1
@@ -11,7 +11,7 @@
 #   llvm-mingw 20261006   Clang, lld and the MinGW-w64 headers and libraries
 #   CMake 4.4.4, Ninja 1.13.2
 #   NASM 3.02             FFmpeg's assembly
-#   Python 3.15.0         switchrecomp and the scripts (the embeddable distribution)
+#   Python 3.15.0         scarletnx and the scripts (the embeddable distribution)
 #   w64devkit 2.10.0      only its sh (busybox) and GNU make, which FFmpeg's configure and Makefiles need
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'  # Invoke-WebRequest is many times slower with its progress bar
@@ -84,7 +84,7 @@ foreach ($p in $packages) {
 }
 
 # The embeddable Python searches only the folders its ._pth file lists, not the current one, so `python -m
-# switchrecomp` (scripts\recomp.py runs it) needs the repository root listed, relative to deps\tools\python
+# scarletnx` (scripts\recomp.py runs it) needs the repository root listed, relative to deps\tools\python
 $pth = Get-ChildItem -Path (Join-Path $tools 'python') -Filter 'python*._pth' | Select-Object -First 1
 if (-not $pth) { throw 'The embeddable Python has no ._pth file' }
 $root = '..\..\..'

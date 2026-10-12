@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* The render target set, clears and draws. The 3D registers name up to 8 color targets (RT_CONTROL at 0x487 maps
    the slots, each target's address, size, format and tiling at 0x200 + 0x10 * index) and a depth target (enabled
    at 0x54E, address at 0x3F8, size at 0x48A, format and tiling at 0x3FA). A dynamic rendering pass stays open while
@@ -601,7 +601,7 @@ static int cb_get(int stage, int i, u32 sz, VkBuffer* buf, u64* off) {
     return 1;
 }
 
-/* small constants in this frame's staging: 1/resolution scale (SWR_RS) at 0, the 0,0,0,1 of attributes without
+/* small constants in this frame's staging: 1/resolution scale (SNX_RS) at 0, the 0,0,0,1 of attributes without
    data at 16 (float) and 32 (integer) */
 static int frame_consts(VkBuffer* buf, u64* off) {
     static u64 frame = ~0ull, o;
@@ -622,9 +622,9 @@ static int frame_consts(VkBuffer* buf, u64* off) {
 }
 
 typedef struct {
-    VkWriteDescriptorSet w[SWR_VKB_FMT + 1];
-    VkDescriptorBufferInfo bi[SWR_VKB_FMT + 1];
-    VkDescriptorImageInfo ii[SWR_VKB_FMT + 1];
+    VkWriteDescriptorSet w[SNX_VKB_FMT + 1];
+    VkDescriptorBufferInfo bi[SNX_VKB_FMT + 1];
+    VkDescriptorImageInfo ii[SNX_VKB_FMT + 1];
     u32 n;
 } DescWrites;
 static void dw_buffer(DescWrites* d, VkDescriptorSet set, u32 binding, VkDescriptorType type, VkBuffer b, u64 off,
@@ -664,7 +664,7 @@ static VkDescriptorSet stage_set(GpuChannel* ch, int stage, VkSh* s, Surf** rt, 
         VkBuffer b;
         u64 o;
         if (!cb_get(stage, i, sz, &b, &o)) return VK_NULL_HANDLE;
-        dw_buffer(&d, set, SWR_VKB_CB + i, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, b, o, sz);
+        dw_buffer(&d, set, SNX_VKB_CB + i, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, b, o, sz);
     }
     if (s->si.gbuf_wmask) {
         LOG_LIMIT(1, "vulkan: a draw's shader writes global memory, which stays on the GPU (not done yet)\n");
@@ -688,12 +688,12 @@ static VkDescriptorSet stage_set(GpuChannel* ch, int stage, VkSh* s, Surf** rt, 
         int ok =
             addr && !((s->si.gbuf_wmask >> i) & 1) ? vk_buf_get(addr, size, &b, &o) : vk_buf_copy(addr, size, &b, &o);
         if (!ok) return VK_NULL_HANDLE;
-        dw_buffer(&d, set, SWR_VKB_SSBO + i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, b, o, size);
+        dw_buffer(&d, set, SNX_VKB_SSBO + i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, b, o, size);
     }
     VkBuffer cb;
     u64 co;
     if (stage == 4 && frame_consts(&cb, &co))
-        dw_buffer(&d, set, SWR_VKB_RS, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cb, co, 16);
+        dw_buffer(&d, set, SNX_VKB_RS, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cb, co, 16);
     u32 tcb = r[0x982];
     int nt = s->si.ntex > SH_MAXTEX ? SH_MAXTEX : s->si.ntex;
     for (int i = 0; i < nt; i++) {
@@ -729,7 +729,7 @@ static VkDescriptorSet stage_set(GpuChannel* ch, int stage, VkSh* s, Surf** rt, 
         if (!view) return VK_NULL_HANDLE;
         VkSampler smp = vk_tex_bind_sampler(x->tsc, st, num);
         if (!smp) return VK_NULL_HANDLE;
-        u32 b = SWR_VKB_TEX + i;
+        u32 b = SNX_VKB_TEX + i;
         d.ii[b] = (VkDescriptorImageInfo){smp, view, layout};
         d.w[d.n++] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                             .dstSet = set,
@@ -1159,7 +1159,7 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
     vkCmdSetStencilReference(cb, VK_STENCIL_FACE_BACK_BIT, r[two ? 0x3D5 : 0x4E5]);
     vkCmdSetStencilCompareMask(cb, VK_STENCIL_FACE_BACK_BIT, r[two ? 0x3D7 : 0x4E6]);
     vkCmdSetStencilWriteMask(cb, VK_STENCIL_FACE_BACK_BIT, r[two ? 0x3D6 : 0x4E7]);
-    /* push constants: the depth mode (swr_vp.y) for the vertex stage, the alpha test (0x4BB on, 0x4C4 reference,
+    /* push constants: the depth mode (snx_vp.y) for the vertex stage, the alpha test (0x4BB on, 0x4C4 reference,
        0x4C5 function) for the fragment stage */
     float pc[8] = {0, (r[0x35F] & 1) ? 0.0f : 1.0f, 0, 0};
     {

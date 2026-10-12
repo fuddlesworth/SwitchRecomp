@@ -100,7 +100,7 @@ static void rt_brk(CPU* c, u64 pc, u32 imm) {
 }
 static u64 rt_ticks(void) { return guest_ticks(); }
 /* what the host can't do the guest's way: said once each. The generated code is compiled for round-to-nearest, so a
-   directed rounding mode only reaches the operations the compiler didn't fold (switchrecomp/toolchain.py) */
+   directed rounding mode only reaches the operations the compiler didn't fold (scarletnx/toolchain.py) */
 static void fpcr_warn(u32 fpcr) {
     if ((fpcr >> 22) & 3)
         WARN_LIMIT(
@@ -112,7 +112,7 @@ static void fpcr_warn(u32 fpcr) {
         WARN_LIMIT(1, "FPU: the game sets alternative half precision (FPCR %x), which isn't emulated\n", fpcr);
 #endif
 }
-void swr_fpcr_apply(CPU* c) {
+void snx_fpcr_apply(CPU* c) {
     fpcr_warn(c->fpcr);
 #if defined(__aarch64__)
     /* arm64 host: just load the guest FPCR (FZ, rounding, DN, AHP) */
@@ -130,10 +130,10 @@ void swr_fpcr_apply(CPU* c) {
     (void)c;
 #endif
 }
-static void rt_fpcr(CPU* c) { swr_fpcr_apply(c); }
+static void rt_fpcr(CPU* c) { snx_fpcr_apply(c); }
 static void rt_sev(void) {}
 static void rt_wfe(CPU* c) {
     (void)c;
     plat_yield();
 }
-const RtAPI g_rtapi = {swr_svc, rt_undef, rt_note_hint, rt_ticks, rt_brk, rt_fpcr, rt_sev, rt_wfe};
+const RtAPI g_rtapi = {snx_svc, rt_undef, rt_note_hint, rt_ticks, rt_brk, rt_fpcr, rt_sev, rt_wfe};

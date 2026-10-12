@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
+# Copyright 2026 the ScarletNX contributors
 # Formats the C and C++ sources with clang-format 23 and the Python sources with ruff (through uvx, pinned below).
 #
 #   scripts/format.sh            format the repository

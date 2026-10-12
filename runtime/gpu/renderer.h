@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* The renderer interface: what the GPU front end (gpu.c, engines.c, maxwell3d.c) and the window backends ask of a
    renderer. The Vulkan (gpu/vk/renderer.c) and null (gpu/null/null.c) renderers each fill in every operation, with a
    no-op where they have nothing to do, so callers never check. save is the one exception (NULL when there is
    nothing to save). */
-#ifndef SWR_RENDERER_H
-#define SWR_RENDERER_H
+#ifndef SNX_RENDERER_H
+#define SNX_RENDERER_H
 #include "abi/cpu.h"
 #include "gpu/gpu.h"
 

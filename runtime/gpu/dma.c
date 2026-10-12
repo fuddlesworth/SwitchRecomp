@@ -9,7 +9,7 @@
    instead of translating + tracking every 16 bytes */
 static u8* bl_span_ptr(u64 base, u32 wbytes, u32 h, u32 bh, u32 z, u32 bd, u64* span) {
     static int off = -1;
-    if (off < 0) off = getenv("SWR_DMA_SLOW") != NULL;
+    if (off < 0) off = getenv("SNX_DMA_SLOW") != NULL;
     if (off) return NULL;
     u64 gh = 8ull << bh, gd = 1ull << bd;
     u64 sz = (((u64)wbytes + 63) & ~63ull) * ((h + gh - 1) / gh * gh) * ((z / gd + 1) * gd);

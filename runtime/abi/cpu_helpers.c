@@ -16,7 +16,7 @@
 #include "helpers/simd_mem.c"
 
 /* ---- dispatcher for anything AdvSIMD / crypto ---- */
-int swr_simd(CPU* c, u8* M, u32 w) {
+int snx_simd(CPU* c, u8* M, u32 w) {
     if ((w & 0xBF800000u) == 0x0C000000u || (w & 0xBF800000u) == 0x0C800000u || (w & 0xBF000000u) == 0x0D000000u)
         return simd_ldst(c, M, w);
     if ((w & 0x9F200400u) == 0x0E200400u) return simd_3same(c, w, 0);

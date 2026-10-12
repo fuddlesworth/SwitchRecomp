@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* Shaders and pipelines. A guest shader is translated to GLSL (shader.c), patched for what Vulkan does differently
    (vk_glsl_post: the alpha test and the depth range, with push constants), compiled to SPIR-V through the on-disk
    cache and kept as a module. Every stage has a descriptor set of the same bindings, one set per stage
@@ -84,10 +84,10 @@ int vk_cb_reads_hold(const VkCbReads* reads, VkCbReader read) {
 
 /* descriptors of each type in one set: the binding ranges in shader.h */
 static VkDescriptorType binding_type(u32 i) {
-    return i < SWR_VKB_SSBO  ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-           : i < SWR_VKB_TEX ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
-           : i < SWR_VKB_IMG ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-           : i < SWR_VKB_RS  ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+    return i < SNX_VKB_SSBO  ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+           : i < SNX_VKB_TEX ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+           : i < SNX_VKB_IMG ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+           : i < SNX_VKB_RS  ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
                              : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 }
 void vk_pool_sizes(VkDescriptorPoolSize* sz, u32 sets) {
@@ -95,7 +95,7 @@ void vk_pool_sizes(VkDescriptorPoolSize* sz, u32 sets) {
                                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
     for (int k = 0; k < 4; k++) {
         u32 n = 0;
-        for (u32 i = 0; i <= SWR_VKB_FMT; i++) n += binding_type(i) == ty[k];
+        for (u32 i = 0; i <= SNX_VKB_FMT; i++) n += binding_type(i) == ty[k];
         sz[k] = (VkDescriptorPoolSize){ty[k], n * sets};
     }
 }
@@ -108,12 +108,12 @@ void vk_pipeline_init(void) {
         VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT |
             VK_SHADER_STAGE_GEOMETRY_BIT};
     for (int s = 0; s < 3; s++) {
-        VkDescriptorSetLayoutBinding b[SWR_VKB_FMT + 1];
-        for (u32 i = 0; i <= SWR_VKB_FMT; i++)
+        VkDescriptorSetLayoutBinding b[SNX_VKB_FMT + 1];
+        for (u32 i = 0; i <= SNX_VKB_FMT; i++)
             b[i] = (VkDescriptorSetLayoutBinding){
                 .binding = i, .descriptorType = binding_type(i), .descriptorCount = 1, .stageFlags = vis[s]};
         VkDescriptorSetLayoutCreateInfo dl = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-                                              .bindingCount = SWR_VKB_FMT + 1,
+                                              .bindingCount = SNX_VKB_FMT + 1,
                                               .pBindings = b};
         VK_OK(vkCreateDescriptorSetLayout(g_vk.dev, &dl, NULL, &g_vk_dslayout[s]));
     }
@@ -135,7 +135,7 @@ void vk_pipeline_init(void) {
                  l->maxPerStageDescriptorSamplers, l->maxPerStageDescriptorStorageImages);
     }
     VkDescriptorSetLayout sets[3] = {g_vk_dslayout[0], g_vk_dslayout[1], g_vk_dslayout[2]};
-    /* push constants: swr_vp (vertex) at 0, swr_at (fragment) at 16 */
+    /* push constants: snx_vp (vertex) at 0, snx_at (fragment) at 16 */
     VkPushConstantRange pc = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32};
     VkPipelineLayoutCreateInfo pl = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                                      .setLayoutCount = 3,
@@ -278,7 +278,7 @@ VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, 
         }
         {
             static const char* corpus = (const char*)-1;
-            if (corpus == (const char*)-1) corpus = getenv("SWR_SHADER_CORPUS");
+            if (corpus == (const char*)-1) corpus = getenv("SNX_SHADER_CORPUS");
             if (corpus) shader_corpus_save(corpus, code, mlen, 0x10000, stage, &s->si, h ^ mix);
         }
         char* src = vk_glsl_post(vk_translate(code, 0x10000, stage, &s->si, sh_cb_read, &s->cbr), stage);
@@ -296,7 +296,7 @@ VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, 
         } else {
             s->failed = 1;
             WARN("vulkan: shader %016llx (stage %d) didn't compile: %s\n", (unsigned long long)h, stage, err);
-            if (src && getenv("SWR_DUMP_SHADERS")) { /* next to the caches, not in the current directory */
+            if (src && getenv("SNX_DUMP_SHADERS")) { /* next to the caches, not in the current directory */
                 char pth[1200];
                 snprintf(pth, sizeof pth, "%s/vkshader_%016llx_%d.glsl", g_cache_dir, (unsigned long long)h, stage);
                 FILE* f = fopen(pth, "w");

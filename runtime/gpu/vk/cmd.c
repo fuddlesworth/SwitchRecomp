@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* Frames in flight. Each frame has a command buffer that collects everything recorded until the next submit (a
    present or a readback), a staging ring for uploads and for data draws read directly (vertices, indices, constant
    buffers), descriptor pools, and the resources to destroy once its work is done. Starting to record a frame waits

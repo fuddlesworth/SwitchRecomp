@@ -3,8 +3,8 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the guest clock (clock.c): real time since startup */
-#ifndef SWR_CLOCK_H
-#define SWR_CLOCK_H
+#ifndef SNX_CLOCK_H
+#define SNX_CLOCK_H
 #include "abi/cpu.h"
 
 void clock_start(void);

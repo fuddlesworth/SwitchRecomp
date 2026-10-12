@@ -144,7 +144,7 @@ i64 plat_tz_offset(void) {
 static int g_uffd_pagemap = -1;
 #if defined(__linux__) && defined(PAGEMAP_SCAN)
 static void ww_init(u8* p, u64 size) {
-    if (getenv("SWR_NO_WW")) return;
+    if (getenv("SNX_NO_WW")) return;
     int u = (int)syscall(SYS_userfaultfd, O_CLOEXEC | O_NONBLOCK | UFFD_USER_MODE_ONLY);
     if (u < 0) return;
     struct uffdio_api api = {.api = UFFD_API, .features = UFFD_FEATURE_WP_ASYNC | UFFD_FEATURE_WP_UNPOPULATED};
@@ -195,7 +195,7 @@ u8* plat_vm_reserve(u64 size) {
        some arm64 systems) mprotect fails on most of them */
     long pg = sysconf(_SC_PAGESIZE);
     if (pg != 4096)
-        fatal("This system uses %ld KiB memory pages. SwitchRecomp only runs on systems with 4 KiB pages.", pg / 1024);
+        fatal("This system uses %ld KiB memory pages. ScarletNX only runs on systems with 4 KiB pages.", pg / 1024);
     void* p = mmap(NULL, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (p == MAP_FAILED) return NULL;
     ww_init(p, size);

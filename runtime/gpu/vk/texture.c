@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* Textures from the guest's texture headers (TIC, 32 bytes each), and samplers from its sampler headers (TSC). A
    texture whose address holds a render target is that render target (a copy of its top-left corner when the header
    is smaller). Others are loaded from guest memory, deswizzled on the CPU, and checked for changes now and then:

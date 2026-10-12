@@ -47,7 +47,7 @@ static int set_disp(SvcObj* o, IpcCtx* c) {
         }
         case 8: out32(c, 0); return 0;
         case 11: { /* GetDeviceNickName: a 0x80 byte buffer */
-            static const char name[] = "SwitchRecomp";
+            static const char name[] = "ScarletNX";
             u64 a, s;
             buf_out(c, 0, &a, &s);
             if (!a || !s) return 0;

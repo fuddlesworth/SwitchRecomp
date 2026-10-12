@@ -3,8 +3,8 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* GPU state shared between the engines and the backends */
-#ifndef SWR_GPU_H
-#define SWR_GPU_H
+#ifndef SNX_GPU_H
+#define SNX_GPU_H
 #include "abi/cpu.h"
 typedef struct GpuChannel {
     u32 id;

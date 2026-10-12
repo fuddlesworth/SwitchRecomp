@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
+# Copyright 2026 the ScarletNX contributors
 """PreToolUse guard for the hard rules of this project (CLAUDE.md).
 
 Claude Code passes the tool call as JSON on stdin. Exit code 2 blocks the call and shows stderr to Claude.
@@ -19,7 +19,7 @@ import shlex
 import sys
 
 # Files that belong to the game's owner or are made from them: never staged, uploaded or edited
-GAME_EXT = re.compile(r'\.(keys|xci|nsp|nsz|xcz|nca|nro|nso|npdm|tik|cert|swrs|spv|ppm)$', re.I)
+GAME_EXT = re.compile(r'\.(keys|xci|nsp|nsz|xcz|nca|nro|nso|npdm|tik|cert|snxs|spv|ppm)$', re.I)
 GAME_DIR = re.compile(r'(^|/)(games|work|deps|keys|dumps|exefs|romfs)(/|$)')
 
 # Generated or third-party trees: change the source that produces them instead. Not anchored at the start, so a

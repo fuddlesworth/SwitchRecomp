@@ -3,8 +3,8 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* what a window backend (platform/backend/) provides: the window, input and presenting */
-#ifndef SWR_BACKEND_H
-#define SWR_BACKEND_H
+#ifndef SNX_BACKEND_H
+#define SNX_BACKEND_H
 #include "abi/cpu.h"
 
 void video_init(const char* title);

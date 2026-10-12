@@ -3,8 +3,8 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* what the service files in hle share (services.c registers them all) */
-#ifndef SWR_SERVICES_INT_H
-#define SWR_SERVICES_INT_H
+#ifndef SNX_SERVICES_INT_H
+#define SNX_SERVICES_INT_H
 #include "hle/services.h"
 #include "core/main.h"
 #include "core/options.h"

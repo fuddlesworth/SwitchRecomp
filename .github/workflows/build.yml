@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
+# Copyright 2026 the ScarletNX contributors
 name: Build
 
 on:
@@ -52,21 +52,21 @@ jobs:
           cmake --install build/default --prefix stage
       - name: Build the headless backend too
         run: |
-          cmake --preset default -B build/headless -DSWR_BACKEND=headless -DSWR_DEPLOY=OFF
+          cmake --preset default -B build/headless -DSNX_BACKEND=headless -DSNX_DEPLOY=OFF
           cmake --build build/headless
       # The game modules compile runtime/abi/cpu_helpers.c, which no CMake target does
       - name: Check the ABI helpers compile
         run: clang -fsyntax-only -Wall -fno-strict-aliasing -fwrapv -I runtime/abi runtime/abi/cpu_helpers.c
       - name: Check the Python scripts
         run: |
-          python -m compileall -q switchrecomp scripts tools
-          python -m switchrecomp --help > /dev/null
+          python -m compileall -q scarletnx scripts tools
+          python -m scarletnx --help > /dev/null
           python scripts/extract.py --help > /dev/null
           python scripts/recomp.py --help > /dev/null
           python tools/run_game.py --help > /dev/null
       - uses: actions/upload-artifact@v7
         with:
-          name: swr-runtime-linux
+          name: scarletnx-linux
           path: stage
 
   appimage:
@@ -109,7 +109,7 @@ jobs:
       - name: Build and install into /usr
         run: |
           git config --global --add safe.directory '*'
-          cmake --preset default -DSWR_DEPLOY=OFF -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --preset default -DSNX_DEPLOY=OFF -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build --preset default
           cmake --install build/default
       # The script names the AppImage after `git describe`
@@ -172,7 +172,7 @@ jobs:
           cmake --build --preset windows-cross
       - name: Build the headless backend too
         run: |
-          cmake --preset windows-cross -B build/windows-headless -DSWR_BACKEND=headless -DSWR_DEPLOY=OFF
+          cmake --preset windows-cross -B build/windows-headless -DSNX_BACKEND=headless -DSNX_DEPLOY=OFF
           cmake --build build/windows-headless
       - name: Check the ABI helpers compile for Windows
         run: |
@@ -213,7 +213,7 @@ jobs:
       - name: Check the Python scripts
         run: |
           . .\scripts\env.ps1 -Isolated
-          python -m switchrecomp --help > $null
+          python -m scarletnx --help > $null
           if ($LASTEXITCODE) { exit 1 }
           python scripts\extract.py --help > $null
           if ($LASTEXITCODE) { exit 1 }
@@ -221,7 +221,7 @@ jobs:
           if ($LASTEXITCODE) { exit 1 }
       - uses: actions/upload-artifact@v7
         with:
-          name: swr-runtime-windows
+          name: scarletnx-windows
           path: stage
 
   # Every push to main that builds everywhere replaces the rolling "nightly" prerelease with that commit's AppImage.

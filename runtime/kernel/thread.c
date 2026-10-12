@@ -65,13 +65,13 @@ static void thread_body(void* p) {
     KThread* t = p;
     kthread_set(t);
     CPU* c = &t->cpu;
-    swr_fpcr_apply(c);
+    snx_fpcr_apply(c);
     LOGV("[thread %llu] starts at %llx\n", (unsigned long long)t->id, (unsigned long long)c->pc);
     for (;;) {
         if (UNLIKELY(c->pc == 0)) { /* entry function returned */
             svc_exit_thread(t);
         }
-        GuestFn f = swr_lookup(c, c->pc);
+        GuestFn f = snx_lookup(c, c->pc);
         f(c, c->pc);
     }
 }

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* Vulkan instance, device, queues and swapchain. Vulkan 1.3 is required: timeline semaphores (1.2),
    synchronization2 and dynamic rendering (1.3) are what the renderer is built on. */
 #include <stdlib.h>
@@ -77,19 +77,19 @@ static int create_instance(void) {
     if (nbe > 15) WARN("vulkan: the window backend wants %u instance extensions, only 15 are taken\n", nbe);
     const char* layers[1];
     u32 nlayers = 0;
-    int validation = getenv("SWR_VK_VALIDATION") != NULL;
+    int validation = getenv("SNX_VK_VALIDATION") != NULL;
     if (validation) {
         if (has_layer("VK_LAYER_KHRONOS_validation")) {
             layers[nlayers++] = "VK_LAYER_KHRONOS_validation";
             ext[next++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
         } else {
-            WARN("vulkan: SWR_VK_VALIDATION is set but VK_LAYER_KHRONOS_validation is not installed\n");
+            WARN("vulkan: SNX_VK_VALIDATION is set but VK_LAYER_KHRONOS_validation is not installed\n");
             validation = 0;
         }
     }
     VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-                             .pApplicationName = "SwitchRecomp",
-                             .pEngineName = "SwitchRecomp",
+                             .pApplicationName = "ScarletNX",
+                             .pEngineName = "ScarletNX",
                              .apiVersion = VK_API_VERSION_1_3};
     VkInstanceCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
                                .pApplicationInfo = &app,

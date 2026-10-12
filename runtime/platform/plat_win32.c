@@ -133,7 +133,7 @@ i64 plat_tz_offset(void) {
 }
 static int g_ww_ok; /* MEM_WRITE_WATCH: Windows tracks written pages, so unchanged buffers don't need a reread */
 u8* plat_vm_reserve(u64 size) {
-    void* p = !getenv("SWR_WW") ? NULL : VirtualAlloc(NULL, size, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS);
+    void* p = !getenv("SNX_WW") ? NULL : VirtualAlloc(NULL, size, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS);
     if (p) {
         g_ww_ok = 1;
         return (u8*)p;

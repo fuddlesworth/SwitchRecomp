@@ -3,8 +3,8 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the settings from <Game>.ini (options.c) */
-#ifndef SWR_OPTIONS_H
-#define SWR_OPTIONS_H
+#ifndef SNX_OPTIONS_H
+#define SNX_OPTIONS_H
 
 void ini_override(const char* k, const char* v); /* a --key=value from the command line, before ini_open. Keeps v */
 void ini_set(const char* k, const char* v);

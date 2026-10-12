@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* Guest memory ranges as buffers the GPU reads: vertices, indices and storage buffers. A range is checked once per
    guest submit (and again after the GPU front end wrote it). Data that changed is copied into the frame's staging
    ring, which draws read directly; data that stayed the same over a few checks gets a buffer of its own, written

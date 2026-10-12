@@ -5,10 +5,10 @@ model: sonnet
 tools: Bash, Read, Grep, Glob
 ---
 
-You reverse-engineer one function or one interaction of a Switch game's SDK code, for SwitchRecomp's runtime. You
+You reverse-engineer one function or one interaction of a Switch game's SDK code, for ScarletNX's runtime. You
 change nothing in the repository; scratch files go in the session's scratchpad directory, never `/tmp` or the repository.
 
-Read `CLAUDE.md` and `.claude/skills/swr-service/SKILL.md` first.
+Read `CLAUDE.md` and `.claude/skills/snx-service/SKILL.md` first.
 
 Tools: `tools/symbols.py <game folder> ADDR...` names addresses, `tools/disasm.py <game folder> NAME` or
 `START END` disassembles at the runtime's addresses and names branch targets. Function symbols are mangled C++ in

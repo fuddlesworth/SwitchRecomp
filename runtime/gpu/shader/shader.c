@@ -134,7 +134,7 @@ u32 cb_idx(u64 w) { return B(w, 34, 5); }
 u32 cb_off(u64 w) { return B(w, 20, 14) * 4; }
 /* is c0[off] the {address, size} of an NVN ssbo? returns its index in gbuf_cbuf_off + 1, or 0.
    They are 16-byte aligned in c0[0x110..0x210] for the graphics stages and c0[0x110..0x410] for compute, up to the 16
-   the renderer binds (SWR_VKB_SSBO) */
+   the renderer binds (SNX_VKB_SSBO) */
 u8 gbuf_tag(Ctx* c, u64 w) {
     u32 lo = 0x110, hi = c->stage == ST_CS ? 0x410 : 0x210;
     if (cb_idx(w) != 0) return 0;
@@ -603,7 +603,7 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     c->has_flow = flow;
     /* all branches forward (no loops): skip the switch loop and emit blocks in order behind pc guards.
      compiles and runs a lot faster. a BRX with a forward-only table also works this way */
-    int fwd = flow && !getenv("SWR_SHADER_SWITCH");
+    int fwd = flow && !getenv("SNX_SHADER_SWITCH");
     for (u32 i = 11; i < n && fwd; i++) {
         if (!IDX_OK(i)) continue;
         const Op* op = decode(c->w[i]);
@@ -621,7 +621,7 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
             fwd = 0;
     }
     /* resolve the stacks; a BRX can reach any block so all of them count as successors */
-    if (flow && has_stk && !all_ldr && !getenv("SWR_SHADER_DYNSTACK")) {
+    if (flow && has_stk && !all_ldr && !getenv("SNX_SHADER_DYNSTACK")) {
         u32* bl = NULL;
         int nb = 0;
         if (has_brx) {
@@ -636,7 +636,7 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     int merge = fwd && !has_brx;
     u32* jt = NULL;
     int stru = 0;
-    if (fwd && !has_brx && (!has_stk || c->stk_static) && !getenv("SWR_SHADER_NOSTRUCT")) {
+    if (fwd && !has_brx && (!has_stk || c->stk_static) && !getenv("SNX_SHADER_NOSTRUCT")) {
         jt = calloc(n + 1, sizeof(u32));
         stru = st_check(c, n, jt);
     }
@@ -788,11 +788,11 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     if (c->uses_shadow_lod) sb_put(D, "#extension GL_EXT_texture_shadow_lod : require\n");
     /* gl_Layer from a stage before the fragment shader */
     if (stage != ST_FS && si->writes_layer)
-        sb_put(D, "#extension GL_ARB_shader_viewport_layer_array : require\n#define SWR_SET_LAYER(v) gl_Layer=(v)\n");
+        sb_put(D, "#extension GL_ARB_shader_viewport_layer_array : require\n#define SNX_SET_LAYER(v) gl_Layer=(v)\n");
     if (stage == ST_FS && si->uses_position_in)
-        sb_f(D, "layout(std140, %s) uniform SWR_RS { vec4 swr_rs; };\n", bind_at(stage, SWR_VKB_RS)); /* 1/res scale */
+        sb_f(D, "layout(std140, %s) uniform SNX_RS { vec4 snx_rs; };\n", bind_at(stage, SNX_VKB_RS)); /* 1/res scale */
     for (int i = 0; i < si->ngbuf; i++)
-        sb_f(D, "layout(std430, %s) %sbuffer S%d_G%d { uint d[]; } g%d;\n", bind_at(stage, SWR_VKB_SSBO + i),
+        sb_f(D, "layout(std430, %s) %sbuffer S%d_G%d { uint d[]; } g%d;\n", bind_at(stage, SNX_VKB_SSBO + i),
              ((si->gbuf_wmask >> i) & 1) ? "" : "readonly ", stage, i, i);
     if (stage == ST_CS)
         sb_f(D, "layout(local_size_x=%u, local_size_y=%u, local_size_z=%u) in;\n",
@@ -800,11 +800,11 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
              si->cs_local[2] ? si->cs_local[2] : 1);
     for (int i = 0; i < 18; i++)
         if (si->cbuf_mask & (1u << i))
-            sb_f(D, "layout(std140, %s) uniform S%d_CB%d { vec4 d[4096]; } cb%d;\n", bind_at(stage, SWR_VKB_CB + i),
+            sb_f(D, "layout(std140, %s) uniform S%d_CB%d { vec4 d[4096]; } cb%d;\n", bind_at(stage, SNX_VKB_CB + i),
                  stage, i, i);
     for (int i = 0; i < si->ntex; i++) {
         ShTex* t = &si->tex[i];
-        sb_f(D, "layout(%s) uniform %s S%d_tex%d;\n#define tex%d S%d_tex%d\n", bind_at(stage, SWR_VKB_TEX + i),
+        sb_f(D, "layout(%s) uniform %s S%d_tex%d;\n#define tex%d S%d_tex%d\n", bind_at(stage, SNX_VKB_TEX + i),
              T("%s%s",
                (!t->shadow && ((si->tex_int_mask >> i) & 1)) ? (((si->tex_sint_mask >> i) & 1) ? "i" : "u") : "",
                samp_type(t->type, t->array, t->shadow)),
@@ -855,23 +855,23 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     if (stage == ST_CS) {
         static const char* it[6] = {"image1D", "imageBuffer", "image1DArray", "image2D", "image2DArray", "image3D"};
         for (int k = 0; k < si->nimg; k++)
-            sb_f(D, "layout(%s) writeonly uniform %s img%d;\n", bind_at(stage, SWR_VKB_IMG + k), it[si->img[k].type],
+            sb_f(D, "layout(%s) writeonly uniform %s img%d;\n", bind_at(stage, SNX_VKB_IMG + k), it[si->img[k].type],
                  k);
         if (c->uses_img_raw) {
             /* format class: 0 f32, 1 f16, 2 unorm8, 3 unorm16 */
             sb_put(
                 D,
-                T("layout(std140, %s) uniform SWR_FMT { int swr_ic[8]; int swr_tc[32]; int swr_ib[8]; int swr_tb[32]; };\n",
-                  bind_at(stage, SWR_VKB_FMT)));
+                T("layout(std140, %s) uniform SNX_FMT { int snx_ic[8]; int snx_tc[32]; int snx_ib[8]; int snx_tb[32]; };\n",
+                  bind_at(stage, SNX_VKB_FMT)));
             sb_put(
                 D,
-                "vec4 swr_r2v(uvec4 r, uint n, uint sz, int cls){\n"
+                "vec4 snx_r2v(uvec4 r, uint n, uint sz, int cls){\n"
                 "  if(sz<4u){ uint v = sz<2u? (r.x&0xFFu) : (r.x&0xFFFFu); if(cls==1) return vec4(unpackHalf2x16(v).x,0.0,0.0,1.0); if(cls==2) return vec4(float(v&0xFFu)/255.0,0.0,0.0,1.0); if(cls==3) return vec4(float(v)/65535.0,0.0,0.0,1.0); return vec4(uintBitsToFloat(v),0.0,0.0,1.0); }\n"
                 "  if(cls==1) return n>=2u? vec4(unpackHalf2x16(r.x),unpackHalf2x16(r.y)) : vec4(unpackHalf2x16(r.x),0.0,1.0);\n"
                 "  if(cls==2) return unpackUnorm4x8(r.x);\n"
                 "  if(cls==3) return n>=2u? vec4(unpackUnorm2x16(r.x),unpackUnorm2x16(r.y)) : vec4(unpackUnorm2x16(r.x),0.0,1.0);\n"
                 "  return vec4(uintBitsToFloat(r.x), n>=2u? uintBitsToFloat(r.y) : 0.0, n>=4u? uintBitsToFloat(r.z) : 0.0, n>=4u? uintBitsToFloat(r.w) : 1.0); }\n"
-                "uvec4 swr_v2r(vec4 v, uint sz, int cls){\n"
+                "uvec4 snx_v2r(vec4 v, uint sz, int cls){\n"
                 "  uvec4 o;\n"
                 "  if(cls==1) o=uvec4(packHalf2x16(v.xy),packHalf2x16(v.zw),0u,0u); else if(cls==2) o=uvec4(packUnorm4x8(v),0u,0u,0u);\n"
                 "  else if(cls==3) o=uvec4(packUnorm2x16(v.xy),packUnorm2x16(v.zw),0u,0u); else o=floatBitsToUint(v);\n"
@@ -899,7 +899,7 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
      if the driver fuses an fma in only one of them, depths differ by an ulp and the EQUAL test fails */
     {
         static int nop = -1;
-        if (nop < 0) nop = getenv("SWR_NO_PRECISE_VS") != NULL;
+        if (nop < 0) nop = getenv("SNX_NO_PRECISE_VS") != NULL;
         const char* rq = (c->stage == ST_VS && !nop) ? "precise uint" : "uint";
         for (int i = 0; i < 255; i++)
             if (c->used_reg[i]) sb_f(D, "  %s r%d = 0u;\n", rq, i);

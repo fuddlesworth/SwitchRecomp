@@ -3,8 +3,8 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* IPC (ipc.c): service objects, sessions, the request and reply helpers, the service registry */
-#ifndef SWR_IPC_H
-#define SWR_IPC_H
+#ifndef SNX_IPC_H
+#define SNX_IPC_H
 #include "abi/cpu.h"
 #include "kernel/kernel.h"
 #include <string.h>

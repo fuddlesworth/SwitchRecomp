@@ -151,10 +151,10 @@ void vic_execute(const u32* r) {
     u64 cfg = rd64(cs, 0x20);
     u32 fmt = (u32)(cfg & 0x7F), blk = (u32)((cfg >> 11) & 15), bh = (u32)((cfg >> 15) & 15);
     u32 sw = (u32)((cfg >> 32) & 0x3FFF) + 1, sh = (u32)((cfg >> 46) & 0x3FFF) + 1;
-    /* SWR_VIC_FMT=n overrides the output format the config names, to try another one while debugging */
+    /* SNX_VIC_FMT=n overrides the output format the config names, to try another one while debugging */
     static int fmt_env = -1;
     if (fmt_env == -1) {
-        const char* e = getenv("SWR_VIC_FMT");
+        const char* e = getenv("SNX_VIC_FMT");
         fmt_env = e ? (int)(strtoul(e, 0, 0) & 0x7F) : -2;
     }
     if (fmt_env >= 0) fmt = (u32)fmt_env;

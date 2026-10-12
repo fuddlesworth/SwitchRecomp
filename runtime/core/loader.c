@@ -54,7 +54,7 @@ static int lz4_dec(const u8* src, u32 slen, u8* dst, u32 dlen) {
     return (int)o;
 }
 
-static int load_one(const SwrModInfo* mi) {
+static int load_one(const SnxModInfo* mi) {
     char p[1200];
     /* mapped, not read: the NSOs are tens of MB and only copied out once. The mapping ends at the file's end, so every
        read below is checked against fsz */

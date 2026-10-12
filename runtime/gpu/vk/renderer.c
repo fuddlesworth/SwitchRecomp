@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* Vulkan renderer: the renderer interface (vk_renderer, the vkr_ functions it points to) and presenting.
 
    Render targets, clears, draws (gpu/vk/render.c), compute (gpu/vk/compute.c), write-backs to and reloads from
@@ -92,7 +92,7 @@ static void vkr_rt_reload(u64 gva) {
 }
 static void vkr_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     static int off = -1;
-    if (off < 0) off = getenv("SWR_NO_COMPUTE") != NULL;
+    if (off < 0) off = getenv("SNX_NO_COMPUTE") != NULL;
     if (off) return;
     r3d_pending_flush(); /* a merged draw the front end is holding comes first */
     vk_lock();

@@ -3,8 +3,8 @@
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* what the kernel's files share: result codes, the thread table, waiting and waking, and the SVCs svc.c dispatches to */
-#ifndef SWR_KERNEL_INT_H
-#define SWR_KERNEL_INT_H
+#ifndef SNX_KERNEL_INT_H
+#define SNX_KERNEL_INT_H
 #include "kernel/kernel.h"
 #include "core/loader.h"
 #include "kernel/ipc.h"

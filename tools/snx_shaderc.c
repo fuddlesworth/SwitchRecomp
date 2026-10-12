@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
-/* Translates a shader corpus (SWR_SHADER_CORPUS=dir in a game run) offline and checks the result: every shader is
+   Copyright 2026 the ScarletNX contributors */
+/* Translates a shader corpus (SNX_SHADER_CORPUS=dir in a game run) offline and checks the result: every shader is
    compiled to SPIR-V with glslang and, with --validate, checked with spirv-val.
 
-     swr-shaderc CORPUS_DIR [--out DIR] [--validate] [--cache DIR] [--verbose]
-     swr-shaderc --nvn DIR --cache DIR
+     snx-shaderc CORPUS_DIR [--out DIR] [--validate] [--cache DIR] [--verbose]
+     snx-shaderc --nvn DIR --cache DIR
 
    --out writes each shader's GLSL and .spv to DIR, to compare the translator's output between two builds. --cache goes
    through the runtime's SPIR-V cache in DIR, as the renderer does. Exit status 1 when a shader failed to compile or to
@@ -196,7 +196,7 @@ int main(int argc, char** argv) {
     struct dirent* e;
     while ((e = readdir(d))) {
         size_t nl = strlen(e->d_name);
-        if (nl < 6 || strcmp(e->d_name + nl - 5, ".swrs")) continue;
+        if (nl < 6 || strcmp(e->d_name + nl - 5, ".snxs")) continue;
         char path[2048], base[1024];
         snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
         snprintf(base, sizeof base, "%.*s", (int)(nl - 5), e->d_name);
@@ -238,7 +238,7 @@ int main(int argc, char** argv) {
         if (out)
             snprintf(spvpath, sizeof spvpath, "%s/%s.spv", out, base);
         else
-            snprintf(spvpath, sizeof spvpath, "%s/swr-shaderc-%d-%s.spv", tmpdir, (int)getpid(), base);
+            snprintf(spvpath, sizeof spvpath, "%s/snx-shaderc-%d-%s.spv", tmpdir, (int)getpid(), base);
         int written = out || validate ? write_file(spvpath, spv, nwords * 4) : 1;
         free(spv);
         if (!written) {

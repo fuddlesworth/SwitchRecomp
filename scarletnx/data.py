@@ -34,7 +34,7 @@ def copy_data(mods, npdm, romfs, entry, datadir, say):
             shutil.copytree(romfs, dst)
 
 
-INI = """; SwitchRecomp settings for %(title)s
+INI = """; ScarletNX settings for %(title)s
 ; This file is rewritten (organized, with every option explained) the first time the game starts.
 [Display]
 language=1

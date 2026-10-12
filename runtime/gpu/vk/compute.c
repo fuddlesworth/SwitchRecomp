@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* Compute: the compute class's launches (QMD), on a compute queue of their own when the device has one (a queue of a
    compute-only family, or a second queue of the graphics family), else on the graphics queue. Each dispatch gets
    copies of its constant and storage buffers in a host-visible arena and is recorded into a batch. The batch is
@@ -311,7 +311,7 @@ static CsPipe* cs_pipe(const u8* code, u32 lx, u32 ly, u32 lz, u32 shm) {
     p->si.cs_local[1] = ly;
     p->si.cs_local[2] = lz;
     p->si.shared_size = (int)shm;
-    const char* corpus = getenv("SWR_SHADER_CORPUS");
+    const char* corpus = getenv("SNX_SHADER_CORPUS");
     if (corpus) shader_corpus_save(corpus, code, blen, 0x10000 + 80, ST_CS, &p->si, key);
     char* src = vk_translate(code, 0x10000 + 80, ST_CS, &p->si, cs_cb_read, &p->cbr);
     if (!src || p->si.unsupported) {
@@ -482,7 +482,7 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
             bi[nw] = (VkDescriptorBufferInfo){g_ar, o, range};
             w[nw] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                            .dstSet = set,
-                                           .dstBinding = SWR_VKB_CB + i,
+                                           .dstBinding = SNX_VKB_CB + i,
                                            .descriptorCount = 1,
                                            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                                            .pBufferInfo = &bi[nw]};
@@ -502,7 +502,7 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
         bi[nw] = (VkDescriptorBufferInfo){g_ar, o, ss[i]};
         w[nw] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                        .dstSet = set,
-                                       .dstBinding = SWR_VKB_SSBO + i,
+                                       .dstBinding = SNX_VKB_SSBO + i,
                                        .descriptorCount = 1,
                                        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                        .pBufferInfo = &bi[nw]};
@@ -516,7 +516,7 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
         u64 tic_base = ((u64)rc[0x55D] << 32) | rc[0x55E], tsc_base = ((u64)rc[0x557] << 32) | rc[0x558];
         u32 tcb = rc[0x982] & 7;
         int fmt_used = 0;
-        i32 fmt[320] = {0}; /* SWR_FMT, std140: swr_ic[8] swr_tc[32] swr_ib[8] swr_tb[32], 16 bytes each */
+        i32 fmt[320] = {0}; /* SNX_FMT, std140: snx_ic[8] snx_tc[32] snx_ib[8] snx_tb[32], 16 bytes each */
         for (int i = 0; i < p->si.ntex && i < SH_MAXTEX; i++) {
             ShTex* st = &p->si.tex[i];
             u32 h = 0, h2 = 0;
@@ -541,7 +541,7 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
             ii[i] = (VkDescriptorImageInfo){smp, v, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             w[nw++] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                              .dstSet = set,
-                                             .dstBinding = SWR_VKB_TEX + i,
+                                             .dstBinding = SNX_VKB_TEX + i,
                                              .descriptorCount = 1,
                                              .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                              .pImageInfo = &ii[i]};
@@ -560,7 +560,7 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
             bi[nw] = (VkDescriptorBufferInfo){g_ar, o, sizeof fmt};
             w[nw] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                            .dstSet = set,
-                                           .dstBinding = SWR_VKB_FMT,
+                                           .dstBinding = SNX_VKB_FMT,
                                            .descriptorCount = 1,
                                            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                                            .pBufferInfo = &bi[nw]};

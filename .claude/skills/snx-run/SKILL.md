@@ -1,5 +1,5 @@
 ---
-name: swr-run
+name: snx-run
 description: "Run a recompiled game unattended and judge the result: scripted button input, timed exit, screenshots, reading the log, and repeat runs for intermittent crashes. Use when verifying a runtime change, reproducing a bug, checking a scene renders, measuring a crash rate, or when the user asks to run or test the game."
 ---
 
@@ -64,7 +64,7 @@ in a different order, so check the screenshots before trusting a script.
 - `diag=1` in the game's `.ini` saves the QMD and program of each new compute shader (the first 32) to
   `games/captures/compute/`. F5 writes every game thread's state to the log at any time.
 
-Crash reports are handled with the `swr-crash` skill.
+Crash reports are handled with the `snx-crash` skill.
 
 ## Intermittent bugs
 

@@ -4,7 +4,7 @@
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the SVC dispatch: each supervisor call the game makes, by number */
 #include "kernel/kernel_int.h"
-static void swr_svc_(CPU* c, u32 imm);
+static void snx_svc_(CPU* c, u32 imm);
 /* svcCreateEvent's writable end: SignalEvent and ClearEvent take it, WaitSynchronization doesn't */
 typedef struct {
     KObj o;
@@ -89,12 +89,12 @@ static void thread_context_nl(const KThread* n, u8* p) {
     memcpy(p + 0x318, &c->tpidr, 8);
 }
 
-void swr_svc(CPU* c, u32 imm) {
+void snx_svc(CPU* c, u32 imm) {
     u64 a0 = c->x[0], a1 = c->x[1], a2 = c->x[2];
     u64 a3 = c->x[3];
     KThread* t = kthread_cur();
     svc_enter(t);
-    swr_svc_(c, imm);
+    snx_svc_(c, imm);
     if (imm != 0x1E && imm != 0x0B && imm != 0x10) {
         u32 i = __atomic_fetch_add(&g_svc_ring_n, 1, __ATOMIC_RELAXED) & 63;
         SvcRec* r = &g_svc_ring[i];
@@ -115,7 +115,7 @@ void swr_svc(CPU* c, u32 imm) {
              (unsigned long long)a1, (unsigned long long)a2, (unsigned long long)c->pc);
     svc_leave(t);
 }
-static void swr_svc_(CPU* c, u32 imm) {
+static void snx_svc_(CPU* c, u32 imm) {
     KThread* t = kthread_cur();
     u64* x = c->x;
     switch (imm) {

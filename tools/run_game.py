@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
+# Copyright 2026 the ScarletNX contributors
 """Runs a recompiled game unattended, one or more times, and summarizes each run.
 
     tools/run_game.py Game                               # one 60 s run of the New Game script
@@ -80,7 +80,7 @@ def main():
     exe = os.path.join(games, a.game + ('.exe' if sys.platform == 'win32' else ''))
     if not os.path.isfile(exe):
         raise SystemExit('%s does not exist: build the runtime (it deploys there) or recompile the game' % exe)
-    out = a.out or tempfile.mkdtemp(prefix='swr-run-')
+    out = a.out or tempfile.mkdtemp(prefix='snx-run-')
     os.makedirs(out, exist_ok=True)
     failed, no_pillow = 0, False
     for i in range(1, a.runs + 1):

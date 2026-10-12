@@ -26,23 +26,23 @@
 #include <stdlib.h>
 #include <string.h>
 
-const SwrModule* g_mod;
+const SnxModule* g_mod;
 GuestFn* g_disp;
-GuestFn swr_interp_entry;
+GuestFn snx_interp_entry;
 char g_datadir[1024], g_exename[256], g_exedir[1024];
 volatile int g_quit;
 int g_frames;
 /* ============================================================ code module */
-typedef const SwrModule* (*ModFn)(void);
+typedef const SnxModule* (*ModFn)(void);
 #if !defined(_WIN32)
-__attribute__((weak)) const SwrModule* swr_module_static(void);
+__attribute__((weak)) const SnxModule* snx_module_static(void);
 #else
-const SwrModule* swr_module_static(void) __attribute__((weak));
+const SnxModule* snx_module_static(void) __attribute__((weak));
 #endif
 int g_code_tcc;
 static int load_code(void) {
-    if (swr_module_static) {
-        g_mod = swr_module_static();
+    if (snx_module_static) {
+        g_mod = snx_module_static();
         return g_mod ? 0 : -1;
     }
     char p[1200];
@@ -65,9 +65,9 @@ static int load_code(void) {
         WARN("Cannot load the recompiled code: %s\n%s\n", p, plat_dl_error());
         return -1;
     }
-    ModFn f = (ModFn)plat_dl_sym(h, "swr_module");
+    ModFn f = (ModFn)plat_dl_sym(h, "snx_module");
     if (!f) {
-        WARN("%s is not a SwitchRecomp module\n", p);
+        WARN("%s is not a ScarletNX module\n", p);
         return -1;
     }
 #if defined(_WIN32)
@@ -97,7 +97,7 @@ static void build_dispatch(void) {
         u64 a = g_mod->entry_addr[i];
         if (a >= g_code_lo && a < g_code_hi) g_disp[(a - g_code_lo) / 4] = g_mod->entry_fn[i];
     }
-    swr_interp_entry = g_mod->interp;
+    snx_interp_entry = g_mod->interp;
 }
 
 static void services_init(void) {
@@ -189,7 +189,7 @@ static int is_dump(const char* path) {
     return 0;
 }
 
-int swr_main(int argc, char** argv) {
+int snx_main(int argc, char** argv) {
     /* In an AppImage argv[0] points into its mount (APPDIR). APPIMAGE is the file that was run, so a copy named after
        the game (games/Catherine or games/Catherine.AppImage) finds games/Catherine_code.so like the bare runtime does.
        Both variables are inherited, so they only count when this runtime is the one inside the mount */
@@ -210,13 +210,13 @@ int swr_main(int argc, char** argv) {
        log is only created once a game's code has loaded */
     split_path(game && !dump ? game : in_appimage ? appimage : argv[0]);
     if (dump)
-        fatal("%s is a game dump. SwitchRecomp does not run dumps: it runs a game recompiled from one. Extract and "
+        fatal("%s is a game dump. ScarletNX does not run dumps: it runs a game recompiled from one. Extract and "
               "recompile it first with a clone of the repository (scripts/extract.py, then scripts/recomp.py, as "
               "the README describes), then point --game at the result, for example --game=games/Game.",
               dump);
     /* loaded before the .ini is opened, which writes one: a mistyped --game leaves no stray settings file */
     if (load_code()) fatal("Could not load the game's recompiled code.");
-    if (g_mod->abi != SWR_ABI) fatal("The recompiled code is from another SwitchRecomp version.");
+    if (g_mod->abi != SNX_ABI) fatal("The recompiled code is from another ScarletNX version.");
     /* --key=value sets a setting for this run, over the .ini. The value is used where it is, so a long --script
        isn't cut */
     for (int i = 1; i < argc; i++) {
@@ -238,7 +238,7 @@ int swr_main(int argc, char** argv) {
     present_init();
     plat_install_crash_handler();
     clock_start();
-    LOG("SwitchRecomp - %s\n", g_exename);
+    LOG("ScarletNX - %s\n", g_exename);
     g_title_id = g_mod->title_id;
     mem_init();
     kernel_init();

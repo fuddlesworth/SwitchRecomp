@@ -1,13 +1,13 @@
 # Architecture
 
-SwitchRecomp has two halves. The recompiler, a Python package, translates a game's ARM64 code to C once, ahead of
+ScarletNX has two halves. The recompiler, a Python package, translates a game's ARM64 code to C once, ahead of
 time, and builds it into `<Game>_code.so`. The runtime, a C program, loads that module and stands in for everything
 the game expects from the console: the kernel, the system services and the GPU. This page describes the parts, what
 each one owns, and how a frame gets from the game to the screen. `CLAUDE.md` lists the files in each folder.
 
 ## The recompiler
 
-`switchrecomp/` reads the extracted game (`work/<Game>/exefs` and `romfs`) and writes `games/<Game>`:
+`scarletnx/` reads the extracted game (`work/<Game>/exefs` and `romfs`) and writes `games/<Game>`:
 
 - `nxloader.py` loads the NSO executables (main, sdk, subsdks) and the RTLD, applies their relocations, and reads
   their symbols.
@@ -23,10 +23,10 @@ each one owns, and how a frame gets from the game to the screen. `CLAUDE.md` lis
 ## The contract between the module and the runtime
 
 `runtime/abi/` is compiled into both sides. `cpu.h` defines the guest CPU state (`CPU`: registers, flags, vector
-registers, the thread pointer registers), the dispatch lookup for indirect branches (`swr_lookup`), and `RtAPI`, the
+registers, the thread pointer registers), the dispatch lookup for indirect branches (`snx_lookup`), and `RtAPI`, the
 table of runtime functions the module calls: supervisor calls, undefined instructions, BRK, the system counter,
 FPCR changes and wait-for-event. `cpu_helpers.c`, with the topic files it includes from `helpers/`, holds the
-instructions too large to generate inline (SIMD, crypto, float conversions). `SWR_ABI` in `cpu.h` is the version of
+instructions too large to generate inline (SIMD, crypto, float conversions). `SNX_ABI` in `cpu.h` is the version of
 this contract: the runtime refuses a module built against another one, and changing any of these files means
 recompiling every game.
 

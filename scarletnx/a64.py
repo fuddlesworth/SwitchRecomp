@@ -10,7 +10,7 @@ Each instruction is one python function that emits its C. Used two ways:
   - dynamic: fields are decoded at runtime (fallback interpreter)
 so both paths share one implementation.
 
-Uncommon AdvSIMD ops call swr_simd() (hand written C), the common ones are inlined. codegen.emit_static_step and
+Uncommon AdvSIMD ops call snx_simd() (hand written C), the common ones are inlined. codegen.emit_static_step and
 codegen.gen_interp(step_mode=True) give one-instruction entry points for checking both against an emulator such as
 Unicorn.
 """
@@ -265,7 +265,7 @@ def _(g):
             return None
         imm = lit(m)
     else:
-        imm = 'swr_decode_bitmask(%s,%s,%s,%d)' % (g.f('N'), g.f('imms'), g.f('immr'), ds)
+        imm = 'snx_decode_bitmask(%s,%s,%s,%d)' % (g.f('N'), g.f('imms'), g.f('immr'), ds)
     src = g.X('rn') if sf else g.W('rn')
     opx = ['&', '|', '^', '&'][opc]
     e = '(%s%s%s)' % (src, opx, imm)
@@ -487,8 +487,8 @@ def _(g):
             return 'CBAR();'  # ISB
         if (crm & 3) in (1, 2):
             return 'CBAR();'  # DMB/DSB LD or ST only: x86 already keeps loads, and stores, in order (cpu.h)
-        return 'SWR_FENCE();'
-    return 'SWR_FENCE();'
+        return 'SNX_FENCE();'
+    return 'SNX_FENCE();'
 
 
 @ins('MSR_IMM', '1101010100000 xxx 0100 xxxx xxx 11111')
@@ -520,7 +520,7 @@ def _(g):
             return g.setX('rt', 'c->tpidrro')
         if r == SR_NZCV:
             return g.setX('rt', 'get_nzcv(c)')
-    return g.setX('rt', 'swr_mrs(c,%s)' % g.f('sysreg'))
+    return g.setX('rt', 'snx_mrs(c,%s)' % g.f('sysreg'))
 
 
 @ins('MSR', '1101010100 0 1 x xxx xxxx xxxx xxx xxxxx')
@@ -531,7 +531,7 @@ def _(g):
             return 'c->tpidr=%s;' % g.X('rt')
         if r == SR_NZCV:
             return 'set_nzcv(c,(u32)(%s>>28));' % g.X('rt')
-    return 'swr_msr(c,%s,%s);' % (g.f('sysreg'), g.X('rt'))
+    return 'snx_msr(c,%s,%s);' % (g.f('sysreg'), g.X('rt'))
 
 
 # ------------------------------------------------------------------ loads / stores
@@ -710,7 +710,7 @@ def _(g):
     if o2 and not o1:
         if L:
             return g.setX('rt', '*(volatile %s*)MP(%s)' % (['u8', 'u16', 'u32', 'u64'][size], A))
-        return '{ %s(%s,%s); SWR_FENCE(); }' % (WR[size], A, g.X('rt'))
+        return '{ %s(%s,%s); SNX_FENCE(); }' % (WR[size], A, g.X('rt'))
     return None
 
 
@@ -882,7 +882,7 @@ def _(g):
             11: 'ror64(%s,(u32)%s)',
         }.get(op)
         if op in (19, 23):
-            return g.setW('rd', 'swr_crc32(%s,%s,8,%d)' % (g.W('rn'), g.X('rm'), op >> 2 & 1))
+            return g.setW('rd', 'snx_crc32(%s,%s,8,%d)' % (g.W('rn'), g.X('rm'), op >> 2 & 1))
     else:
         e = {
             2: 'udiv32(%s,%s)',
@@ -893,7 +893,7 @@ def _(g):
             11: 'ror32(%s,%s)',
         }.get(op)
         if op in (16, 17, 18, 20, 21, 22):
-            return g.setW('rd', 'swr_crc32(%s,%s,%d,%d)' % (a, b, 1 << (op & 3), op >> 2 & 1))
+            return g.setW('rd', 'snx_crc32(%s,%s,%d,%d)' % (a, b, 1 << (op & 3), op >> 2 & 1))
     if not e:
         return None
     return (g.setX if sf else g.setW)('rd', e % (a, b))
@@ -1153,8 +1153,8 @@ def _(g):
 # ------------------------------------------------------------------ AdvSIMD
 def simd_fallback(g):
     if g.static:
-        return 'if(!swr_simd(c,M,%s)) UNDEF();' % lit(g.w)
-    return 'if(!swr_simd(c,M,w)) UNDEF();'
+        return 'if(!snx_simd(c,M,%s)) UNDEF();' % lit(g.w)
+    return 'if(!snx_simd(c,M,w)) UNDEF();'
 
 
 # structure ld/st and the whole "data processing - SIMD" group

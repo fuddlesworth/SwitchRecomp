@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* Vulkan renderer: shared state and the interfaces between its parts. Functions are loaded through volk from the
    loader the window backend gives (SDL's), so nothing links against a Vulkan library.
 
@@ -19,8 +19,8 @@
    Everything that records commands runs under vk_lock(), which is reentrant: submits come from the game's GPU channel
    threads, presents from the thread that queues a buffer, and compute results land on whichever thread reads their
    memory first. */
-#ifndef SWR_VK_H
-#define SWR_VK_H
+#ifndef SNX_VK_H
+#define SNX_VK_H
 #include "abi/cpu.h"
 #include "gpu/gpu.h"
 #include "volk.h"
