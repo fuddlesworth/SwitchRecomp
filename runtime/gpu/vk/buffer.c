@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* Guest memory ranges as buffers the GPU reads: vertices, indices and storage buffers. A range is checked once per
    guest submit (and again after the GPU front end wrote it). Data that changed is copied into the frame's staging
    ring, which draws read directly; data that stayed the same over a few checks gets a buffer of its own, written
@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "gpu/gpu.h"
+#include "gpu/renderer.h"
 #include "kernel/mem.h"
 #include "platform/log.h"
 #include "platform/plat.h"
@@ -43,11 +44,69 @@ static void ww_mark(u8* p, u64 n) {
     if (o >= AS_SIZE || !n) return;
     for (u64 pg = o >> 12, e = (o + n - 1) >> 12; pg <= e && pg < (AS_SIZE >> 12); pg++) {
         u64 l = pg >> (WW_LEAF_SHIFT - 12);
-        if (!g_wleaf[l] && !(g_wleaf[l] = calloc(1u << (WW_LEAF_SHIFT - 12), 4))) continue;
-        g_wleaf[l][pg & ((1u << (WW_LEAF_SHIFT - 12)) - 1)] = g_wclock;
+        if (!g_wleaf[l]) {
+            /* a leaf without a table stands for all its pages at its newest generation (ww_mark_range, or a table
+               that couldn't be allocated): a new table starts them there */
+            u32* t = calloc(1u << (WW_LEAF_SHIFT - 12), 4);
+            if (t && g_wleaf_max[l])
+                for (u32 i = 0; i < 1u << (WW_LEAF_SHIFT - 12); i++) t[i] = g_wleaf_max[l];
+            g_wleaf[l] = t;
+        }
+        if (g_wleaf[l]) g_wleaf[l][pg & ((1u << (WW_LEAF_SHIFT - 12)) - 1)] = g_wclock;
         g_wleaf_max[l] = g_wclock;
     }
 }
+/* the pages of guest memory [o, e) as written now. A leaf the range covers whole, and that has no table, only gets
+   its newest generation: kernel/mem.c can unmap gigabytes at once */
+static void ww_mark_range(u64 o, u64 e) {
+    const u64 lp = 1ull << (WW_LEAF_SHIFT - 12);
+    for (u64 pg = o >> 12, pe = (e + 4095) >> 12; pg < pe;) {
+        u64 l = pg >> (WW_LEAF_SHIFT - 12), lend = (l + 1) * lp, end = pe < lend ? pe : lend;
+        if (!g_wleaf[l] && pg == l * lp && end == lend)
+            g_wleaf_max[l] = g_wclock;
+        else
+            ww_mark(g_mem + (pg << 12), (end - pg) << 12);
+        pg = end;
+    }
+}
+
+/* ranges of guest memory changed without a write the tracking sees (vk_mem_changed: decommitted pages, which read
+   as zero now). Noted on the game's threads, outside vk_lock, and marked written by the next vk_written_since, as if
+   its scan had found them. When the list is full its last range grows to cover the new one, marking more than
+   changed: a cache over the rest only checks its contents once */
+typedef struct {
+    u64 a, e;
+} WwRange;
+#define WW_CHG_N 32
+static WwRange g_wchg[WW_CHG_N];
+static int g_wchg_n; /* atomic: read without the lock to skip it */
+static PMutex g_wchg_lock = PMUTEX_INIT;
+void vk_mem_changed(u64 cpu, u64 len) {
+    if (cpu >= AS_SIZE || !len) return;
+    u64 e = len > AS_SIZE - cpu ? AS_SIZE : cpu + len;
+    pm_lock(&g_wchg_lock);
+    int n = __atomic_load_n(&g_wchg_n, __ATOMIC_RELAXED);
+    if (n < WW_CHG_N) {
+        g_wchg[n] = (WwRange){cpu, e};
+        __atomic_store_n(&g_wchg_n, n + 1, __ATOMIC_RELEASE);
+    } else {
+        WwRange* r = &g_wchg[WW_CHG_N - 1];
+        if (cpu < r->a) r->a = cpu;
+        if (e > r->e) r->e = e;
+    }
+    pm_unlock(&g_wchg_lock);
+}
+static void ww_take_changed(void) {
+    if (!__atomic_load_n(&g_wchg_n, __ATOMIC_ACQUIRE)) return;
+    WwRange c[WW_CHG_N];
+    pm_lock(&g_wchg_lock);
+    int n = __atomic_load_n(&g_wchg_n, __ATOMIC_RELAXED);
+    memcpy(c, g_wchg, (size_t)n * sizeof *c);
+    __atomic_store_n(&g_wchg_n, 0, __ATOMIC_RELAXED);
+    pm_unlock(&g_wchg_lock);
+    for (int i = 0; i < n; i++) ww_mark_range(c[i].a, c[i].e);
+}
+
 int vk_written_since(const u8* host, u64 len, u32 since) {
     if (!g_ww || !host || !len) return -1;
     if (g_ww < 0) {
@@ -57,6 +116,7 @@ int vk_written_since(const u8* host, u64 len, u32 since) {
         if (!g_ww) return -1;
     }
     g_wclock++;
+    ww_take_changed();
     if (plat_ww_scan((u8*)host, len, ww_mark) < 0) {
         g_ww = 0;
         LOG("vulkan: write tracking failed, caches check contents\n");
@@ -65,9 +125,11 @@ int vk_written_since(const u8* host, u64 len, u32 since) {
     u64 o = (u64)(host - g_mem);
     for (u64 pg = o >> 12, e = (o + len - 1) >> 12; pg <= e;) {
         u64 l = pg >> (WW_LEAF_SHIFT - 12), lend = (l + 1) << (WW_LEAF_SHIFT - 12);
-        if (g_wleaf[l] && g_wleaf_max[l] > since)
+        if (g_wleaf_max[l] > since) {
+            if (!g_wleaf[l]) return 1; /* the whole leaf was marked */
             for (u64 q = pg; q <= e && q < lend; q++)
                 if (g_wleaf[l][q & ((1u << (WW_LEAF_SHIFT - 12)) - 1)] > since) return 1;
+        }
         pg = lend;
     }
     return 0;
@@ -88,25 +150,6 @@ static const u8* guest_bytes(u64 gva, u64 len) {
     }
     gmem_read(gva, g_tmp, len);
     return g_tmp;
-}
-
-static u64 sample_hash(u64 gva, u64 len) {
-    u8 tmp[2048 + 128];
-    if (len <= sizeof tmp) {
-        gmem_read(gva, tmp, len);
-        return vk_hash(tmp, len);
-    }
-    u32 n = 0;
-    gmem_read(gva, tmp, 64);
-    n = 64;
-    gmem_read(gva + len - 64, tmp + n, 64);
-    n += 64;
-    u64 step = (len - 32) / 62;
-    for (int i = 0; i < 62; i++) {
-        gmem_read(gva + (u64)i * step, tmp + n, 32);
-        n += 32;
-    }
-    return vk_hash(tmp, n);
 }
 
 int vk_buf_copy(u64 gva, u64 len, VkBuffer* buf, u64* off) {
@@ -159,6 +202,9 @@ static int make_own(Vb* e, const u8* src) {
 int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
     if (!len) return 0;
     if (vk_compute_gpu_src(gva, len, buf, off)) return 1; /* a compute result that hasn't landed yet */
+    /* one that covers the range only in part lands first (its write shows in gpu_mem_dirty_since below): the cached
+       copy would otherwise be used without it */
+    if (g_cs_any) vk_compute_mem_need(gva, len);
     u32 k = (u32)((gva >> 6) ^ (gva >> 20) ^ len) & (VBH - 1);
     Vb* e = g_vbh[k];
     for (; e; e = e->next)
@@ -178,7 +224,8 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
             return 1;
         }
         /* without it: own buffers that stayed the same for long are checked every few submits, big ones sampled in
-           between */
+           between. A CPU write in between shows that many submits late; writes of the GPU front end always show at
+           once (gpu_mem_dirty_since above) */
         if (w < 0 && e->own && e->stable >= 16 && len >= (64u << 10) && g_vk_epoch - e->chk_epoch < 8) {
             e->epoch = g_vk_epoch;
             use(e, buf, off);
@@ -191,7 +238,7 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
         }
         if (w < 0 && e->own && e->stable >= 64 && len >= 4096 &&
             g_vk_epoch - e->chk_epoch < (e->stable >= 256 ? 240u : 64u)) {
-            if (g_vk_epoch - e->schk < 4 || sample_hash(gva, len) == e->shash) {
+            if (g_vk_epoch - e->schk < 4 || vk_sample_hash(gva, len) == e->shash) {
                 if (g_vk_epoch - e->schk >= 4) e->schk = g_vk_epoch;
                 e->epoch = g_vk_epoch;
                 use(e, buf, off);
@@ -205,6 +252,7 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
     u64 h = vk_hash(src, len);
     if (!e) {
         e = calloc(1, sizeof *e);
+        if (!e) return 0;
         e->start = gva;
         e->len = len;
         e->hash = h ^ 1;
@@ -222,7 +270,7 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
     e->gw = g_gw_gen;
     e->wseen = wnow;
     if (e->stable >= 63 && len >= 4096) {
-        e->shash = sample_hash(gva, len);
+        e->shash = vk_sample_hash(gva, len);
         e->schk = g_vk_epoch;
     }
     if (!e->own && !(e->stable >= 2 && make_own(e, src))) {

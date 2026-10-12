@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* VulkanMemoryAllocator's implementation. Its Vulkan functions are fetched at run time, like the rest of the
    renderer's (volk). */
 #define VMA_STATIC_VULKAN_FUNCTIONS  0

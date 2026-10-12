@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Part of cpu_helpers.c, which includes it: floating point with exact ARM semantics: rounding, conversion to integers, min and max, NaNs, square root. Not compiled on its own. */
@@ -13,6 +13,67 @@ static f64 fabs_(f64 x) {
 }
 static int isnan64(f64 x) { return x != x; }
 static int isnan32(f32 x) { return x != x; }
+/* infinity from the exponent bits: comparing against a large constant also catches finite values near the maximum */
+static int isinf32(f32 x) {
+    u32 b;
+    memcpy(&b, &x, 4);
+    return (b & 0x7FFFFFFFu) == 0x7F800000u;
+}
+static int isinf64(f64 x) {
+    u64 b;
+    memcpy(&b, &x, 8);
+    return (b & 0x7FFFFFFFFFFFFFFFull) == 0x7FF0000000000000ull;
+}
+static int snan32(f32 x) {
+    u32 b;
+    memcpy(&b, &x, 4);
+    return isnan32(x) && !(b & 0x00400000u);
+}
+static int snan64(f64 x) {
+    u64 b;
+    memcpy(&b, &x, 8);
+    return isnan64(x) && !(b & 0x0008000000000000ull);
+}
+static f32 quiet32(f32 x) {
+    u32 b;
+    memcpy(&b, &x, 4);
+    b |= 0x00400000u;
+    memcpy(&x, &b, 4);
+    return x;
+}
+static f64 quiet64(f64 x) {
+    u64 b;
+    memcpy(&b, &x, 8);
+    b |= 0x0008000000000000ull;
+    memcpy(&x, &b, 8);
+    return x;
+}
+/* FPProcessNaNs, for when a or b is a NaN: the first signalling NaN quieted, else the first quiet NaN */
+static f32 pnan32(f32 a, f32 b) {
+    if (snan32(a)) return quiet32(a);
+    if (snan32(b)) return quiet32(b);
+    return isnan32(a) ? a : b;
+}
+static f64 pnan64(f64 a, f64 b) {
+    if (snan64(a)) return quiet64(a);
+    if (snan64(b)) return quiet64(b);
+    return isnan64(a) ? a : b;
+}
+/* FPMulAdd's NaN result, for when d + a*b came out a NaN (FMLA32's rare path in cpu.h): FPProcessNaNs3 over the
+   addend, op1 and op2 (the first signalling NaN quieted, else the first quiet NaN), except that a quiet NaN addend
+   with inf*0 gives the default NaN, as does an invalid operation on numbers (inf*0, inf-inf) */
+f32 fp_fmanan32(f32 d, f32 a, f32 b) {
+    u32 n = 0x7FC00000u;
+    f32 r;
+    if (snan32(d)) return quiet32(d);
+    if (snan32(a)) return quiet32(a);
+    if (snan32(b)) return quiet32(b);
+    if (isnan32(d) && !((isinf32(a) && b == 0) || (a == 0 && isinf32(b)))) return d;
+    if (isnan32(a)) return a;
+    if (isnan32(b)) return b;
+    memcpy(&r, &n, 4);
+    return r;
+}
 static f64 trunc_(f64 x) {
     if (!(fabs_(x) < 4503599627370496.0)) return x;
     f64 r = (f64)(i64)x;
@@ -53,6 +114,7 @@ static f64 rna_(f64 x) {
 }
 f64 fp_round(f64 x, int rm) {
     if (x == 0) return x;
+    if (isnan64(x)) return quiet64(x);
     switch (rm) {
         case 0: return rne_(x);
         case 1: return ceil_(x);
@@ -62,8 +124,6 @@ f64 fp_round(f64 x, int rm) {
     }
 }
 f32 fp_round32(f32 x, int rm) { return (f32)fp_round((f64)x, rm); }
-f32 fp_frintx32(f32 x) { return (f32)rne_(x); }
-f64 fp_frintx64(f64 x) { return rne_(x); }
 
 i64 fcvt_s64(f64 x, int rm) {
     if (isnan64(x)) return 0;
@@ -97,8 +157,7 @@ u32 fcvt_u32(f64 x, int rm) {
 
 /* ================================================================ min/max */
 f32 fp_max32(f32 a, f32 b) {
-    if (isnan32(a)) return a + a;
-    if (isnan32(b)) return b + b;
+    if (isnan32(a) || isnan32(b)) return pnan32(a, b);
     if (a == 0 && b == 0) {
         u32 x, y;
         memcpy(&x, &a, 4);
@@ -108,8 +167,7 @@ f32 fp_max32(f32 a, f32 b) {
     return a > b ? a : b;
 }
 f32 fp_min32(f32 a, f32 b) {
-    if (isnan32(a)) return a + a;
-    if (isnan32(b)) return b + b;
+    if (isnan32(a) || isnan32(b)) return pnan32(a, b);
     if (a == 0 && b == 0) {
         u32 x, y;
         memcpy(&x, &a, 4);
@@ -119,8 +177,7 @@ f32 fp_min32(f32 a, f32 b) {
     return a < b ? a : b;
 }
 f64 fp_max64(f64 a, f64 b) {
-    if (isnan64(a)) return a + a;
-    if (isnan64(b)) return b + b;
+    if (isnan64(a) || isnan64(b)) return pnan64(a, b);
     if (a == 0 && b == 0) {
         u64 x, y;
         memcpy(&x, &a, 8);
@@ -130,8 +187,7 @@ f64 fp_max64(f64 a, f64 b) {
     return a > b ? a : b;
 }
 f64 fp_min64(f64 a, f64 b) {
-    if (isnan64(a)) return a + a;
-    if (isnan64(b)) return b + b;
+    if (isnan64(a) || isnan64(b)) return pnan64(a, b);
     if (a == 0 && b == 0) {
         u64 x, y;
         memcpy(&x, &a, 8);
@@ -140,16 +196,8 @@ f64 fp_min64(f64 a, f64 b) {
     }
     return a < b ? a : b;
 }
-static int qnan32(f32 a) {
-    u32 x;
-    memcpy(&x, &a, 4);
-    return isnan32(a) && (x & 0x00400000);
-}
-static int qnan64(f64 a) {
-    u64 x;
-    memcpy(&x, &a, 8);
-    return isnan64(a) && (x & 0x0008000000000000ull);
-}
+static int qnan32(f32 a) { return isnan32(a) && !snan32(a); }
+static int qnan64(f64 a) { return isnan64(a) && !snan64(a); }
 f32 fp_maxnm32(f32 a, f32 b) {
     if (qnan32(a) && !isnan32(b)) return b;
     if (qnan32(b) && !isnan32(a)) return a;
@@ -170,34 +218,8 @@ f64 fp_minnm64(f64 a, f64 b) {
     if (qnan64(b) && !isnan64(a)) return a;
     return fp_min64(a, b);
 }
-f32 fp_nan32(f32 r, f32 a, f32 b) {
-    (void)a;
-    (void)b;
-    return r;
-}
-f64 fp_nan64(f64 r, f64 a, f64 b) {
-    (void)a;
-    (void)b;
-    return r;
-}
-f32 fp_abd32(f32 a, f32 b) {
-    f32 d = a - b;
-    return d < 0 ? -d : d;
-}
 
-void fp_cmp64(CPU* c, f64 a, f64 b) {
-    if (isnan64(a) || isnan64(b))
-        set_nzcv(c, 3);
-    else if (a == b)
-        set_nzcv(c, 6);
-    else if (a < b)
-        set_nzcv(c, 8);
-    else
-        set_nzcv(c, 2);
-}
-void fp_cmp32(CPU* c, f32 a, f32 b) { fp_cmp64(c, a, b); }
-
-/* sqrt: one Newton step on top of the hw estimate */
+/* sqrt: the compiler's (sqrtsd) */
 f64 fp_sqrt64(f64 x) {
     if (x < 0) {
         u64 n = 0x7FF8000000000000ull;
@@ -214,25 +236,28 @@ f32 fp_sqrt32(f32 x) {
     }
     return (f32)fp_sqrt64((f64)x);
 }
-#if defined(__FMA__)
-f32 fp_fma32(f32 a, f32 b, f32 c) { return __builtin_fmaf(a, b, c); }
-f64 fp_fma64(f64 a, f64 b, f64 c) { return __builtin_fma(a, b, c); }
-#else
-f32 fp_fma32(f32 a, f32 b, f32 c) { return (f32)((f64)a * (f64)b + (f64)c); } /* product is exact in double */
-f64 fp_fma64(f64 a, f64 b, f64 c) { return a * b + c; }
-#endif
+/* the same as the FMLA32/FMLA64 macros in cpu.h, see there */
+f32 fp_fma32(f32 a, f32 b, f32 c) { return FMLA32(c, a, b); }
+f64 fp_fma64(f64 a, f64 b, f64 c) { return FMLA64(c, a, b); }
+static int signbit32(f32 x) {
+    u32 b;
+    memcpy(&b, &x, 4);
+    return (int)(b >> 31);
+}
+static int signbit64(f64 x) {
+    u64 b;
+    memcpy(&b, &x, 8);
+    return (int)(b >> 63);
+}
+/* FPMulX: infinity times zero is 2 with the sign of the product, zeros included */
 f32 fp_mulx32(f32 a, f32 b) {
-    if ((a == 0 && (b > 3.4e38f || b < -3.4e38f)) || (b == 0 && (a > 3.4e38f || a < -3.4e38f))) {
-        u32 s = ((a < 0) ^ (b < 0));
-        return s ? -2.0f : 2.0f;
-    }
+    if (isnan32(a) || isnan32(b)) return pnan32(a, b);
+    if ((a == 0 && isinf32(b)) || (b == 0 && isinf32(a))) return signbit32(a) ^ signbit32(b) ? -2.0f : 2.0f;
     return a * b;
 }
 f64 fp_mulx64(f64 a, f64 b) {
-    if ((a == 0 && (b > 1.7e308 || b < -1.7e308)) || (b == 0 && (a > 1.7e308 || a < -1.7e308))) {
-        u32 s = ((a < 0) ^ (b < 0));
-        return s ? -2.0 : 2.0;
-    }
+    if (isnan64(a) || isnan64(b)) return pnan64(a, b);
+    if ((a == 0 && isinf64(b)) || (b == 0 && isinf64(a))) return signbit64(a) ^ signbit64(b) ? -2.0 : 2.0;
     return a * b;
 }
 
@@ -253,7 +278,8 @@ static u32 rsqrt_est(u32 a) { /* a in [128,511] */
     while (a * (b + 1) * (b + 1) < (1u << 28)) b++;
     return (b + 1) >> 1;
 }
-/* FPRecipEstimate / FPRSqrtEstimate, f32 and f64, assumes RN and no FZ */
+/* FPRecipEstimate / FPRSqrtEstimate, f32 and f64, assume RN and no FZ (an overflow gives +-inf whatever FPCR's
+   rounding mode) */
 static u64 recpe_bits(u64 op, int N) {
     int eb = N == 64 ? 11 : 8, fbits = N == 64 ? 52 : 23;
     u64 s = op >> (N - 1) << (N - 1);
@@ -335,21 +361,33 @@ f64 fp_rsqrte64(f64 x) {
     memcpy(&x, &b, 8);
     return x;
 }
+/* FPRecipStepFused / FPRSqrtStepFused: the first operand is negated before anything else (a NaN in it comes out with
+   its sign flipped), then 2 + a*b or (3 + a*b) / 2 with one rounding. For the second, halving the larger operand
+   instead of the sum keeps 3 + a*b from overflowing on the way (and is exact: only a tiny operand would lose a bit,
+   and then the product doesn't reach the result) */
 f32 fp_recps32(f32 a, f32 b) {
-    if ((a == 0 && (b > 3.4e38f || b < -3.4e38f)) || (b == 0 && (a > 3.4e38f || a < -3.4e38f))) return 2.0f;
-    return 2.0f - a * b;
+    a = -a;
+    if (isnan32(a) || isnan32(b)) return pnan32(a, b);
+    if ((a == 0 && isinf32(b)) || (b == 0 && isinf32(a))) return 2.0f;
+    return fp_fma32(a, b, 2.0f);
 }
 f64 fp_recps64(f64 a, f64 b) {
-    if ((a == 0 && (b > 1.7e308 || b < -1.7e308)) || (b == 0 && (a > 1.7e308 || a < -1.7e308))) return 2.0;
-    return 2.0 - a * b;
+    a = -a;
+    if (isnan64(a) || isnan64(b)) return pnan64(a, b);
+    if ((a == 0 && isinf64(b)) || (b == 0 && isinf64(a))) return 2.0;
+    return fp_fma64(a, b, 2.0);
 }
 f32 fp_rsqrts32(f32 a, f32 b) {
-    if ((a == 0 && (b > 3.4e38f || b < -3.4e38f)) || (b == 0 && (a > 3.4e38f || a < -3.4e38f))) return 1.5f;
-    return (3.0f - a * b) / 2.0f;
+    a = -a;
+    if (isnan32(a) || isnan32(b)) return pnan32(a, b);
+    if ((a == 0 && isinf32(b)) || (b == 0 && isinf32(a))) return 1.5f;
+    return fabs_(a) >= fabs_(b) ? fp_fma32(a * 0.5f, b, 1.5f) : fp_fma32(a, b * 0.5f, 1.5f);
 }
 f64 fp_rsqrts64(f64 a, f64 b) {
-    if ((a == 0 && (b > 1.7e308 || b < -1.7e308)) || (b == 0 && (a > 1.7e308 || a < -1.7e308))) return 1.5;
-    return (3.0 - a * b) / 2.0;
+    a = -a;
+    if (isnan64(a) || isnan64(b)) return pnan64(a, b);
+    if ((a == 0 && isinf64(b)) || (b == 0 && isinf64(a))) return 1.5;
+    return fabs_(a) >= fabs_(b) ? fp_fma64(a * 0.5, b, 1.5) : fp_fma64(a, b * 0.5, 1.5);
 }
 u32 urecpe32(u32 x) {
     if (!(x & 0x80000000u)) return 0xFFFFFFFFu;
@@ -387,7 +425,7 @@ f32 f16_to_f32(u16 h) {
     int e = (h >> 10) & 0x1F;
     u32 m = h & 0x3FF, r;
     if (e == 0x1F)
-        r = s | 0x7F800000 | (m << 13);
+        r = s | 0x7F800000 | (m << 13) | (m ? 0x00400000u : 0); /* a signalling NaN comes out quiet */
     else if (e == 0) {
         if (!m)
             r = s;
@@ -406,4 +444,25 @@ f32 f16_to_f32(u16 h) {
     memcpy(&f, &r, 4);
     return f;
 }
-u16 f64_to_f16(f64 x) { return f32_to_f16((f32)x); }
+/* straight from the double: going through f32 would round twice */
+u16 f64_to_f16(f64 x) {
+    u64 b;
+    memcpy(&b, &x, 8);
+    u32 s = (u32)(b >> 48) & 0x8000;
+    int e = (int)((b >> 52) & 0x7FF) - 1023 + 15;
+    u64 m = b & 0xFFFFFFFFFFFFFull;
+    if (((b >> 52) & 0x7FF) == 0x7FF) return (u16)(s | 0x7C00 | (m ? 0x200 | (u32)(m >> 42) : 0));
+    if (e >= 31) return (u16)(s | 0x7C00);
+    if (e <= 0) {
+        if (e < -10) return (u16)s;
+        m |= 1ull << 52;
+        u32 sh = (u32)(43 - e);
+        u64 r = m >> sh, rem = m & ((1ull << sh) - 1), half = 1ull << (sh - 1);
+        if (rem > half || (rem == half && (r & 1))) r++;
+        return (u16)(s | r);
+    }
+    u32 r = ((u32)e << 10) | (u32)(m >> 42);
+    u64 rem = m & ((1ull << 42) - 1);
+    if (rem > (1ull << 41) || (rem == (1ull << 41) && (r & 1))) r++;
+    return (u16)(s | r);
+}

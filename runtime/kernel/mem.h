@@ -1,10 +1,10 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the guest address space (mem.c) */
-#ifndef SWR_MEM_H
-#define SWR_MEM_H
+#ifndef SNX_MEM_H
+#define SNX_MEM_H
 #include "abi/cpu.h"
 #include <string.h>
 
@@ -48,16 +48,16 @@ typedef struct {
     u32 state, perm, attr, ipc, dev;
 } MemBlock;
 void mem_init(void);
-int mem_map(u64 addr, u64 size, u32 state, u32 perm); /* 0 ok */
+int mem_map(u64 addr, u64 size, u32 state, u32 perm); /* 0 ok, -1 not free, -2 no host memory */
+u64 mem_map_holes(u64 addr, u64 size, u32 state, u32 perm);
 int mem_unmap(u64 addr, u64 size);
-int mem_is_free(u64 addr, u64 size);
 void mem_query(u64 addr, MemBlock* out);
 int mem_set_state(u64 addr, u64 size, u32 state, u32 perm);
 int mem_set_attr(u64 addr, u64 size, u32 mask, u32 attr);
 u64 mem_find_free(u64 lo, u64 hi, u64 size, u64 align);
 u64 kmem_alloc(u64 size, u32 state, u32 perm); /* reserved for the kernel */
 u64 mem_heap_set(u64 size);
-extern u64 g_heap_size, g_heap_max;
+extern u64 g_heap_size, g_heap_max; /* g_heap_max: heap_max_mb's cap, 0 = none */
 #define GP(a) (g_mem + (u64)(a))
 static inline u32 gr32(u64 a) {
     u32 v;

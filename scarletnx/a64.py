@@ -1,5 +1,5 @@
 # SwitchRecomp - Copyright 2026 MZ Labs
-# Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+# Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
 # any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
 # This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE).
 """
@@ -10,8 +10,9 @@ Each instruction is one python function that emits its C. Used two ways:
   - dynamic: fields are decoded at runtime (fallback interpreter)
 so both paths share one implementation.
 
-Uncommon AdvSIMD ops call swr_simd() (hand written C, tested against Unicorn like everything else),
-the common ones are inlined.
+Uncommon AdvSIMD ops call snx_simd() (hand written C), the common ones are inlined. codegen.emit_static_step and
+codegen.gen_interp(step_mode=True) give one-instruction entry points for checking both against an emulator such as
+Unicorn.
 """
 
 FIELDS = {
@@ -173,9 +174,6 @@ class G:
     def setWS(self, n, e):
         return 'c->x[%s]=(u64)(u32)(%s);' % (self.f(n), e)
 
-    def Vr(self, n):
-        return 'c->v[%s]' % self.f(n)
-
 
 # ======================================================================= table
 TABLE = []
@@ -197,10 +195,6 @@ def ins(name, pattern, spec=(), kind=None):
         return fn
 
     return deco
-
-
-def sel_ds(g):
-    return 64 if g.v('sf') else 32
 
 
 # ------------------------------------------------------------------ PC-relative
@@ -271,7 +265,7 @@ def _(g):
             return None
         imm = lit(m)
     else:
-        imm = 'swr_decode_bitmask(%s,%s,%s,%d)' % (g.f('N'), g.f('imms'), g.f('immr'), ds)
+        imm = 'snx_decode_bitmask(%s,%s,%s,%d)' % (g.f('N'), g.f('imms'), g.f('immr'), ds)
     src = g.X('rn') if sf else g.W('rn')
     opx = ['&', '|', '^', '&'][opc]
     e = '(%s%s%s)' % (src, opx, imm)
@@ -375,7 +369,8 @@ def _(g):
         if sf:
             if lsb == 0:
                 return g.setX('rd', g.X('rm'))
-            return g.setX('rd', '(%s>>%d)|(%s<<%d)' % (g.X('rm'), lsb, g.X('rn'), 64 - lsb))
+            # (u64): XZR is the literal 0, an int that can't be shifted by 32 or more
+            return g.setX('rd', '((u64)%s>>%d)|((u64)%s<<%d)' % (g.X('rm'), lsb, g.X('rn'), 64 - lsb))
         if lsb == 0:
             return g.setW('rd', g.W('rm'))
         return g.setW('rd', '((u32)%s>>%d)|((u32)%s<<%d)' % (g.W('rm'), lsb, g.W('rn'), 32 - lsb))
@@ -427,7 +422,7 @@ def _(g):
 def _(g):
     if g.static:
         bit = (g.v('b5') << 5) | g.v('b40')
-        e = '((%s>>%d)&1)' % (g.X('rt'), bit)
+        e = '(((u64)%s>>%d)&1)' % (g.X('rt'), bit)  # (u64): XZR is the literal 0, an int
         t = g.pcv + g.v('imm14') * 4
     else:
         e = '((%s>>((%s<<5)|%s))&1)' % (g.X('rt'), g.f('b5'), g.f('b40'))
@@ -490,10 +485,10 @@ def _(g):
         crm = g.v('CRm')
         if op2 == 6:
             return 'CBAR();'  # ISB
-        if (crm & 3) == 1:
-            return 'CBAR();'  # DMB/DSB ld-only
-        return 'SWR_FENCE();'
-    return 'SWR_FENCE();'
+        if (crm & 3) in (1, 2):
+            return 'CBAR();'  # DMB/DSB LD or ST only: x86 already keeps loads, and stores, in order (cpu.h)
+        return 'SNX_FENCE();'
+    return 'SNX_FENCE();'
 
 
 @ins('MSR_IMM', '1101010100000 xxx 0100 xxxx xxx 11111')
@@ -525,7 +520,7 @@ def _(g):
             return g.setX('rt', 'c->tpidrro')
         if r == SR_NZCV:
             return g.setX('rt', 'get_nzcv(c)')
-    return g.setX('rt', 'swr_mrs(c,%s)' % g.f('sysreg'))
+    return g.setX('rt', 'snx_mrs(c,%s)' % g.f('sysreg'))
 
 
 @ins('MSR', '1101010100 0 1 x xxx xxxx xxxx xxx xxxxx')
@@ -536,7 +531,7 @@ def _(g):
             return 'c->tpidr=%s;' % g.X('rt')
         if r == SR_NZCV:
             return 'set_nzcv(c,(u32)(%s>>28));' % g.X('rt')
-    return 'swr_msr(c,%s,%s);' % (g.f('sysreg'), g.X('rt'))
+    return 'snx_msr(c,%s,%s);' % (g.f('sysreg'), g.X('rt'))
 
 
 # ------------------------------------------------------------------ loads / stores
@@ -820,7 +815,8 @@ def _(g):
     if sf:
         if S:
             return g.setX('rd', ('sbcs64(c,%s,%s,c->cf)' if op else 'adds64(c,%s,%s,c->cf)') % (a, b))
-        return g.setX('rd', ('%s+~%s+c->cf' if op else '%s+%s+c->cf') % (a, b))
+        # (u64): with XZR operands, 0+~0 would be computed as an int
+        return g.setX('rd', ('(u64)%s+~(u64)%s+c->cf' if op else '(u64)%s+(u64)%s+c->cf') % (a, b))
     if S:
         return g.setW('rd', ('sbcs32(c,%s,%s,c->cf)' if op else 'adds32(c,%s,%s,c->cf)') % (a, b))
     return g.setW('rd', ('(u32)%s+~(u32)%s+c->cf' if op else '(u32)%s+(u32)%s+c->cf') % (a, b))
@@ -881,13 +877,13 @@ def _(g):
         e = {
             2: 'udiv64(%s,%s)',
             3: '(u64)sdiv64((i64)%s,(i64)%s)',
-            8: '%s<<(%s&63)',
-            9: '%s>>(%s&63)',
+            8: '(u64)%s<<(%s&63)',  # (u64): XZR is the literal 0, an int
+            9: '(u64)%s>>(%s&63)',
             10: '(u64)((i64)%s>>(%s&63))',
             11: 'ror64(%s,(u32)%s)',
         }.get(op)
         if op in (19, 23):
-            return g.setW('rd', 'swr_crc32(%s,%s,8,%d)' % (g.W('rn'), g.X('rm'), op >> 2 & 1))
+            return g.setW('rd', 'snx_crc32(%s,%s,8,%d)' % (g.W('rn'), g.X('rm'), op >> 2 & 1))
     else:
         e = {
             2: 'udiv32(%s,%s)',
@@ -898,7 +894,7 @@ def _(g):
             11: 'ror32(%s,%s)',
         }.get(op)
         if op in (16, 17, 18, 20, 21, 22):
-            return g.setW('rd', 'swr_crc32(%s,%s,%d,%d)' % (a, b, 1 << (op & 3), op >> 2 & 1))
+            return g.setW('rd', 'snx_crc32(%s,%s,%d,%d)' % (a, b, 1 << (op & 3), op >> 2 & 1))
     if not e:
         return None
     return (g.setX if sf else g.setW)('rd', e % (a, b))
@@ -954,9 +950,9 @@ def _(g):
         5: 'fp_min%d(%%s,%%s)' % T,
         6: 'fp_maxnm%d(%%s,%%s)' % T,
         7: 'fp_minnm%d(%%s,%%s)' % T,
-        8: '-(%s*%s)',
-    }[op] % (a, b)
-    return fset(g, 'rd', sz, e)
+        8: 'fnmul%d(%%s,%%s)' % T,  # not -(a*b): see cpu.h
+    }[op]
+    return fset(g, 'rd', sz, e % (a, b))
 
 
 @ins('FP1', '0 0 0 11110 xx 1 xxxxxx 10000 xxxxx xxxxx', spec=('ftype', 'fop1'))
@@ -973,7 +969,6 @@ def _(g):
         return None
     sz = ft
     a = fsrc(g, 'rn', sz)
-    B = 'd[0]' if sz else 's[0]'
     if op == 0:
         return ('SETDB(%s,c->v[%s].d[0]);' if sz else 'SETSB(%s,c->v[%s].s[0]);') % (d, n)
     if op == 1:
@@ -1069,7 +1064,7 @@ def _(g):
         a = '-' + a
     if o0 ^ o1:
         n = '-' + n
-    return fset(g, 'rd', ft, 'fp_fma%d(%s,%s,%s)' % (T, n, m, a))
+    return fset(g, 'rd', ft, 'FMLA%d(%s,%s,%s)' % (T, a, n, m))
 
 
 @ins('FCVT_INT', 'x 0 0 11110 xx 1 xx xxx 000000 xxxxx xxxxx', spec=('sf', 'ftype', 'rmode', 'fop'))
@@ -1149,15 +1144,18 @@ def _(g):
         src = g.X('rn') if sf else g.W('rn')
         if op == 2:
             src = '(i64)' + src if sf else '(i32)' + src
-        return fset(g, 'rd', ft, '(%s)((f64)%s/%s)' % ('f64' if ft else 'f32', src, scale))
+        # convert straight to the target type, then the exact division by the power of two: going through f64 would
+        # round a 64-bit integer twice on the way to f32
+        T = 'f64' if ft else 'f32'
+        return fset(g, 'rd', ft, '(%s)%s/(%s)%s' % (T, src, T, scale))
     return None
 
 
 # ------------------------------------------------------------------ AdvSIMD
 def simd_fallback(g):
     if g.static:
-        return 'if(!swr_simd(c,M,%s)) UNDEF();' % lit(g.w)
-    return 'if(!swr_simd(c,M,w)) UNDEF();'
+        return 'if(!snx_simd(c,M,%s)) UNDEF();' % lit(g.w)
+    return 'if(!snx_simd(c,M,w)) UNDEF();'
 
 
 # structure ld/st and the whole "data processing - SIMD" group
@@ -1359,11 +1357,15 @@ def _(g):
 
 @ins('SIMD_DP2', '0 1 x 1 111 x xxxxxxxxxxxxxxxxxxxxxxxx')
 def _(g):
+    if g.static:
+        f = fast_simd(g)  # only its scalar FMUL/FMLA/FMLS by element applies to this group
+        if f:
+            return f
     return simd_fallback(g)
 
 
 # ======================================================================= decode
-# bucketed on the top 11 bits, most specific pattern first
+# bucketed on the top 11 bits; the first match in TABLE (declaration) order wins, and no two patterns overlap
 BUCKET_BITS = 21  # w>>21
 
 
@@ -1418,7 +1420,6 @@ def gen_interp_cases():
     """Interpreter C: switch on the top 11 bits, specialized by fields."""
     import itertools
 
-    out = []
     bodies = {}
     for i, (name, m, v, spec, fn) in enumerate(TABLE):
         cases = []

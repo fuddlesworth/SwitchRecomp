@@ -1,10 +1,10 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* IPC (ipc.c): service objects, sessions, the request and reply helpers, the service registry */
-#ifndef SWR_IPC_H
-#define SWR_IPC_H
+#ifndef SNX_IPC_H
+#define SNX_IPC_H
 #include "abi/cpu.h"
 #include "kernel/kernel.h"
 #include <string.h>
@@ -30,7 +30,6 @@ typedef struct IpcCtx {
     int ncopy, nmove;
     IpcBuf a[MAX_BUFS], b[MAX_BUFS], w[MAX_BUFS], x[MAX_BUFS], c[MAX_BUFS];
     int na, nb, nw, nx, nc;
-    u32 x_counters[MAX_BUFS];
     int is_domain;
     u32 domain_obj;
     u32 in_objs[8];
@@ -44,8 +43,6 @@ typedef struct IpcCtx {
     int nout_copy, nout_move;
     struct SvcObj* out_objs[8];
     int nout_objs;
-    u64 x_out_addr[MAX_BUFS], x_out_size[MAX_BUFS];
-    int nx_out;
     struct KSession* sess;
 } IpcCtx;
 
@@ -86,33 +83,39 @@ static inline u64 in64(IpcCtx* c, u32 off) {
     return v;
 }
 static inline u8 in8(IpcCtx* c, u32 off) { return off < c->raw_size ? c->raw[off] : 0; }
-/* building the reply */
+/* building the reply. What doesn't fit in out[] is dropped, and logged once */
+void ipc_out_overflow(IpcCtx* c);
+static inline int out_fits(IpcCtx* c, u32 n) {
+    if (n <= sizeof c->out - c->out_size) return 1;
+    ipc_out_overflow(c);
+    return 0;
+}
 static inline void out32(IpcCtx* c, u32 v) {
+    if (!out_fits(c, 4)) return;
     memcpy(c->out + c->out_size, &v, 4);
     c->out_size += 4;
 }
 static inline void out64(IpcCtx* c, u64 v) {
     c->out_size = (c->out_size + 7) & ~7u;
+    if (!out_fits(c, 8)) return;
     memcpy(c->out + c->out_size, &v, 8);
     c->out_size += 8;
 }
-static inline void out8(IpcCtx* c, u8 v) { c->out[c->out_size++] = v; }
+static inline void out8(IpcCtx* c, u8 v) {
+    if (out_fits(c, 1)) c->out[c->out_size++] = v;
+}
 static inline void outbytes(IpcCtx* c, const void* p, u32 n) {
+    if (!out_fits(c, n)) return;
     memcpy(c->out + c->out_size, p, n);
     c->out_size += n;
 }
-static inline void outpad(IpcCtx* c, u32 al) { c->out_size = (c->out_size + al - 1) & ~(al - 1); }
 void out_copy_h(IpcCtx* c, u32 h);
 void out_move_h(IpcCtx* c, u32 h);
 void out_obj(IpcCtx* c, SvcObj* o);
 /* buffers: in = A or X, out = B or C */
 int buf_in(IpcCtx* c, int idx, u64* addr, u64* size);
 int buf_out(IpcCtx* c, int idx, u64* addr, u64* size);
-void buf_x_out(IpcCtx* c, int idx, u64 addr, u64 size); /* mark a C buffer used (needed for the reply X descriptor) */
-int buf_a(IpcCtx* c, int idx, u64* addr, u64* size);
-int buf_b(IpcCtx* c, int idx, u64* addr, u64* size);
 int buf_xs(IpcCtx* c, int idx, u64* addr, u64* size);
-int buf_cs(IpcCtx* c, int idx, u64* addr, u64* size);
 #define RC(mod, desc) ((mod) | ((desc) << 9))
 #define RC_OK         0
 int stub_ok(SvcObj* o, IpcCtx* c);

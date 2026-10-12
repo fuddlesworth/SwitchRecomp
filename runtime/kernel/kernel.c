@@ -1,29 +1,16 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
-/* HLE kernel: handles, objects, guest threads (1:1 host threads), sync (events, mutex/condvar,
-   address arbiter) and the SVCs games actually call. */
-#include "kernel/kernel.h"
-#include "core/loader.h"
-#include "kernel/ipc.h"
-#include "kernel/mem.h"
-#include "platform/log.h"
-#include "platform/plat.h"
-#include "core/rtapi.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+/* HLE kernel objects: handles, references, waiting and waking, events. Threads are in thread.c, synchronization in
+   sync.c, the SVCs in svc.c and svc_mem.c */
 #include "kernel/kernel_int.h"
 
 PMutex g_klock;
 u64 g_title_id = 0x0100000000001000ull;
 u64 g_sysres_size;
-int g_exiting;
 u64 g_next_tid = 0x50;
 
-#define R_BADSIZE  0xCA01
-#define R_BADCOMBO 0xE801
 SvcRec g_svc_ring[64];
 u32 g_svc_ring_n;
 
@@ -72,6 +59,15 @@ KObj* h_get_type(u32 h, int t) {
     KObj* o = h_get(h);
     return (o && o->type == t) ? o : NULL;
 }
+/* the ref keeps the object alive while the caller uses it, even if another thread closes the handle meanwhile */
+KObj* h_get_ref(u32 h, int t) {
+    pm_lock(&g_klock);
+    KObj* o = h_get_nl(h);
+    if (o && t && o->type != t) o = NULL;
+    kobj_ref(o);
+    pm_unlock(&g_klock);
+    return o;
+}
 int h_close(u32 h) {
     pm_lock(&g_klock);
     u32 i = h & 0x7FFF;
@@ -109,14 +105,9 @@ void wake(KThread* t, int result) {
 void kobj_signal_nl(KObj* o) {
     for (int i = 0; i < o->nwait; i++) wake(o->waiters[i], 0);
 }
-void kobj_signal(KObj* o) {
-    pm_lock(&g_klock);
-    kobj_signal_nl(o);
-    pm_unlock(&g_klock);
-}
 /* call with the lock held. 1 = woken, 0 = timeout */
 int sleep_nl(KThread* t, i64 timeout) {
-    core_leave(t); /* swr_svc takes the core back on the way out */
+    core_leave(t); /* snx_svc takes the core back on the way out */
     if (timeout < 0) {
         while (!t->woken) pc_wait(&t->cv, &g_klock, -1);
         return 1;
@@ -136,13 +127,12 @@ static void ev_destroy(KObj* o) {
     free(o->waiters);
     free(o);
 }
-KEvent* kevent_new(const char* name, int autoclear) {
+KEvent* kevent_new(const char* name) {
     KEvent* e = calloc(1, sizeof *e);
     e->o.type = KO_EVENT;
     e->o.is_signaled = ev_sig;
     e->o.destroy = ev_destroy;
     e->o.name = name;
-    e->autoclear = autoclear;
     return e;
 }
 void kevent_signal(KEvent* e) {

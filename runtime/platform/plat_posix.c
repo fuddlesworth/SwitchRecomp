@@ -1,23 +1,24 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 #define _GNU_SOURCE
 /* the platform layer on Linux and other POSIX systems: locks, threads, time, virtual memory and write tracking
    (userfaultfd), files, shared libraries, the crash handler */
 #include "core/main.h"
-#include "gpu/renderer.h"
+#include "platform/log.h"
 #include "platform/plat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/syscall.h>
 #include <fcntl.h>
 #include <unistd.h>
-#if defined(__linux__) && !defined(__ANDROID__)
+#if defined(__linux__)
 #include <linux/fs.h>
 #include <linux/userfaultfd.h>
 #endif
@@ -57,27 +58,63 @@ int pc_wait(PCond* c, PMutex* m, i64 ns) {
 typedef struct {
     PThreadFn fn;
     void* arg;
+    size_t stack;
 } TArg;
+/* The signal stack is per thread, and only the main thread had one (plat_install_crash_handler): a guest thread that
+   overflowed its stack died without a crash report, the handler having no stack to run on. A thread with a big stack
+   now gets one in its own first frame. Small stacks (the 64 KiB audio clock) do without, it would take half of it */
+#define ALTSTACK_MIN_STACK (256u << 10)
+static void altstack_off(void) {
+    stack_t ss;
+    memset(&ss, 0, sizeof ss);
+    ss.ss_flags = SS_DISABLE;
+    sigaltstack(&ss, NULL);
+}
+__attribute__((noinline)) static void run_with_altstack(TArg a) {
+    char alt[32768]; /* the crash report needs about 12 KiB */
+    stack_t ss;
+    memset(&ss, 0, sizeof ss);
+    ss.ss_sp = alt;
+    ss.ss_size = sizeof alt;
+    sigaltstack(&ss, NULL);
+    a.fn(a.arg);
+    altstack_off(); /* alt goes out of scope, and the thread's exit code reuses that stack */
+}
 static void* tstart(void* p) {
     TArg a = *(TArg*)p;
     free(p);
-    a.fn(a.arg);
+    if (!a.stack || a.stack >= ALTSTACK_MIN_STACK)
+        run_with_altstack(a);
+    else
+        a.fn(a.arg);
     return NULL;
 }
 int plat_thread(PThreadFn fn, void* arg, size_t stack) {
     TArg* a = malloc(sizeof *a);
+    if (!a) return -1;
     a->fn = fn;
     a->arg = arg;
+    a->stack = stack;
     pthread_attr_t at;
     pthread_attr_init(&at);
-    pthread_attr_setstacksize(&at, stack);
+    /* below the minimum, pthread_attr_setstacksize fails and the thread would get the default size instead */
+    if (stack && stack < (size_t)PTHREAD_STACK_MIN) stack = (size_t)PTHREAD_STACK_MIN;
+    if (stack) pthread_attr_setstacksize(&at, stack);
     pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
     pthread_t t;
     int r = pthread_create(&t, &at, tstart, a);
     pthread_attr_destroy(&at);
+    if (r) free(a);
     return r ? -1 : 0;
 }
-void plat_thread_exit(void) { pthread_exit(NULL); }
+void plat_thread_exit(void) {
+    altstack_off(); /* pthread_exit unwinds through run_with_altstack's frame, which holds the signal stack */
+    pthread_exit(NULL);
+}
+void plat_exit_now(int code) {
+    fflush(NULL);
+    _exit(code);
+}
 void plat_sleep_ns(i64 ns) {
     if (ns <= 0) {
         sched_yield();
@@ -87,18 +124,6 @@ void plat_sleep_ns(i64 ns) {
     while (nanosleep(&ts, &ts) == -1 && errno == EINTR);
 }
 void plat_yield(void) { sched_yield(); }
-void plat_thread_low_priority(void) {}
-void plat_thread_high_priority(void) {}
-u64 plat_thread_cpu_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
-    return (u64)ts.tv_sec * 1000000000ull + ts.tv_nsec;
-}
-u64 plat_process_cpu_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
-    return (u64)ts.tv_sec * 1000000000ull + ts.tv_nsec;
-}
 u64 plat_ns(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -111,22 +136,15 @@ i64 plat_tz_offset(void) {
     localtime_r(&t, &lt);
     return (i64)lt.tm_gmtoff;
 }
-int g_ww_ok;
-int plat_ww_collect(u8* base, u64 size, void (*cb)(u64)) {
-    (void)base;
-    (void)size;
-    (void)cb;
-    return -1;
-}
 /* Written-page tracking for the GPU caches (plat_ww_scan): the reserved guest memory is registered with a
    userfaultfd in asynchronous write-protect mode, which needs no handler thread: a write to a protected page just
    unprotects it in the kernel, writes from the kernel (read() into guest memory) included. PAGEMAP_SCAN then lists
    the written pages of a range and protects them again. Only ranges a cache scans are ever protected, so the rest of
    guest memory costs nothing. Needs Linux 6.7; without it, the caches check contents as before */
 static int g_uffd_pagemap = -1;
-#if defined(__linux__) && !defined(__ANDROID__) && defined(PAGEMAP_SCAN)
+#if defined(__linux__) && defined(PAGEMAP_SCAN)
 static void ww_init(u8* p, u64 size) {
-    if (getenv("SWR_NO_WW")) return;
+    if (getenv("SNX_NO_WW")) return;
     int u = (int)syscall(SYS_userfaultfd, O_CLOEXEC | O_NONBLOCK | UFFD_USER_MODE_ONLY);
     if (u < 0) return;
     struct uffdio_api api = {.api = UFFD_API, .features = UFFD_FEATURE_WP_ASYNC | UFFD_FEATURE_WP_UNPOPULATED};
@@ -173,6 +191,11 @@ int plat_ww_scan(u8* p, u64 size, void (*cb)(u8* p, u64 size)) {
 }
 #endif
 u8* plat_vm_reserve(u64 size) {
+    /* guest memory is mapped and protected in the Switch's 4 KiB pages: with bigger host pages (16 KiB or 64 KiB on
+       some arm64 systems) mprotect fails on most of them */
+    long pg = sysconf(_SC_PAGESIZE);
+    if (pg != 4096)
+        fatal("This system uses %ld KiB memory pages. ScarletNX only runs on systems with 4 KiB pages.", pg / 1024);
     void* p = mmap(NULL, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (p == MAP_FAILED) return NULL;
     ww_init(p, size);
@@ -185,6 +208,10 @@ void plat_vm_decommit(u8* p, u64 size) {
 }
 void* plat_dl_open(const char* path) { return dlopen(path, RTLD_NOW | RTLD_LOCAL); }
 void* plat_dl_sym(void* h, const char* n) { return dlsym(h, n); }
+const char* plat_dl_error(void) {
+    const char* e = dlerror();
+    return e ? e : "no error reported";
+}
 int plat_mkdir(const char* p) { return mkdir(p, 0755); }
 int plat_is_dir(const char* p) {
     struct stat s;
@@ -195,7 +222,9 @@ typedef struct {
     char path[1024];
 } PD_;
 int plat_dir_open(PDir* d, const char* path) {
+    if (strlen(path) >= sizeof((PD_*)0)->path) return -1; /* cut, plat_dir_next would stat files of another folder */
     PD_* p = malloc(sizeof *p);
+    if (!p) return -1;
     p->d = opendir(path);
     if (!p->d) {
         free(p);
@@ -233,12 +262,61 @@ u64 plat_file_size(const char* p) {
     if (stat(p, &s)) return 0;
     return (u64)s.st_size;
 }
-int plat_pread(FILE* f, void* buf, u64 size, u64 off) { return (int)pread(fileno(f), buf, size, (off_t)off); }
-int plat_ncpu(void) {
-    long n = sysconf(_SC_NPROCESSORS_ONLN);
-    return n > 0 ? (int)n : 1;
+/* pread returns less than asked when interrupted or past 2 GiB in one call: loop to the end of the file */
+i64 plat_pread(FILE* f, void* buf, u64 size, u64 off) {
+    int fd = fileno(f);
+    u64 got = 0;
+    while (got < size) {
+        ssize_t n = pread(fd, (u8*)buf + got, size - got, (off_t)(off + got));
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) return -1;
+        if (!n) break;
+        got += (u64)n;
+    }
+    return (i64)got;
+}
+int plat_file_map(PFileMap* m, const char* path) {
+    m->data = NULL;
+    m->size = 0;
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    struct stat s;
+    if (fstat(fd, &s) || !S_ISREG(s.st_mode)) {
+        close(fd);
+        return -1;
+    }
+    if (s.st_size > 0) { /* mmap of length 0 fails */
+        void* p = mmap(NULL, (size_t)s.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (p == MAP_FAILED) {
+            close(fd);
+            return -1;
+        }
+        m->data = p;
+        m->size = (u64)s.st_size;
+    }
+    close(fd); /* the mapping keeps the file */
+    return 0;
+}
+void plat_file_unmap(PFileMap* m) {
+    if (m->data) munmap((void*)m->data, (size_t)m->size);
+    m->data = NULL;
+    m->size = 0;
+}
+int plat_replace_file(const char* tmp, const char* dst) {
+    if (!rename(tmp, dst)) return 0;
+    remove(tmp);
+    return -1;
 }
 static void sighandler(int sig, siginfo_t* si, void* uc_) {
+    /* A second fault while reporting the first ends the process. Another thread crashing meanwhile waits: the first
+       report ends with _exit */
+    static __thread volatile sig_atomic_t reporting;
+    static int crashed;
+    if (reporting) _exit(1);
+    reporting = 1;
+    if (__atomic_exchange_n(&crashed, 1, __ATOMIC_ACQ_REL))
+        for (;;) pause();
+    log_crash_mode(); /* the handler can't take the log's lock: the faulting code may hold it */
     void* pc = NULL;
     ucontext_t* uc = (ucontext_t*)uc_;
 #if defined(__FreeBSD__) && defined(__x86_64__)
@@ -252,8 +330,15 @@ static void sighandler(int sig, siginfo_t* si, void* uc_) {
 #else
     (void)uc;
 #endif
-    crash_report(pc, si->si_addr, sig);
+    /* si_addr is the faulting address only for SIGSEGV and SIGBUS: for SIGILL and SIGFPE it's the instruction's */
+    crash_report(pc, sig == SIGSEGV || sig == SIGBUS ? si->si_addr : NULL, sig);
     _exit(1);
+}
+/* abort() from a library (the video driver, or out of memory): say so in the log, as on Windows. Returning lets abort
+   go on and end the process */
+static void on_abort(int s) {
+    log_crash_mode();
+    logf_(0, "\n*** Shutdown: abort() (signal %d), probably the video driver or out of memory ***\n", s);
 }
 void plat_install_crash_handler(void) {
     struct sigaction sa;
@@ -270,5 +355,10 @@ void plat_install_crash_handler(void) {
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
+    struct sigaction ab;
+    memset(&ab, 0, sizeof ab);
+    ab.sa_handler = on_abort;
+    ab.sa_flags = SA_ONSTACK | SA_RESETHAND;
+    sigaction(SIGABRT, &ab, NULL);
 }
-void plat_prof_start(int boot) { (void)boot; } /* the sampling profiler is Windows only */
+void plat_prof_start(void) {} /* the sampling profiler is Windows only */

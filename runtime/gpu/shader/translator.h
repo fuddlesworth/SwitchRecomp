@@ -1,10 +1,10 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* what the shader translator's files in gpu/shader share */
-#ifndef SWR_TRANSLATOR_H
-#define SWR_TRANSLATOR_H
+#ifndef SNX_TRANSLATOR_H
+#define SNX_TRANSLATOR_H
 #include <string.h>
 #include <ctype.h>
 #include "gpu/shader/shader.h"
@@ -192,6 +192,8 @@ enum {
     O_SULD,
     O_SUST,
     O_SURED,
+    O_SUATOM,
+    O_SUATOM_CAS,
     O_BRA,
     O_BRX,
     O_SSY,
@@ -247,6 +249,9 @@ enum {
     O_DFMA_RC,
     O_DFMA_CR,
     O_DFMA_I,
+    O_DSET_R,
+    O_DSET_C,
+    O_DSET_I,
     O_DSETP_R,
     O_DSETP_C,
     O_DSETP_I,
@@ -300,13 +305,18 @@ typedef struct {
     u8 gtag[256];      /* reg -> global buffer it holds the base of (index+1) */
     u8 tgt[65536 / 8]; /* branch targets (BRA/SSY/PBK/PCNT and BRX table) */
     u32* pop_tgt;      /* static stack resolution: target of each SYNC/BRK/CONT (0 = unreachable) */
-    int stk_static;    /* 1 if SSY/PBK/PCNT got resolved statically (no stack arrays emitted) */
-    int uses_stk[3];   /* which dynamic stacks are used: 0 ssy 1 pbk 2 pcnt */
+    int stk_static;    /* 1 if SSY/PBK/PCNT got resolved statically (no stack array emitted) */
+    int uses_crs;      /* the dynamic CRS stack is used */
     u8 wtag[256];      /* 1: reg = IPA(position.w), 2: reg = RCP of that (same block only) */
     int tag_r, tag_v;  /* label set by the current instruction */
     int nest;          /* structured mode: inside an if, so don't label anything (doesn't dominate the rest) */
+    u8 bl2;            /* track_handle found a split handle: its second read */
+    u32 bl2_bank, bl2_off;
+    int uses_shadow_lod; /* depth compare with an explicit LOD or bias on an array or cube texture */
 } Ctx;
-#define IDX_OK(i) ((i) >= 11 && ((i) - 10) % 4 != 0)
+#define IDX_OK(i)    ((i) >= 11 && ((i) - 10) % 4 != 0)
+/* the CRS stack token SSY/PBK/PCNT push (and SYNC/BRK/CONT pop down to): 0 SSY, 1 PBK, 2 PCNT */
+#define CRS_KIND(id) ((id) == O_SSY || (id) == O_SYNC ? 0 : (id) == O_PBK || (id) == O_BRK ? 1 : 2)
 
 /* shader.c */
 void sb_put(Sb* s, const char* t);
@@ -346,6 +356,9 @@ const Op* decode(u64 w);
 /* translate.c */
 const char* samp_type(int type, int array, int shadow);
 u32 bra_target(u64 w, u32 idx);
+int flow_always(u64 w);
+const char* flow_cond(Ctx* c, u64 w);
+u32 lmem_words(Ctx* c);
 void emit_tracked(Ctx* c, u32 idx, u64 w, const Op* op);
 void exit_epilogue(Ctx* c);
 

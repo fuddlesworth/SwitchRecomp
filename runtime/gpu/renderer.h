@@ -1,18 +1,20 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* The renderer interface: what the GPU front end (gpu.c, engines.c, maxwell3d.c) and the window backends ask of a
    renderer. The Vulkan (gpu/vk/renderer.c) and null (gpu/null/null.c) renderers each fill in every operation, with a
-   no-op where they have nothing to do, so callers never check. */
-#ifndef SWR_RENDERER_H
-#define SWR_RENDERER_H
+   no-op where they have nothing to do, so callers never check. save is the one exception (NULL when there is
+   nothing to save). */
+#ifndef SNX_RENDERER_H
+#define SNX_RENDERER_H
 #include "abi/cpu.h"
 #include "gpu/gpu.h"
 
 typedef struct Renderer {
     const char* name;
     int (*start)(void); /* 0 when it can't run here */
-    /* a GPFIFO submission from a channel's thread: 1 when the renderer took it to run on its own thread, 0 when the
-       caller runs it now (gpu_submit) */
+    /* called first for every GPFIFO submission, on the submitting thread. 1 would mean the renderer took it to run on a
+       thread of its own; both renderers return 0, and gpu_submit runs it then and there (Vulkan only notes that guest
+       memory may have changed) */
     int (*async_submit)(u64* e, u32 n, u32 syncpt, u32 incs);
     /* the 3D engine (maxwell3d.c) */
     void (*clear)(GpuChannel* ch, u32 v);
@@ -33,6 +35,9 @@ typedef struct Renderer {
     /* crop: the part shown (left, top, right, bottom), all 0 for the whole buffer */
     void (*present_buffer)(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, const i32 crop[4]);
     u64 (*screenshot)(const char* path); /* the hash of the frame it saved */
+    /* writes what should outlive the process (the pipeline cache), before an exit that skips the normal shutdown.
+       Any thread, while the others still run. NULL when the renderer keeps nothing */
+    void (*save)(void);
 } Renderer;
 
 extern const Renderer vk_renderer, null_renderer;

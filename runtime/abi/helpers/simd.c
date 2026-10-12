@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Part of cpu_helpers.c, which includes it: AdvSIMD arithmetic: lanes, saturation, per-lane floating point, and the instruction groups (three-same, three-different, two-register, across lanes, copy, modified and shift immediates, by-element, permute, TBL). Not compiled on its own. */
@@ -88,7 +88,7 @@ static u64 vshl(CPU* c, u64 a, u64 b, int eb, int U, int round, int sat) {
             u64 x = zx(a, eb);
             if (!sat) return sh >= eb ? 0 : zx(x << sh, eb);
             if (x == 0) return 0;
-            if (sh < eb && !(x >> (eb - sh))) return zx(x << sh, eb);
+            if (sh == 0 || (sh < eb && !(x >> (eb - sh)))) return zx(x << sh, eb); /* x >> 64 is undefined in C */
             qc(c);
             return zx(~0ull, eb);
         }
@@ -112,7 +112,6 @@ static u64 vshl(CPU* c, u64 a, u64 b, int eb, int U, int round, int sat) {
         return n >= 64 ? 0 : x >> n;
     }
 }
-static int fprm(CPU* c) { return (c->fpcr >> 22) & 3; }
 
 /* ---- per-lane fp; doing +,-,*,/,sqrt in double then rounding to single is exact ---- */
 static f64 rdf(const V128* v, int sz, int i) { return sz ? v->df[i] : (f64)v->f[i]; }
@@ -137,10 +136,7 @@ static f64 fop2(int sel, f64 a, f64 b, int sz) { /* sel = our own op code */
         case 5: return fmin_(a, b, sz);
         case 6: return fmaxnm_(a, b, sz);
         case 7: return fminnm_(a, b, sz);
-        case 8: {
-            f64 d = a - b;
-            return d < 0 ? -d : d;
-        }
+        case 8: return fabs_(sz ? a - b : (f64)((f32)a - (f32)b)); /* FABD: the f32 difference rounds before abs */
         case 9: return sz ? fp_mulx64(a, b) : fp_mulx32((f32)a, (f32)b);
         case 10: return sz ? fp_recps64(a, b) : fp_recps32((f32)a, (f32)b);
         case 11: return sz ? fp_rsqrts64(a, b) : fp_rsqrts32((f32)a, (f32)b);
@@ -235,16 +231,31 @@ static int simd_3same(CPU* c, u32 w, int scalar) {
         }
         if (scalar && (pair || acc || sel == 0 || sel == 1 || sel == 2 || sel == 3 || (sel >= 4 && sel <= 7))) return 0;
         for (int i = 0; i < n; i++) {
-            f64 x, y;
+            const V128 *va = &a, *vb = &b;
+            int ka = i, kb = i;
             if (pair) {
                 int h = n / 2;
-                const V128* s = i < h ? &a : &b;
-                int k = (i < h ? i : i - h) * 2;
-                x = rdf(s, sz, k);
-                y = rdf(s, sz, k + 1);
-            } else {
-                x = rdf(&a, sz, i);
-                y = rdf(&b, sz, i);
+                va = vb = i < h ? &a : &b;
+                ka = (i < h ? i : i - h) * 2;
+                kb = ka + 1;
+            }
+            f64 x = rdf(va, sz, ka), y = rdf(vb, sz, kb);
+            if (!sz && sel >= 4 && sel <= 7) { /* f32 max/min straight from the lanes: via double, a signalling NaN
+                                                  would arrive quiet */
+                f32 p = va->f[ka], q = vb->f[kb];
+                r.f[i] = sel == 4   ? fp_max32(p, q)
+                         : sel == 5 ? fp_min32(p, q)
+                         : sel == 6 ? fp_maxnm32(p, q)
+                                    : fp_minnm32(p, q);
+                continue;
+            }
+            if (!sz && (acc || sel == 10 || sel == 11)) { /* FMLA FMLS FRECPS FRSQRTS: the same, for their NaN choice */
+                f32 p = va->f[ka], q = vb->f[kb];
+                r.f[i] = acc == 1    ? fp_fma32(p, q, d.f[i])
+                         : acc == 2  ? fp_fma32(-p, q, d.f[i])
+                         : sel == 10 ? fp_recps32(p, q)
+                                     : fp_rsqrts32(p, q);
+                continue;
             }
             if (cmp >= 0) {
                 eset(&r, sz ? 3 : 2, i, fcmpmask(cmp, x, y, sz));
@@ -421,7 +432,7 @@ static int simd_3diff(CPU* c, u32 w, int scalar) {
                 r.h[i] = (u16)p;
             }
         } else if (size == 3) {
-            v_pmull(&r, &a, &b, 3, Q);
+            v_pmull(&r, &a, &b, Q);
         } else
             return 0;
         *VR(rd) = r;
@@ -548,7 +559,7 @@ static int simd_2misc(CPU* c, u32 w, int scalar) {
                         memcpy(&yb, &y, 4);
                         if ((f64)y != x && !isnan64(x) && !(yb & 1)) {
                             f64 dd = (f64)y;
-                            if ((dd > x) == (y > 0))
+                            if (fabs_(dd) > fabs_(x)) /* rounded away from zero (a tiny x can round to 0) */
                                 yb--;
                             else
                                 yb++;
@@ -589,13 +600,13 @@ static int simd_2misc(CPU* c, u32 w, int scalar) {
             int eb2 = sz ? 64 : 32;
             int k = (U << 6) | (hi << 5) | op;
             switch (k) {
-                case 0x18: wrf(&r, sz, i, fp_round(x, 0)); break;       /* FRINTN */
-                case 0x38: wrf(&r, sz, i, fp_round(x, 1)); break;       /* FRINTP */
-                case 0x19: wrf(&r, sz, i, fp_round(x, 2)); break;       /* FRINTM */
-                case 0x39: wrf(&r, sz, i, fp_round(x, 3)); break;       /* FRINTZ */
-                case 0x58: wrf(&r, sz, i, fp_round(x, 4)); break;       /* FRINTA */
-                case 0x59: wrf(&r, sz, i, fp_round(x, fprm(c))); break; /* FRINTX */
-                case 0x79: wrf(&r, sz, i, fp_round(x, fprm(c))); break; /* FRINTI */
+                case 0x18: wrf(&r, sz, i, fp_round(x, 0)); break;    /* FRINTN */
+                case 0x38: wrf(&r, sz, i, fp_round(x, 1)); break;    /* FRINTP */
+                case 0x19: wrf(&r, sz, i, fp_round(x, 2)); break;    /* FRINTM */
+                case 0x39: wrf(&r, sz, i, fp_round(x, 3)); break;    /* FRINTZ */
+                case 0x58: wrf(&r, sz, i, fp_round(x, 4)); break;    /* FRINTA */
+                case 0x59: wrf(&r, sz, i, fp_round(x, FPRM)); break; /* FRINTX */
+                case 0x79: wrf(&r, sz, i, fp_round(x, FPRM)); break; /* FRINTI */
                 case 0x1A:
                 case 0x3A:
                 case 0x1B:
@@ -667,7 +678,7 @@ static int simd_2misc(CPU* c, u32 w, int scalar) {
         for (int i = 0; i < m; i++) {
             u64 x = eget(&a, size + 1, i), v;
             if (op == 0x12) {
-                if (scalar) return 0;
+                if (scalar && !U) return 0; /* XTN has no scalar form, SQXTUN does */
                 v = U ? sqxtn_(c, x, eb, 2) : zx(x, eb);
             } else
                 v = sqxtn_(c, x, eb, U ? 1 : 0);
@@ -706,26 +717,33 @@ static int simd_2misc(CPU* c, u32 w, int scalar) {
                 int base = i - (i % per);
                 o = eget(&a, size, base + per - 1 - (i % per));
             } break;
-            case 0x03:
-                o = sqadd_(c, z, x, eb); /* SUQADD (approx) */
-                {
-                    i64 zz = sx(z, eb);
-                    u64 xx = zx(x, eb);
-                    i64 t;
-                    if (eb < 64) {
-                        t = zz + (i64)xx;
-                        o = zx((u64)ssat(c, t, eb), eb);
-                    }
-                }
-                break;
-            case 0x23: {
+            case 0x03: { /* SUQADD: signed accumulator + unsigned operand, saturated signed */
+                i64 zz = sx(z, eb);
+                u64 xx = zx(x, eb);
+                if (eb < 64)
+                    o = zx((u64)ssat(c, zz + (i64)xx, eb), eb);
+                else if (xx > 0x7FFFFFFFFFFFFFFFull - (u64)zz) { /* the sum is past INT64_MAX (it can't go below) */
+                    qc(c);
+                    o = 0x7FFFFFFFFFFFFFFFull;
+                } else
+                    o = (u64)zz + xx;
+            } break;
+            case 0x23: { /* USQADD: unsigned accumulator + signed operand, saturated unsigned */
                 u64 zz = zx(z, eb);
                 i64 xx = sx(x, eb);
-                if (eb < 64) {
-                    i64 t = (i64)zz + xx;
-                    o = usat(c, t, eb);
-                } else
+                if (eb < 64)
+                    o = usat(c, (i64)zz + xx, eb);
+                else if (xx >= 0) {
                     o = zz + (u64)xx;
+                    if (o < zz) {
+                        qc(c);
+                        o = ~0ull;
+                    }
+                } else if (0 - (u64)xx > zz) {
+                    qc(c);
+                    o = 0;
+                } else
+                    o = zz - (0 - (u64)xx);
             } break;
             case 0x04:
                 if (size == 3) return 0;
@@ -742,10 +760,9 @@ static int simd_2misc(CPU* c, u32 w, int scalar) {
             case 0x25:
                 if (size == 0)
                     o = ~x;
-                else if (size == 1) {
-                    u8 b = (u8)x;
-                    o = (u8)(rbit32(b) >> 24);
-                } else
+                else if (size == 1) /* RBIT: size 01 in the encoding, but it reverses the bits of each byte */
+                    o = (rbit32((u8)x) >> 24) | ((rbit32((u8)(x >> 8)) >> 24) << 8);
+                else
                     return 0;
                 break;
             case 0x07:
@@ -786,11 +803,7 @@ static int simd_across(CPU* c, u32 w) {
     if (op == 0x0C || op == 0x0F) { /* FMAXNMV FMINNMV FMAXV FMINV, .4s only */
         if (!U || !Q || (size & 1)) return 0;
         int mn = size >> 1;
-        f32 x = a.f[0];
-        for (int i = 1; i < 4; i++) {
-            f32 y = a.f[i];
-            x = op == 0x0C ? (mn ? fp_minnm32(x, y) : fp_maxnm32(x, y)) : (mn ? fp_min32(x, y) : fp_max32(x, y));
-        }
+        f32 x;
         /* hw reduces pairwise: (0,1),(2,3) */
         {
             f32 p0, p1;
@@ -999,10 +1012,7 @@ static int simd_shimm(CPU* c, u32 w, int scalar) {
     }
     if (op >= 0x10 && op <= 0x13) { /* narrowing: SHRN RSHRN SQSHRN SQRSHRN UQSHRN SQSHRUN ... */
         if (size == 3) return 0;
-        int wb = eb * 2;
-        shr = 2 * wb - imm - wb;
-        shr = wb * 2 - ((immh << 3) | immb) - wb; /* sh = 2*eb - imm, eb = dst size */
-        shr = 2 * eb - imm;                       /* eb = dst size */
+        int wb = eb * 2; /* shr = 2 * eb - imm as computed above, eb being the destination size */
         int m = scalar ? 1 : 64 / eb, off = Q ? m : 0;
         V128 o = Q ? d : r;
         if (scalar) {
@@ -1027,10 +1037,11 @@ static int simd_shimm(CPU* c, u32 w, int scalar) {
                     kind = 2;
                 } else
                     kind = U ? 1 : 0;
+                /* rounding as the shifted value plus the last bit shifted out: adding the rounding constant first
+                   would overflow a 64-bit source */
                 if (kind == 1) {
                     uval = zx(x, wb);
-                    if (rnd) uval = (uval + ((u64)1 << (shr - 1)));
-                    uval >>= shr;
+                    uval = (uval >> shr) + (rnd ? (uval >> (shr - 1)) & 1 : 0);
                     if (uval > zx(~0ull, eb)) {
                         qc(c);
                         uval = zx(~0ull, eb);
@@ -1038,8 +1049,7 @@ static int simd_shimm(CPU* c, u32 w, int scalar) {
                     v = uval;
                 } else {
                     sval = sx(x, wb);
-                    if (rnd) sval += (i64)1 << (shr - 1);
-                    sval >>= shr;
+                    sval = (sval >> shr) + (rnd ? (sval >> (shr - 1)) & 1 : 0);
                     v = kind == 0 ? zx((u64)ssat(c, sval, eb), eb) : usat(c, sval, eb);
                 }
             }
@@ -1099,10 +1109,9 @@ static int simd_shimm(CPU* c, u32 w, int scalar) {
                         t = s >> shr;
                         if (rnd) t += (s >> (shr - 1)) & 1;
                     }
-                    if (shr >= 64 && rnd) t = 0;
                     v = (u64)t;
                 }
-                o = op >= 0x02 && (op == 0x02 || op == 0x06) ? z + v : v;
+                o = op == 0x02 || op == 0x06 ? z + v : v;
             } break;
             case 0x08:
                 if (!U) return 0;
@@ -1177,6 +1186,17 @@ static int simd_elem(CPU* c, u32 w, int scalar) {
         int n = scalar ? 1 : (sz ? 2 : (Q ? 4 : 2));
         for (int i = 0; i < n; i++) {
             f64 x = rdf(&a, sz, i), v;
+            if (!sz) { /* f32 straight from the lanes: via double, a signalling NaN would arrive quiet and lose its
+                          priority over a quiet NaN in the other operand (FPProcessNaNs) */
+                f32 p = a.f[i], e = VR(m)->f[idx];
+                if (op == 1 || op == 5)
+                    r.f[i] = fp_fma32(op == 1 ? p : -p, e, d.f[i]);
+                else if (!U)
+                    r.f[i] = isnan32(p) || isnan32(e) ? pnan32(p, e) : p * e;
+                else
+                    r.f[i] = fp_mulx32(p, e);
+                continue;
+            }
             if (op == 1)
                 v = fmla_(rdf(&d, sz, i), x, b, sz);
             else if (op == 5)
@@ -1306,45 +1326,13 @@ static int simd_perm(CPU* c, u32 w) {
 void v_tbl(CPU* c, u32 d, u32 n, u32 len, u32 m, int q, int tbx) {
     u8 tab[64];
     for (u32 k = 0; k <= len; k++) memcpy(tab + 16 * k, &c->v[(n + k) & 31], 16);
-    V128 idx = c->v[m], r = tbx ? c->v[d] : c->v[d];
-    if (!tbx) memset(&r, 0, 16);
+    V128 idx = c->v[m], r = c->v[d];
+    if (!tbx) memset(&r, 0, 16); /* TBL: out of range indexes give 0, TBX leaves those bytes alone */
     u32 lim = 16 * (len + 1);
     for (int i = 0; i < (q ? 16 : 8); i++) {
         u32 x = idx.b[i];
-        if (x < lim)
-            r.b[i] = tab[x];
-        else if (!tbx)
-            r.b[i] = 0;
+        if (x < lim) r.b[i] = tab[x];
     }
     if (!q) r.d[1] = 0;
     c->v[d] = r;
-}
-
-/* ---- AES ---- */
-static const u8 SBOX[256] = {
-    0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76, 0xca, 0x82, 0xc9,
-    0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0, 0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f,
-    0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15, 0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07,
-    0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75, 0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3,
-    0x29, 0xe3, 0x2f, 0x84, 0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58,
-    0xcf, 0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8, 0x51, 0xa3,
-    0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2, 0xcd, 0x0c, 0x13, 0xec, 0x5f,
-    0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73, 0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88,
-    0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb, 0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac,
-    0x62, 0x91, 0x95, 0xe4, 0x79, 0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a,
-    0xae, 0x08, 0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a, 0x70,
-    0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e, 0xe1, 0xf8, 0x98, 0x11,
-    0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf, 0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42,
-    0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16};
-static u8 ISBOX[256];
-static int isbox_ok;
-static u8 xt(u8 x) { return (u8)((x << 1) ^ ((x & 0x80) ? 0x1b : 0)); }
-static u8 gm(u8 a, u8 b) {
-    u8 p = 0;
-    while (b) {
-        if (b & 1) p ^= a;
-        a = xt(a);
-        b >>= 1;
-    }
-    return p;
 }

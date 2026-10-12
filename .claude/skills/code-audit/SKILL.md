@@ -1,11 +1,11 @@
 ---
-name: "Code Audit"
+name: code-audit
 description: "Audits uncommitted changes, branches, or PRs for bugs, edge cases, SOLID/DRY/SRP, architecture, security, performance, and CLAUDE.md violations — then automatically fixes ALL issues and re-audits in a loop until clean. Use when: audit, review, code review, review this PR, check code, look over this, inspect code, or any variation."
 ---
 
 # Code Audit
 
-**This skill is a LOOP. You analyze, fix ALL findings (every severity), re-read files from disk, re-analyze, and repeat until zero findings remain. Stopping after one pass is a failure to follow instructions.**
+**This skill is a LOOP in two phases (see "PHASE SPLIT" below). Phase A audits read-only, pass after pass, until a full pass adds no new findings. Phase B then fixes ALL findings (every severity) once, re-reads from disk, and runs confirmation rounds until one comes back clean. Stopping after one pass, or fixing during Phase A, is a failure to follow instructions.**
 
 ---
 
@@ -136,13 +136,13 @@ Common audit-time patterns in this repo (C runtime, Python recompiler):
 
 | Goal | Command |
 |---|---|
-| Find every caller of a function (catch dead code) | `ast-grep --pattern 'FunctionName($$$)' --lang c runtime` and `grep -rnw 'FunctionName' runtime *.py tools scripts` |
+| Find every caller of a function (catch dead code) | `ast-grep --pattern 'FunctionName($$$)' --lang c runtime` and `grep -rnw 'FunctionName' runtime scarletnx tools scripts` |
 | Find every use of a struct field | `ast-grep --pattern '$X.field' --lang c runtime` and `ast-grep --pattern '$X->field' --lang c runtime` |
 | Find every guard that only logs | `grep -rn -A2 'WARN(\|LOG(' runtime` and check each is followed by a `return` or other exit |
 | Find a guest address squeezed into 32 bits | `ast-grep --pattern '(u32)$X' --lang c runtime`, then check whether `$X` is a guest address or pointer |
 | Find every syncpoint id not from `syncpt_alloc()` | `grep -rn 'syncpt' runtime/video runtime/hle/nvdrv.c runtime/gpu` |
-| Find every service command a file answers | `grep -n 'case [0-9]*:' runtime/hle/am.c` (or the service's file) (each answer must match what the SDK caller reads, see the `swr-service` skill) |
-| Find every TODO/FIXME/HACK marker | `grep -rn 'TODO\|FIXME\|HACK\|XXX' runtime *.py tools scripts` |
+| Find every service command a file answers | `grep -n 'case [0-9]*:' runtime/hle/am.c` (or the service's file) (each answer must match what the SDK caller reads, see the `snx-service` skill) |
+| Find every TODO/FIXME/HACK marker | `grep -rn 'TODO\|FIXME\|HACK\|XXX' runtime scarletnx tools scripts` |
 | Find a stale comment claim (e.g. "below 192") | `grep -rn "below 192" runtime` |
 | Find AI-ism punctuation in user-facing text | `grep -rn '—' README.md ROADMAP.md <changed user-facing files>`; then check for clause-joining `;` and stand-in ` - ` (exclude code comments and backticked code) |
 
@@ -158,7 +158,7 @@ Compute scope size from the inventory:
 For partitioned scopes:
 
 1. Group files by coherent domain (kernel and services, GPU and shaders, audio and video, platform backends, the recompiler and its ABI, build and scripts). 4-6 partitions is typical; aim for ≤15 files per partition.
-2. **Reviewer selection.** Check the available agent types for project-defined domain reviewers (in this repo, the `swr-*-reviewer` agents in `.claude/agents/review/`; each one's description names the directories/domains it covers). If any exist, partition boundaries SHOULD follow the specialists' domains, and each partition MUST be dispatched to the specialist whose description matches it — a specialist encodes stack expertise and past-bug patterns a generic reviewer lacks. Only for a partition no specialist covers (or when a project defines none) fall back to `subagent_type=general-purpose`. Dispatch ONE `Agent` call per partition; all Agent calls go in a SINGLE message so they run in parallel.
+2. **Reviewer selection.** Check the available agent types for project-defined domain reviewers (in this repo, the `snx-*-reviewer` agents in `.claude/agents/review/`; each one's description names the directories/domains it covers). If any exist, partition boundaries SHOULD follow the specialists' domains, and each partition MUST be dispatched to the specialist whose description matches it — a specialist encodes stack expertise and past-bug patterns a generic reviewer lacks. Only for a partition no specialist covers (or when a project defines none) fall back to `subagent_type=general-purpose`. Dispatch ONE `Agent` call per partition; all Agent calls go in a SINGLE message so they run in parallel.
 3. Each agent prompt MUST include:
    - The exact file paths in its partition (explicit paths, not a directory glob).
    - Instructions to read every file FULLY (no partial reads, no diff-only).
@@ -196,7 +196,7 @@ Examine every changed line and surrounding context against all dimensions. Omit 
 - **Performance**: Hot-path allocations, O(n^2) when O(n) possible, N+1 queries, blocking on async, unbounded growth
 - **Project Rules**: Deviations from CLAUDE.md conventions — quote the specific rule violated
 - **Runtime invariants (this repo)**: The game's own code (and the NVIDIA, CRI and Nintendo SDK code inside it) is the specification: a service or device answers the way the console does, which the SDK caller's disassembly shows (`tools/disasm.py`). Syncpoint ids come from `syncpt_alloc()` and stay below 128. Guest addresses are `u64`, and guest memory is reached through `GP()`/`gmem_ptr()`/`gmem_read()`, never a host pointer kept across a remap. Anything shared between game threads (which run truly parallel on the host) is locked or atomic. Changes to upstream code stay small, in the file's style, with a comment saying why. Nothing from a dump goes into git. Quote the rule for each violation.
-- **User-facing prose (AI-isms)**: Text a user reads — `README.md`, `ROADMAP.md`, commit messages, messages the runtime prints for players, and the comments it writes into the game's `.ini` — must read as plain, human-written prose. Flag and rewrite: em-dash (`—`, or its escaped form) used to splice clauses or tack on an appositive; semicolons joining two independent clauses; a spaced hyphen (` - `) standing in for a dash; dramatic "Label: payload" colons used for effect; rule-of-three triads and "not just X, but Y" flourishes. Rewrite as two sentences or a plain connector (and / with / where / so / because). Do NOT flag: code comments, debug logs (`DBGPRINTF`), semicolons inside backticked code or genuine comma-bearing lists, real field-label colons (incl. Keep-a-Changelog `**Term**:` lead-ins), or a literal typographic separator between two nouns (e.g. `%1 — %2`, `Settings → X` breadcrumbs). Severity LOW (NIT for a lone separator). If the project CLAUDE.md has a "user-facing text" / plain-prose rule, treat a violation as a Project Rules finding and quote it.
+- **User-facing prose (AI-isms)**: Text a user reads — `README.md`, `ROADMAP.md`, commit messages, messages the runtime prints for players, and the comments it writes into the game's `.ini` — must read as plain, human-written prose. Flag and rewrite: em-dash (`—`, or its escaped form) used to splice clauses or tack on an appositive; semicolons joining two independent clauses; a spaced hyphen (` - `) standing in for a dash; dramatic "Label: payload" colons used for effect; rule-of-three triads and "not just X, but Y" flourishes. Rewrite as two sentences or a plain connector (and / with / where / so / because). Do NOT flag: code comments, debug log lines (`LOGV`, and `LOG` lines meant for the developer rather than the player), semicolons inside backticked code or genuine comma-bearing lists, real field-label colons (incl. Keep-a-Changelog `**Term**:` lead-ins), or a literal typographic separator between two nouns (e.g. `%1 — %2`, `Settings → X` breadcrumbs). Severity LOW (NIT for a lone separator). If the project CLAUDE.md has a "user-facing text" / plain-prose rule, treat a violation as a Project Rules finding and quote it.
 - **Refactor completeness**: For any finding of the shape "X should now use Y" (an accessor was introduced, an API was renamed, a helper was extracted), grep the WHOLE repo (not just the partition) for every remaining use of the old pattern. List every site found and either fix it or mark it out-of-scope with a reason. A refactor finding that doesn't enumerate every old-pattern site is incomplete. Use `ast-grep` for code patterns (e.g. `ast-grep --pattern 'g_ch_syncpt_next' --lang c` after syncpoints moved to `syncpt_alloc()`) and plain `grep` for substrings — the AST search avoids matching in unrelated tokens or comments.
 - **Comment-code synchronization**: For every comment that names a quantity ("192 syncpoints", "stage slots: 0 VertexA, 1 VertexB"), a function (`see shader_merge_dual`), or a list ("4 Initialize, 6 SetAndWait, 7 Get"), verify the claim against current code. Numeric counts: literally count the items the comment describes. Named functions: `grep -rnw 'FunctionName' runtime` or `ast-grep --pattern 'FunctionName($$$)' --lang c` to confirm the name exists. Stale counts and dangling method references are real LOW findings — they accumulate silently and mislead future readers.
 - **Defensive-code pair audit**:
@@ -290,7 +290,7 @@ List each fix: `file:line` — what changed.
 
 ### 6. Build Verification
 
-Build, and run the game through the scenes the changes affect (`swr-build` and `swr-run` skills). If either fails, treat each error as CRITICAL, fix, rebuild. Do not proceed until both are green.
+Build, and run the game through the scenes the changes affect (`snx-build` and `snx-run` skills). If either fails, treat each error as CRITICAL, fix, rebuild. Do not proceed until both are green.
 
 ```bash
 cmake --preset default && cmake --build --preset default
@@ -298,10 +298,10 @@ scripts/format.sh --check
 tools/run_game.py Catherine --runs 3 --dump work/Catherine
 ```
 
-- Upstream builds with `-w`, so a clean build says nothing about warnings. Build a changed file once with warnings on (its line from `build/default/compile_commands.json`, with `-Wall -Wextra -fsyntax-only`) and check none come from the change.
+- The runtime builds with Clang's default warnings only, and a warning doesn't fail the build, so a clean-looking build says little. Build a changed file once with more warnings on (its line from `build/default/compile_commands.json`, with `-Wall -Wextra -fsyntax-only`) and check none come from the change.
 - A fix for a crash or a race is run until the evidence is statistical: the crash rate before and after, with the run counts, goes in the commit message.
-- Memory-safety fixes also get an AddressSanitizer build (`-DCMAKE_C_FLAGS=-fsanitize=address` in a separate build dir) and a run.
-- The game module only needs recompiling (`scripts/recomp.py`) when `switchrecomp/codegen.py`, `a64.py`, anything in `runtime/abi/` changed.
+- Memory-safety fixes also get an AddressSanitizer build and a run. The runtime links as C++ (VMA), so the flag goes on the C, C++ and link lines, and the build stays out of `games/`: `cmake --preset default -B build/asan -DSNX_DEPLOY=OFF -DCMAKE_C_FLAGS=-fsanitize=address -DCMAKE_CXX_FLAGS=-fsanitize=address -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address && cmake --build build/asan`, then from `games/`: `../build/asan/scarletnx --game=Catherine --seconds=60`.
+- The game module only needs recompiling (`scripts/recomp.py`) when `scarletnx/codegen.py`, `a64.py`, `nxloader.py`, `module.py`, the module's flags in `toolchain.py`, or anything in `runtime/abi/` changed.
 
 ### 7. Diff Review Before Commit
 
@@ -334,9 +334,9 @@ Any claim you cannot find in the diff must be deleted from the message or fixed 
 
 This exists because a message written from intent describes the fix you meant, and the diff is the fix you made.
 
-**Never `--no-verify`.** The pre-commit hooks are part of the gate. Skipping them is how a formatter-clean local tree becomes a red CI run.
+**Run `scripts/format.sh --check` before every commit.** The repo has no pre-commit hook: CI's formatting job is the gate, and an unformatted commit turns it red. If a hook is ever added, never skip it with `--no-verify`.
 
-**Commit at the END of every pass, as soon as build and tests are green.** Do not roll into the next pass with work uncommitted: two passes of uncommitted work with no fallback is a real failure mode, not a hypothetical one.
+**Commit at the end of Phase B's remediation and of each confirmation round, as soon as the build and the runs are green.** Phase A commits nothing (it edits nothing). Do not roll into the next confirmation round with work uncommitted: two rounds of uncommitted work with no fallback is a real failure mode, not a hypothetical one.
 
 ---
 
@@ -358,8 +358,8 @@ The audit runs in two phases with a hard boundary:
 ### Phase B — REMEDIATE (fix once, verify once)
 
 5. Fix the ledger in severity order, applying VERIFY BEFORE WRITE and compile-gating in small batches.
-6. Build green, full test suite green.
-7. A confirmation pass over the files you actually changed — not the whole inventory — to catch damage the remediation itself introduced. Fix what it finds, rebuild, retest.
+6. Build green, and the game run through the scenes the fixes affect (`snx-run`): the repo has no test suite, so the runs are the tests.
+7. A confirmation pass over the files you actually changed — not the whole inventory — to catch damage the remediation itself introduced. Fix what it finds, rebuild, run again.
 8. **Confirmation repeats until a round is clean.** If a confirmation round found anything at HIGH or above, the fixes for it are themselves unverified remediation and get their own round, scoped to that delta. Stop only when a round returns nothing at all. There is no round cap.
 9. Commit, verifying the message against the diff, and push.
 
@@ -452,10 +452,10 @@ For every public function newly introduced or non-trivially modified in this aud
 ```bash
 # Functions: find all call sites
 ast-grep --pattern 'FunctionName($$$)' --lang c runtime
-grep -rnw 'FunctionName' runtime *.py tools scripts
+grep -rnw 'FunctionName' runtime scarletnx tools scripts
 ```
 
-- **Zero callers** → either remove the function, or document the call path preserving it (e.g., reached through a dispatch table like `svc_register`, the `SWR_GL_FUNCS` X-macro, or the generated code's calls into `abi/cpu_helpers.c`). A function that this audit is the first to grep for callers is a function nobody else verified is used.
+- **Zero callers** → either remove the function, or document the call path preserving it (e.g., reached through a dispatch table like `svc_register`, the `Renderer` table in `gpu/renderer.h`, or the generated code's calls into `abi/cpu_helpers.c`). A function that this audit is the first to grep for callers is a function nobody else verified is used.
 - **Only self-callers (tests + the definition site)** → flag for likely-dead status; verify the test isn't the sole reason the function exists.
 
 This step is mandatory on every pass — dead code accumulates between passes when fixes remove the last caller of a helper without removing the helper.
@@ -464,8 +464,9 @@ This step is mandatory on every pass — dead code accumulates between passes wh
 
 Evaluate in order. This predicate is the ONLY thing that may end the loop — not your read of the yield, the effort spent, or how the last pass went.
 
-1. **Any finding in `audit-state.json` with `status: "open"`** → go to step 4. Not optional.
-2. **New findings exist** (not previously raised in earlier passes) → go to step 4, repeat through 11.
+1. **Phase A, new findings exist** (not raised in an earlier pass) → record them in `audit-state.json` and run another full pass (step 8.5). Open findings are expected in Phase A: they are fixed in Phase B, never during an audit pass.
+2. **Phase A, a full pass added nothing new** → Phase A is over. Go to Phase B: fix the ledger (step 5), build and run (step 6), then the confirmation rounds.
+2b. **Phase B, any finding in `audit-state.json` with `status: "open"`** → back to step 5. Not optional.
 3. **Only carry-over findings persist** (same finding re-flagged from a prior pass) → resolve them now: fix, or descope to a tracked artifact (issue link, PR description note, removal from scope) with the reason written into the state file. The skill is NOT allowed to re-flag the same finding for 3+ passes without action. File-size violations, missing test coverage, lossy collapses — these accumulate forever when "stay in scope" is used as a dodge. Once every carry-over is `fixed` or `descoped`, go to step 11.5.
 4. **Zero findings** → go to step 11.5, then step 12.
 5. **There is no pass cap.** A pass that found anything new is always followed by another full pass. The loop ends only through branches 3 or 4.
@@ -480,7 +481,7 @@ Before writing the final report, answer each question explicitly:
 
 0a. **Rule 0 audit.** Did I end a turn anywhere between step 4 and here — to ask permission, present options, report progress, or confirm the next pass? If yes, that was a violation. Note it plainly in the final report's Summary rather than hiding it; the user needs to know the loop ran discontinuously and why.
 
-0b. **State-file audit.** Does `audit-state.json` contain any finding with `status: "open"`? If yes, I am not at step 11.5 — return to step 4. Does every `descoped` entry carry a `descope_reason` AND a `raised_pass` at least two passes old? A fresh finding marked `descoped` is a skipped finding, and the verdict cannot be CLEAN.
+0b. **State-file audit.** Does `audit-state.json` contain any finding with `status: "open"`? If yes, I am not at step 11.5 — return to step 5 (Phase B fixes it). Does every `descoped` entry carry a `descope_reason` AND a `raised_pass` at least two passes old? A fresh finding marked `descoped` is a skipped finding, and the verdict cannot be CLEAN.
 
 0. **Pass-count audit.** For every pass N ≥ 2, count the agent dispatches. Did I dispatch the SAME number of partition reviewers that step 2.5 established for Pass 1? If any pass was partial (fewer agents, a focused verifier, a single re-check, a grep-only walk in place of agent dispatch) — that pass is INVALID per step 8.5. Re-run the missing partitions and continue the loop before writing the final report. Do NOT classify a partial pass as "clean" — partial passes have no verdict at all.
 

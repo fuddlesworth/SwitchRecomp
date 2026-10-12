@@ -1,10 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
+   Copyright 2026 the ScarletNX contributors */
 /* Vulkan renderer: the renderer interface (vk_renderer, the vkr_ functions it points to) and presenting.
 
-   Render targets, clears, draws (gpu/vk/render.c), compute (gpu/vk/compute.c), write-backs to and reloads from guest memory,
-   and presenting the game's framebuffer from its render target (or from memory, converted on the CPU, when no
-   render target holds it). Submits are processed on the thread that makes them, under vk_lock(). */
+   Render targets, clears, draws (gpu/vk/render.c), compute (gpu/vk/compute.c), write-backs to and reloads from
+   guest memory, and presenting the game's framebuffer from its render target (or from memory, converted on the CPU,
+   when no render target holds it). Everything that records runs under vk_lock(), which is reentrant: submits on the
+   GPU channel thread that makes them, presents and screenshots on theirs, and compute results landing on whichever
+   thread reads their memory first. */
 #include <stdio.h>
 #include <stdlib.h>
 #include "core/main.h"
@@ -30,6 +32,7 @@ static int vkr_start(void) {
     vk_cmd_init();
     vk_pipeline_init();
     g_gpu_before_write = vk_compute_before_write;
+    g_gpu_mem_changed = vk_mem_changed;
     VkSemaphoreCreateInfo sci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (int i = 0; i < VK_FRAMES; i++) VK_OK(vkCreateSemaphore(g_vk.dev, &sci, NULL, &g_acquired[i]));
     g_renderer_up = 1; /* a renderer is active */
@@ -61,6 +64,12 @@ static void vkr_cb_bind(GpuChannel* ch, int stage, u32 v) {
     u32* r = ch->r3d;
     u32 idx = (v >> 4) & 31;
     if (stage > 4 || idx >= 18) return;
+    /* the bindings are kept once, not per channel: a second channel drawing in 3D would take the first's. The first
+       time two channels bind is logged */
+    static GpuChannel* last;
+    if (last && last != ch)
+        LOG_LIMIT(1, "vulkan: constant buffers bound from a second GPU channel (bindings are shared)\n");
+    last = ch;
     g_vk_cb[stage][idx] = (v & 1) ? ((u64)r[0x8E1] << 32) | r[0x8E2] : 0;
     g_vk_cbsize[stage][idx] = (v & 1) ? r[0x8E0] : 0;
 }
@@ -82,7 +91,9 @@ static void vkr_rt_reload(u64 gva) {
     vk_unlock();
 }
 static void vkr_dispatch(GpuChannel* ch, const u32* q, u64 code) {
-    if (getenv("SWR_NO_COMPUTE")) return;
+    static int off = -1;
+    if (off < 0) off = getenv("SNX_NO_COMPUTE") != NULL;
+    if (off) return;
     r3d_pending_flush(); /* a merged draw the front end is holding comes first */
     vk_lock();
     vk_dispatch(ch, q, code);
@@ -99,7 +110,8 @@ static void vkr_stream_incr(u32 id) {
 /* the frame from memory when no render target holds it (the game drew it on the CPU, or a video frame) */
 static Surf* cpu_frame(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
     if (g_cpu_img && (g_cpu_img->w != w || g_cpu_img->h != h)) {
-        vk_defer_image(g_cpu_img->img, g_cpu_img->mem, g_cpu_img->view, g_cpu_img->att);
+        vk_defer_image(g_cpu_img->img, g_cpu_img->mem, VK_NULL_HANDLE, g_cpu_img->att);
+        if (g_last == g_cpu_img) g_last = NULL;
         free(g_cpu_img);
         g_cpu_img = NULL;
     }
@@ -140,43 +152,21 @@ static Surf* cpu_frame(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bh
     return g_cpu_img;
 }
 
-/* the game queued a buffer for display: show it, letterboxed to the window */
+static int is_srgb(VkFormat f) {
+    return f == VK_FORMAT_R8G8B8A8_SRGB || f == VK_FORMAT_B8G8R8A8_SRGB || f == VK_FORMAT_A8B8G8R8_SRGB_PACK32;
+}
+
+/* the game queued a buffer for display: show it, letterboxed to the window. A frame that can't be shown (minimized,
+   no image to draw to) is still submitted, with the per-present bookkeeping, so frames don't pile up */
 static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, const i32 crop[4]) {
+    static int sc_srgb; /* what the swapchain was asked for (the surface may not have it) */
     vk_lock();
     vk_render_end();
-    Surf* src = vk_rt_for_cpu(cpu_addr, w, h);
-    if (!src || src->f.is_int) src = cpu_frame(cpu_addr, w, h, pitch, layout, bhl, fmt);
-    int ww, wh;
-    backend_window_size(&ww, &wh);
-    if (ww > 0 && wh > 0 && ((u32)ww != g_vk.sc_extent.width || (u32)wh != g_vk.sc_extent.height)) {
-        vk_finish();
-        vk_swapchain_create();
+    Surf* src = NULL;
+    if (w && h && w <= g_vk.props.limits.maxImageDimension2D && h <= g_vk.props.limits.maxImageDimension2D) {
+        src = vk_rt_for_cpu(cpu_addr, w, h);
+        if (!src || src->f.is_int) src = cpu_frame(cpu_addr, w, h, pitch, layout, bhl, fmt);
     }
-    if (!src || (!g_vk.swapchain && !vk_swapchain_create())) goto out; /* minimized */
-    VkCommandBuffer cb = vk_cmd(); /* waits for this frame slot, so its acquire semaphore is free */
-    u32 slot = (u32)(vk_frame_number() % VK_FRAMES), idx;
-    VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, 1000000000ull, g_acquired[slot], VK_NULL_HANDLE, &idx);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR) {
-        vk_finish();
-        vk_swapchain_create();
-        goto out;
-    }
-    if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
-        VK_OK(r);
-        goto out;
-    }
-    VkImage sc = g_vk.sc_images[idx];
-    vk_surf_use(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
-                VK_ACCESS_2_TRANSFER_READ_BIT);
-    vk_barrier(cb, sc, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
-               VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    VkClearColorValue black = {{0, 0, 0, 1}};
-    VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
-    vk_barrier(cb, sc, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     /* the part of the buffer shown: vi's crop, or all of it */
     u32 x0 = 0, y0 = 0, x1 = w, y1 = h;
     if (crop[2] > crop[0] && crop[3] > crop[1] && crop[0] >= 0 && crop[1] >= 0) {
@@ -186,67 +176,109 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
         y1 = (u32)crop[3] < h ? (u32)crop[3] : h;
     }
     u32 fw = x1 - x0, fh = y1 - y0;
-    /* letterbox: the largest rectangle of the frame's aspect that fits the window, centered */
-    u32 sw = g_vk.sc_extent.width, sh = g_vk.sc_extent.height, dw = sw, dh = (u32)((u64)sw * fh / fw);
-    if (dh > sh) {
-        dh = sh;
-        dw = (u32)((u64)sh * fw / fh);
+    if (src) { /* in its pixels: targets are scaled */
+        if (x1 > src->w) x1 = src->w;
+        if (y1 > src->h) y1 = src->h;
+        g_last = src;
+        g_last_x = (u32)((u64)src->sw * x0 / src->w);
+        g_last_y = (u32)((u64)src->sh * y0 / src->h);
+        g_last_w = (u32)((u64)src->sw * x1 / src->w) - g_last_x;
+        g_last_h = (u32)((u64)src->sh * y1 / src->h) - g_last_y;
     }
-    i32 dx = (i32)(sw - dw) / 2, dy = (i32)(sh - dh) / 2;
-    /* the frame's part of the source, in its pixels (render targets are scaled) */
-    if (x1 > src->w) x1 = src->w;
-    if (y1 > src->h) y1 = src->h;
-    u32 bx = (u32)((u64)src->sw * x0 / src->w), by = (u32)((u64)src->sh * y0 / src->h),
-        bw = (u32)((u64)src->sw * x1 / src->w) - bx, bh = (u32)((u64)src->sh * y1 / src->h) - by;
-    VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                        .srcOffsets = {{(i32)bx, (i32)by, 0}, {(i32)(bx + bw), (i32)(by + bh), 1}},
-                        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                        .dstOffsets = {{dx, dy, 0}, {dx + (i32)dw, dy + (i32)dh, 1}}};
-    vkCmdBlitImage(cb, src->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                   &blit, VK_FILTER_LINEAR);
-    vk_barrier(cb, sc, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0,
-               VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-    g_last = src;
-    g_last_x = bx;
-    g_last_y = by;
-    g_last_w = bw;
-    g_last_h = bh;
+    /* the size the swapchain was made for, not the extent the surface clamped it to: that can stay different */
+    int ww, wh, srgb = src ? is_srgb(src->f.vk) : sc_srgb;
+    backend_window_size(&ww, &wh);
+    if (ww > 0 && wh > 0 && (ww != g_vk.sc_win_w || wh != g_vk.sc_win_h || srgb != sc_srgb)) {
+        vk_finish();
+        sc_srgb = srgb;
+        vk_swapchain_create(srgb);
+    }
+    VkSemaphore wait = VK_NULL_HANDLE, signal = VK_NULL_HANDLE;
+    u32 idx = 0;
+    int recreate = 0;
+    if (src && (g_vk.swapchain || vk_swapchain_create(srgb))) {
+        VkCommandBuffer cb = vk_cmd(); /* waits for this frame slot, so its acquire semaphore is free */
+        VkSemaphore acq = g_acquired[vk_frame_number() % VK_FRAMES];
+        VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, 1000000000ull, acq, VK_NULL_HANDLE, &idx);
+        if (r == VK_ERROR_OUT_OF_DATE_KHR)
+            recreate = 1;
+        else if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
+            wait = acq;
+            signal = g_vk.sc_done[idx];
+            VkImage sc = g_vk.sc_images[idx];
+            vk_surf_use(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                        VK_ACCESS_2_TRANSFER_READ_BIT);
+            /* the submit waits for the acquire at the clear, the image's first use */
+            vk_barrier(cb, sc, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_CLEAR_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
+                       VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkClearColorValue black = {{0, 0, 0, 1}};
+            VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
+            vk_barrier(cb, sc, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                       VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            /* letterbox: the largest rectangle of the frame's aspect that fits the window, centered */
+            u32 sw = g_vk.sc_extent.width, sh = g_vk.sc_extent.height, dw = sw, dh = (u32)((u64)sw * fh / fw);
+            if (dh > sh) {
+                dh = sh;
+                dw = (u32)((u64)sh * fw / fh);
+            }
+            i32 dx = (i32)(sw - dw) / 2, dy = (i32)(sh - dh) / 2;
+            VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                .srcOffsets = {{(i32)g_last_x, (i32)g_last_y, 0},
+                                               {(i32)(g_last_x + g_last_w), (i32)(g_last_y + g_last_h), 1}},
+                                .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                .dstOffsets = {{dx, dy, 0}, {dx + (i32)dw, dy + (i32)dh, 1}}};
+            vkCmdBlitImage(cb, src->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           1, &blit, VK_FILTER_LINEAR);
+            vk_barrier(cb, sc, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0,
+                       VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        } else
+            VK_OK(r);
+    }
     g_vk_present++;
+    if (g_last) g_last->last_used = g_vk_present; /* what screenshots read stays */
     vk_tex_frame();
     vk_buf_frame();
-    if (g_vk_present % 300 == 0) vk_pipeline_save();
+    int save = g_vk_present % 300 == 0;
     if (g_vk_present % 600 == 0) {
         LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped\n",
             (unsigned long long)g_vk_drawn, (unsigned long long)g_vk_skipped, (unsigned long long)g_vk_dispatches,
             (unsigned long long)g_vk_cs_batches, (unsigned long long)(g_vk_cs_wait_ns / 1000000),
             (unsigned long long)g_vk_cs_skipped);
     }
-    vk_submit(g_acquired[slot], VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, g_vk.sc_done[idx]);
-    VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-                           .waitSemaphoreCount = 1,
-                           .pWaitSemaphores = &g_vk.sc_done[idx],
-                           .swapchainCount = 1,
-                           .pSwapchains = &g_vk.swapchain,
-                           .pImageIndices = &idx};
-    r = vkQueuePresentKHR(g_vk.gfx, &pi);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) {
+    vk_submit(wait, VK_PIPELINE_STAGE_2_CLEAR_BIT, signal);
+    if (signal) {
+        VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                               .waitSemaphoreCount = 1,
+                               .pWaitSemaphores = &signal,
+                               .swapchainCount = 1,
+                               .pSwapchains = &g_vk.swapchain,
+                               .pImageIndices = &idx};
+        VkResult r = vkQueuePresentKHR(g_vk.gfx, &pi);
+        if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR)
+            recreate = 1;
+        else
+            VK_OK(r);
+    }
+    if (recreate) {
         vk_finish();
-        vk_swapchain_create();
-    } else
-        VK_OK(r);
-out:
+        vk_swapchain_create(srgb);
+    }
     vk_unlock();
+    if (save) vk_pipeline_save(); /* writes a file: not while holding up the GPU threads */
 }
 
-/* the last presented frame as PPM (path.ppm), and a hash of its pixels */
 /* a part of a surface, blitted to RGBA8 and read back: its hash, and a .ppm at path if given */
 static u64 surf_save(Surf* s, u32 x, u32 y, u32 w, u32 h, const char* path) {
     u64 hash = 1469598103934665603ull;
-    /* blit to an RGBA8 image, whatever the target's format, then read that back */
+    /* blit to an RGBA8 image, whatever the target's format, then read that back. sRGB to sRGB, so the bytes stay
+       encoded as the display shows them */
     VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                             .imageType = VK_IMAGE_TYPE_2D,
-                            .format = VK_FORMAT_R8G8B8A8_UNORM,
+                            .format = is_srgb(s->f.vk) ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM,
                             .extent = {w, h, 1},
                             .mipLevels = 1,
                             .arrayLayers = 1,
@@ -280,6 +312,13 @@ static u64 surf_save(Surf* s, u32 x, u32 y, u32 w, u32 h, const char* path) {
                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     VkBufferImageCopy c = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {w, h, 1}};
     vkCmdCopyImageToBuffer(cb, tmp, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &c);
+    VkMemoryBarrier2 mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                           .srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+                           .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                           .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                           .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT};
+    VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb};
+    vkCmdPipelineBarrier2(cb, &di);
     vk_finish();
     vk_readback_ready();
     vmaDestroyImage(g_vk.vma, tmp, tmem);
@@ -289,17 +328,20 @@ static u64 surf_save(Surf* s, u32 x, u32 y, u32 w, u32 h, const char* path) {
         char fn[1100];
         snprintf(fn, sizeof fn, "%s.ppm", path);
         FILE* f = fopen(fn, "wb");
+        int ok = f != NULL;
         if (f) {
             fprintf(f, "P6\n%u %u\n255\n", w, h);
-            for (u64 i = 0; i < (u64)w * h; i++) {
+            for (u64 i = 0; i < (u64)w * h && ok; i++) {
                 u8 rgb[3] = {(u8)px[i], (u8)(px[i] >> 8), (u8)(px[i] >> 16)};
-                fwrite(rgb, 1, 3, f);
+                ok = fwrite(rgb, 1, 3, f) == 3;
             }
-            fclose(f);
+            ok = fclose(f) == 0 && ok;
         }
+        if (!ok) WARN_LIMIT(1, "vulkan: the screenshot %s couldn't be written\n", fn);
     }
     return hash;
 }
+/* the last presented frame as PPM (path.ppm), and a hash of its pixels */
 static u64 vkr_screenshot(const char* path) {
     vk_lock();
     u64 hash = g_last ? surf_save(g_last, g_last_x, g_last_y, g_last_w, g_last_h, path) : 1469598103934665603ull;
@@ -323,5 +365,6 @@ const Renderer vk_renderer = {
     .stream_incr = vkr_stream_incr,
     .present_buffer = vkr_present_buffer,
     .screenshot = vkr_screenshot,
+    .save = vk_pipeline_save,
 };
 const Renderer* g_renderer = &vk_renderer;

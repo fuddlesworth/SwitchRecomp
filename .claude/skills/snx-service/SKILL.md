@@ -1,5 +1,5 @@
 ---
-name: swr-service
+name: snx-service
 description: "Implement or fix a high-level-emulated Switch service or device (IPC commands, nvdrv ioctls, shared memory) so it answers the way the console does, as the game's SDK code expects. Use when a log shows an unimplemented command, a game stalls waiting on a service, an svcBreak follows a service call, or when adding audio, input, video or system services."
 ---
 
@@ -28,7 +28,7 @@ description: "Implement or fix a high-level-emulated Switch service or device (I
    console times something (audio buffers, vsync), keep the timing: games sync against it.
 4. **Mind the threads.** Service calls come from game threads, which run in parallel on the host. State shared
    between calls takes a lock (`PMutex`, `pm_lock`), events go through `kevent_signal`.
-5. **Verify** with the scene that uses it (`swr-run`), and grep the `-v` log to see the new answers.
+5. **Verify** with the scene that uses it (`snx-run`), and grep the `-v` log to see the new answers.
 
 ## References and licensing
 

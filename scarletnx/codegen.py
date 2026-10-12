@@ -1,5 +1,5 @@
 # SwitchRecomp - Copyright 2026 MZ Labs
-# Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+# Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
 # any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
 # This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE).
 """
@@ -7,12 +7,12 @@ codegen: analysis -> C.
   - function discovery (.eh_frame, symbols, reloc targets, BL targets, hints)
   - one C function per guest function, gotos between blocks, switch on entry
   - fallback interpreter from the same a64.py templates
-  - output split into chunks so they compile in parallel
+(module.py splits the output into chunks that compile in parallel)
 """
 
-import os, sys, struct, itertools
+import sys
 from . import a64
-from .a64 import lit, G, TABLE, FIELDS
+from .a64 import lit, TABLE
 
 UNCOND = ('b', 'br', 'ret', 'brk')
 
@@ -132,7 +132,7 @@ class Program:
         for h in self.hints:
             if self.mod_of(h):
                 starts.setdefault(h, None)
-        # overlapping FDEs: keep the outermost as one function
+        # overlapping FDEs: keep the one that starts first, and drop the ones starting inside it
         funcs = {}
         fde_sorted = sorted((a, e) for a, e in starts.items() if e)
         covered = []  # (start, end) of FDE ranges
@@ -222,7 +222,7 @@ class Program:
         """walk from a, stopping at other known functions"""
         seen = set()
         todo = [a]
-        while todo:
+        while todo and len(seen) <= 200000:
             x = todo.pop()
             while True:
                 if x in seen or (x != a and x in stops):
@@ -376,13 +376,14 @@ def emit_function(prog, f, funcs):
 
 # ======================================================================= interpreter
 def gen_interp(step_mode=False):
-    """step_mode: execute a single instruction and return the next pc (tests)"""
+    """step_mode: execute a single instruction and return the next pc (for differential tests against an emulator,
+    which live outside the repo)"""
     bodies = a64.gen_interp_cases()
     L = []
     fname = (
-        'u64 swr_step(CPU* RESTRICT c, u32 w, u64 pc)'
+        'u64 snx_step(CPU* RESTRICT c, u32 w, u64 pc)'
         if step_mode
-        else 'static void swr_interp(CPU* RESTRICT c, u64 e)'
+        else 'static void snx_interp(CPU* RESTRICT c, u64 e)'
     )
     L.append(fname + '{')
     L.append(' u8* const M=c->mem;')
@@ -422,7 +423,7 @@ def gen_interp(step_mode=False):
     else:
         L.append(' U_: c->pc=pc; c->rt->undef(c,pc,w); return;')
         L.append(' N_: pc+=4; continue;')
-        L.append(' J_: { GuestFn f_=swr_lookup(c,pc); if(f_!=swr_interp_entry){ f_(c,pc); return; } continue; }')
+        L.append(' J_: { GuestFn f_=snx_lookup(c,pc); if(f_!=snx_interp_entry){ f_(c,pc); return; } continue; }')
         L.append(' }')
         L.append('}')
     return '\n'.join(L)
@@ -469,7 +470,8 @@ def interp_body(r, step):
 
 
 def emit_static_step(w, pc, name):
-    """single instruction as a function, used by the Unicorn tests"""
+    """single instruction as a function that returns the next pc (for differential tests against an emulator, which
+    live outside the repo)"""
     r = a64.emit_static(w, pc)
     s = ['u64 %s(CPU* RESTRICT c){ u8* const M=c->mem; (void)M;' % name]
     if r is None:

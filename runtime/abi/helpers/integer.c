@@ -1,10 +1,10 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Part of cpu_helpers.c, which includes it: bitmask immediates, CRC32, compare-and-swap, fences, and the system registers (MRS, MSR). Not compiled on its own. */
 /* ================================================================ integer */
-u64 swr_decode_bitmask(u32 N, u32 imms, u32 immr, u32 ds) {
+u64 snx_decode_bitmask(u32 N, u32 imms, u32 immr, u32 ds) {
     u32 v = (N << 6) | (~imms & 0x3F);
     int len = -1;
     for (int i = 6; i >= 0; i--)
@@ -23,7 +23,7 @@ u64 swr_decode_bitmask(u32 N, u32 imms, u32 immr, u32 ds) {
     return ds == 32 ? (u32)r : r;
 }
 
-u32 swr_crc32(u32 acc, u64 val, int bytes, int castagnoli) {
+u32 snx_crc32(u32 acc, u64 val, int bytes, int castagnoli) {
     u32 poly = castagnoli ? 0x82F63B78u : 0xEDB88320u;
     for (int i = 0; i < bytes; i++) {
         acc ^= (u8)(val >> (i * 8));
@@ -42,7 +42,7 @@ u32 swr_crc32(u32 acc, u64 val, int bytes, int castagnoli) {
 #if defined(__x86_64__)
 __attribute__((target("cx16")))
 #endif
-u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
+u32 snx_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
     unsigned __int128 o = ((unsigned __int128)o1 << 64) | o0, n = ((unsigned __int128)n1 << 64) | n0;
     return __atomic_compare_exchange_n((unsigned __int128*)p, &o, n, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 }
@@ -50,7 +50,7 @@ u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
 
 /* ================================================================ system */
 #define SYSREG(op0, op1, crn, crm, op2) ((((op0) & 1) << 14) | ((op1) << 11) | ((crn) << 7) | ((crm) << 3) | (op2))
-u64 swr_mrs(CPU* c, u32 r) {
+u64 snx_mrs(CPU* c, u32 r) {
     switch (r) {
         case SYSREG(3, 3, 13, 0, 2): return c->tpidr;
         case SYSREG(3, 3, 13, 0, 3): return c->tpidrro;
@@ -67,7 +67,7 @@ u64 swr_mrs(CPU* c, u32 r) {
         default: return 0;
     }
 }
-void swr_msr(CPU* c, u32 r, u64 v) {
+void snx_msr(CPU* c, u32 r, u64 v) {
     switch (r) {
         case SYSREG(3, 3, 13, 0, 2): c->tpidr = v; break;
         case SYSREG(3, 3, 4, 2, 0): set_nzcv(c, (u32)(v >> 28)); break;

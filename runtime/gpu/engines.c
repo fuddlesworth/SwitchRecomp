@@ -1,24 +1,14 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
-#include <string.h>
-#include "core/main.h"
-#include "core/options.h"
-#include "gpu/renderer.h"
-#include "kernel/mem.h"
-#include "platform/log.h"
-#include "platform/plat.h"
-#include <stdio.h>
-#include <stdlib.h>
-/* engines: MME, 3D (regs, cb data, reports, clears), 2D, DMA, compute */
-#include "gpu/gpu.h"
-#include "core/clock.h"
+/* the 3D engine's methods: registers, macro calls, draws (merging instanced ones), constant buffer data, report
+   semaphores. maxwell3d.c passes the work to the renderer */
 #include "gpu/engines_int.h"
 
 /* ============================================================ Maxwell 3D */
 #define R3(i) (ch->r3d[i])
-static u32 g_instance_count, g_draw_inline_count;
+static u32 g_instance_count;
 /* instancing comes in as N BEGIN/END pairs with the next-instance bit. we accumulate them and emit
    one draw of N instances once something else shows up */
 static struct {
@@ -26,7 +16,6 @@ static struct {
     GpuChannel* ch;
     u32 topo, first, count, bv, bi, inst;
 } g_pd;
-u64 g_draws_merged;
 void r3d_pending_flush(void) {
     if (!g_pd.on) return;
     g_pd.on = 0;
@@ -34,18 +23,15 @@ void r3d_pending_flush(void) {
 }
 int r3d_pending_on(void) { return g_pd.on; }
 
-/* timestamps for report semaphores.
-   Games with DRS (SMO via al::GpuPerf / agl::perf::GPUTimeStamp) time the GPU with these and drop resolution
-   when it looks slow. Our "GPU" timing is meaningless for that, see below. */
-/* sead::GraphicsNvn::convertGPUTimeStampToSystemTick compares them against the CPU tick, so they must use
-   the same base (guest_ns). We stamp each report with the time the work was submitted, which makes the
-   measured GPU time ~0 and the game stays at full res. game_dynamic_resolution=1 stamps real time instead. */
-volatile u64 g_gpu_sub_ns;
+/* timestamps for report semaphores, in the 19.2 MHz system tick.
+   sead::GraphicsNvn::convertGPUTimeStampToSystemTick compares them against the CPU tick, so they use the same base
+   (guest_ns): the guest time when the stream reaches the report. Games with DRS (SMO via al::GpuPerf /
+   agl::perf::GPUTimeStamp) time the GPU with these. */
 u64 gpu_ticks(void) {
     static u64 last;
-    u64 n = g_opt_drs ? guest_ns() : (g_gpu_sub_ns ? g_gpu_sub_ns : guest_ns());
+    u64 n = guest_ns();
     if (n <= last) n = last + 16;
-    last = n; /* monotonic, nudged by 1ns within a frame */
+    last = n; /* monotonic: 16 ns on, so the tick (ns * 384 / 625) moves too */
     return n * 384 / 625;
 }
 void query_get(GpuChannel* ch, u32* r, int base, u32 v) {
@@ -53,16 +39,32 @@ void query_get(GpuChannel* ch, u32* r, int base, u32 v) {
     u32 seq = r[base + 2];
     u32 op = v & 3;
     if (op != 1) gpu_signal_point();
-    if (op == 0) { /* release */
+    if (op == 0) {                                /* release */
+        if (((v >> 4) & 1) && !((v >> 28) & 1)) { /* the size is bit 28: does bit 4 alone mean one word? */
+            LOG_LIMIT(4, "gpu: report release %x at %llx with bit 4 set and bit 28 clear, written as one word\n", v,
+                      (unsigned long long)addr);
+        }
         if (((v >> 4) & 1) || ((v >> 28) & 1))
             gmem_w32(addr, seq);
         else {
             u64 q[2] = {seq, gpu_ticks()};
             gmem_write(addr, q, 16);
         }
-    } else if (op == 1) { /* acquire */
+    } else if (op == 1) { /* acquire: COMPARISON (bit 16) is EQ (0) or GE (1) */
+        int ge = (v >> 16) & 1;
         u64 end = plat_ns() + 1000000000ull;
-        while (gmem_r32(addr) != seq && plat_ns() < end) plat_yield();
+        for (;;) {
+            u32 cur = gmem_r32(addr);
+            if (ge ? (i32)(cur - seq) >= 0 : cur == seq) break;
+            if (plat_ns() >= end) {
+                /* the stream runs on the submitting thread under g_gpulock: a release that has to come from another
+                   channel's submission can't happen while this waits */
+                WARN("gpu: channel %u waited 1 s for report semaphore %llx to %s %x (it has %x), and goes on\n", ch->id,
+                     (unsigned long long)addr, ge ? "reach" : "equal", seq, cur);
+                break;
+            }
+            plat_yield();
+        }
     } else if (op == 2) { /* counter */
         u32 sel = (v >> 23) & 31;
         u64 val = sel == 0 ? 0 : (sel == 1 ? g_draws * 3 : 1000);
@@ -76,7 +78,8 @@ void query_get(GpuChannel* ch, u32* r, int base, u32 v) {
 }
 
 void maxwell3d_method(GpuChannel* ch, u32 m, u32 v, int last) {
-    if (m >= 0xE00) { /* macro call */
+    if (ch->cb_n && !(m >= 0x8E4 && m <= 0x8F3)) r3d_const_flush(ch); /* constant buffer data lands first */
+    if (m >= 0xE00) {                                                 /* macro call */
         if (!ch->mme_active) {
             ch->mme_active = 1;
             ch->mme_index = (m - 0xE00) / 2;
@@ -126,9 +129,13 @@ void maxwell3d_method(GpuChannel* ch, u32 m, u32 v, int last) {
         case 0x48: ch->mme_start[ch->mme_start_ptr++ & 0xFF] = v; break;
         case 0x6C: i2m_launch(ch, ch->r3d, 0x60); break;
         case 0x6D: i2m_data(ch, v); break;
-        case 0xB2:
-            if (v & (1u << 20)) { g_renderer->stream_incr(v & 0xFFFF); }
-            break;                           /* SyncInfo */
+        case 0xB2: /* SyncInfo */
+            if (v & (1u << 20))
+                g_renderer->stream_incr(v & 0xFFFF);
+            else { /* Ryujinx increments on every write of SyncpointAction: does the game write it with bit 20 clear? */
+                LOG_LIMIT(4, "gpu: 3D syncpoint action %x without bit 20, not incremented\n", v);
+            }
+            break;
         case 0x674: r3d_clear(ch, v); break; /* ClearBuffers */
         case 0x6C3: query_get(ch, ch->r3d, 0x6C0, v); break;
         case 0x585: { /* END: flush */
@@ -139,9 +146,15 @@ void maxwell3d_method(GpuChannel* ch, u32 m, u32 v, int last) {
             if (g_pd.on && g_pd.ch == ch && ((R3(0x586) >> 26) & 1) && g_pd.indexed == idx && g_pd.topo == topo &&
                 g_pd.first == first && g_pd.count == count && g_pd.bv == bv && g_pd.bi == bi) {
                 g_pd.inst = g_instance_count + 1;
-                g_draws_merged++;
             } /* one more instance */
             else {
+                if (g_instance_count) { /* a draw at instance N that doesn't merge is sent as instances 0..N */
+                    LOG_LIMIT(
+                        4,
+                        "gpu: draw at instance %u doesn't continue the one before (topology %x, first %u, count %u), "
+                        "drawn as %u instances\n",
+                        g_instance_count, topo, first, count, g_instance_count + 1);
+                }
                 r3d_pending_flush();
                 g_pd.on = 1;
                 g_pd.ch = ch;
@@ -179,21 +192,12 @@ void maxwell3d_method(GpuChannel* ch, u32 m, u32 v, int last) {
         case 0x8F0:
         case 0x8F1:
         case 0x8F2:
-        case 0x8F3: r3d_const_upload(ch, v); break;
+        case 0x8F3: r3d_const_upload(ch, v, last); break;
         case 0x904:
         case 0x90C:
         case 0x914:
         case 0x91C:
         case 0x924: r3d_cb_bind(ch, (int)((m - 0x904) / 8), v); break;
-        case 0x6F8:
-        case 0x6F9:
-        case 0x6FA:
-        case 0x6FB:
-        case 0x6FC:
-        case 0x6FD:
-        case 0x6FE:
-        case 0x6FF: /* draw inline */ break;
         default: break;
     }
-    (void)g_draw_inline_count;
 }

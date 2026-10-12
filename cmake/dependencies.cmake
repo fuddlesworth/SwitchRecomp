@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
+# Copyright 2026 the ScarletNX contributors
 # The third-party libraries, fetched at configure time with CPM.cmake (https://github.com/cpm-cmake/CPM.cmake). Each
 # package is pinned to a release archive and its SHA-256, and downloaded once into CPM_SOURCE_CACHE (.cache/cpm in the
 # repository by default, shared by every build folder). Configuring offline works once the cache is filled.
 #
 # Bumping a package: change its version, URL and hash together, the hash taken from the release asset's digest or from
-# a download checked by hand, never from what the next configure happens to fetch (swr-build skill).
+# a download checked by hand, never from what the next configure happens to fetch (snx-build skill).
 
 set(CPM_VERSION 0.43.2)
 set(CPM_HASH 49a3bef91ceb65bb66d57255e12d1ffd22abc2f6408fa9fe4534c544a2f232aa)
@@ -17,9 +17,16 @@ if(DEFINED CPM_SOURCE_CACHE)
 else()
     set(cpm_file "$ENV{CPM_SOURCE_CACHE}/cpm/CPM_${CPM_VERSION}.cmake")
 endif()
-if(NOT EXISTS "${cpm_file}")
-    file(DOWNLOAD "https://github.com/cpm-cmake/CPM.cmake/releases/download/v${CPM_VERSION}/CPM.cmake" "${cpm_file}"
-         EXPECTED_HASH SHA256=${CPM_HASH})
+# Checked on every configure, not only after downloading it: a download that failed its check or broke off leaves a
+# file behind, and the next configure would include it. The download goes to a .part file, renamed once checked
+set(cpm_have "")
+if(EXISTS "${cpm_file}")
+    file(SHA256 "${cpm_file}" cpm_have)
+endif()
+if(NOT cpm_have STREQUAL CPM_HASH)
+    file(DOWNLOAD "https://github.com/cpm-cmake/CPM.cmake/releases/download/v${CPM_VERSION}/CPM.cmake"
+         "${cpm_file}.part" EXPECTED_HASH SHA256=${CPM_HASH})
+    file(RENAME "${cpm_file}.part" "${cpm_file}")
 endif()
 include("${cpm_file}")
 
@@ -27,13 +34,13 @@ include("${cpm_file}")
 # -I folder before any -isystem one, so as -isystem they lost to an -I/usr/local/include in CFLAGS, usual on FreeBSD,
 # and the build mixed in the system's copies. Third-party code builds with its own flags and stays out of the warning
 # output
-function(swr_quiet)
+function(snx_quiet)
     foreach(target IN LISTS ARGN)
         target_compile_options(${target} PRIVATE -w)
     endforeach()
 endfunction()
 
-if(SWR_H264)
+if(SNX_H264)
     # FFmpeg builds with its own configure and make, which cmake/ffmpeg.cmake runs
     CPMAddPackage(NAME FFmpeg VERSION 9.0.2
                   URL https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
@@ -42,7 +49,7 @@ if(SWR_H264)
     include("${CMAKE_SOURCE_DIR}/cmake/ffmpeg.cmake")
 endif()
 
-if(SWR_VULKAN)
+if(SNX_VULKAN)
     CPMAddPackage(NAME Vulkan-Headers VERSION 1.4.365
                   URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.365.tar.gz
                   URL_HASH SHA256=ed832b3292cce324ebba6522fd2d3004bf1b797fa49bfbcad0b302ff23d56abc
@@ -64,11 +71,10 @@ if(SWR_VULKAN)
                   OPTIONS "BUILD_SHARED_LIBS OFF" "ENABLE_OPT OFF" "ENABLE_HLSL OFF" "ENABLE_GLSLANG_BINARIES OFF"
                           "GLSLANG_TESTS OFF" "BUILD_EXTERNAL OFF" "ENABLE_PCH OFF" "GLSLANG_ENABLE_INSTALL OFF"
                           "ENABLE_SPVREMAPPER OFF")
-    swr_quiet(glslang glslang-default-resource-limits)
+    snx_quiet(glslang glslang-default-resource-limits)
 endif()
 
-
-if(SWR_BACKEND STREQUAL "sdl3")
+if(SNX_BACKEND STREQUAL "sdl3")
     if(WIN32)
         # Static on Windows, so the runtime needs no DLL next to it
         CPMAddPackage(NAME SDL3 VERSION 3.4.18
@@ -77,7 +83,7 @@ if(SWR_BACKEND STREQUAL "sdl3")
                       EXCLUDE_FROM_ALL YES SYSTEM YES
                       OPTIONS "SDL_SHARED OFF" "SDL_STATIC ON" "SDL_TEST_LIBRARY OFF" "SDL_TESTS OFF"
                               "SDL_EXAMPLES OFF" "SDL_INSTALL OFF")
-        swr_quiet(SDL3-static)
+        snx_quiet(SDL3-static)
     else()
         # The system's SDL3 comes with the Wayland, X11 and input libraries it loads
         find_package(SDL3 REQUIRED CONFIG)

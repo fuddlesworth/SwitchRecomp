@@ -1,53 +1,34 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
-/* headless backend for the test runner, writes screenshots to ppm/png */
+/* headless backend for the test runner, writes screenshots as PPM. Takes the unattended-run options
+   (platform/unattended.c) */
 #include "core/main.h"
 #include "hle/hid.h"
 #include "platform/backend.h"
+#include "platform/log.h"
 #include "platform/plat.h"
-#include "core/rtapi.h"
+#include "platform/unattended.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#if defined(_WIN32)
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
-static int g_maxframes = -1, g_shot_every = 0;
-static char g_shot[1024];
-static int g_shots;
 static u32* g_last;
 static int g_lw, g_lh;
 static PMutex g_hl;
-static u64 g_start;
-static int g_seconds = 0;
-static u64 g_buttons_at = 0, g_buttons = 0;
-void backend_ini(const char* k, const char* v) {
-    if (!strcmp(k, "frames"))
-        g_maxframes = atoi(v);
-    else if (!strcmp(k, "seconds"))
-        g_seconds = atoi(v);
-    else if (!strcmp(k, "shot"))
-        strncpy(g_shot, v, 1023);
-    else if (!strcmp(k, "shot_every"))
-        g_shot_every = atoi(v);
-    else if (!strcmp(k, "press"))
-        g_buttons = strtoull(v, NULL, 16);
-    else if (!strcmp(k, "press_at"))
-        g_buttons_at = strtoull(v, NULL, 10);
-}
+void backend_ini(const char* k, const char* v) { unattended_ini(k, v); }
 void video_init(const char* t) {
     (void)t;
     pm_init(&g_hl);
-    g_start = plat_ns();
+    unattended_start();
 }
 static void save_ppm(const char* path) {
     if (!g_last) return;
     FILE* f = fopen(path, "wb");
-    if (!f) return;
+    if (!f) {
+        WARN("screenshot: could not write %s\n", path);
+        return;
+    }
     fprintf(f, "P6\n%d %d\n255\n", g_lw, g_lh);
     for (int i = 0; i < g_lw * g_lh; i++) {
         u32 p = g_last[i];
@@ -61,28 +42,39 @@ void video_present_rgba(const u32* px, int w, int h, int stride) {
     if (g_lw != w || g_lh != h) {
         free(g_last);
         g_last = malloc((size_t)w * h * 4);
-        g_lw = w;
-        g_lh = h;
+        g_lw = g_last ? w : 0;
+        g_lh = g_last ? h : 0;
     }
-    for (int y = 0; y < h; y++) memcpy(g_last + (size_t)y * w, px + (size_t)y * stride, (size_t)w * 4);
-    if (g_shot_every && g_shot[0] && g_frames % g_shot_every == 0) {
+    if (g_last) {
+        for (int y = 0; y < h; y++) memcpy(g_last + (size_t)y * w, px + (size_t)y * stride, (size_t)w * 4);
         char p[1100];
-        snprintf(p, sizeof p, "%s_%04d.ppm", g_shot, g_shots++);
-        save_ppm(p);
+        if (unattended_periodic_shot(p, sizeof p - 4)) {
+            strcat(p, ".ppm");
+            save_ppm(p);
+        }
     }
     pm_unlock(&g_hl);
 }
 void video_poll(void) {
-    u64 el = (plat_ns() - g_start) / 1000000ull;
-    g_pad.buttons = (g_buttons && el >= g_buttons_at && el < g_buttons_at + 300) ? g_buttons : 0;
+    /* the scripted presses, stick keys (40..47) as axes like the SDL3 backend's keyboard */
+    u64 s = unattended_buttons();
+    i32 st[4];
+    input_key_sticks(s, st);
+    input_stick_clamp(&st[0], &st[1]);
+    input_stick_clamp(&st[2], &st[3]);
+    g_pad.buttons = s & 0xFFFFFFull;
+    g_pad.lx = st[0];
+    g_pad.ly = st[1];
+    g_pad.rx = st[2];
+    g_pad.ry = st[3];
 }
 void frontend_frame(void) {
-    u64 el = plat_ns() - g_start;
-    if ((g_maxframes >= 0 && g_frames >= g_maxframes) || (g_seconds && el >= (u64)g_seconds * 1000000000ull)) {
+    if (unattended_done()) {
         pm_lock(&g_hl);
-        if (g_shot[0]) {
+        const char* shot = unattended_shot();
+        if (shot) {
             char p[1100];
-            snprintf(p, sizeof p, "%s.ppm", g_shot);
+            snprintf(p, sizeof p, "%s.ppm", shot);
             save_ppm(p);
         }
         u64 h = 1469598103934665603ull;
@@ -91,13 +83,16 @@ void frontend_frame(void) {
                 h ^= g_last[i];
                 h *= 1099511628211ull;
             }
-        fprintf(stderr, "\nframes=%d hash=%016llx %dx%d\n", g_frames, (unsigned long long)h, g_lw, g_lh);
+        int w = g_lw, hh = g_lh;
         pm_unlock(&g_hl);
-        save_hints();
-        fflush(NULL);
-        _exit(0);
+        unattended_exit(h, w, hh);
     }
 }
+/* plat.c's fatal error box: Windows only, and not in an unattended run, where nobody would close it */
+void win_fatal_box(const char* msg) {
 #if defined(_WIN32)
-void win_fatal_box(const char* msg) { MessageBoxA(NULL, msg, "SwitchRecomp", MB_OK | MB_ICONERROR); }
+    if (!unattended_active()) MessageBoxA(NULL, msg, "ScarletNX", MB_OK | MB_ICONERROR);
+#else
+    (void)msg;
 #endif
+}

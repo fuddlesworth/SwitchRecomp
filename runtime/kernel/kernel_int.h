@@ -1,10 +1,10 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* what the kernel's files share: result codes, the thread table, waiting and waking, and the SVCs svc.c dispatches to */
-#ifndef SWR_KERNEL_INT_H
-#define SWR_KERNEL_INT_H
+#ifndef SNX_KERNEL_INT_H
+#define SNX_KERNEL_INT_H
 #include "kernel/kernel.h"
 #include "core/loader.h"
 #include "kernel/ipc.h"
@@ -20,6 +20,7 @@
 #define R_CANCELLED   0xEC01
 #define R_BADHANDLE   0xE401
 #define R_BADSTATE    0xFA01
+#define R_BUSY        0xF401
 #define R_BADADDR     0xCC01
 #define R_OUTOFMEM    0xD001
 #define R_BADENUM     0xF001
@@ -28,7 +29,11 @@
 #define R_OUTOFRANGE  0xEE01
 #define R_BADMEMSTATE 0xD401
 #define R_BADREGION   0xDC01
-#define R_NOTIMPL     0xF601
+#define R_NOTIMPL     0x4201 /* NotImplemented */
+#define R_BADSIZE     0xCA01
+#define R_BADPRIO     0xE001  /* InvalidPriority */
+#define R_BADCORE     0xE201  /* InvalidCoreId */
+#define R_LIMIT       0x10801 /* LimitReached: the resource limit has no room */
 #define HANDLE_WAIT   0x40000000u
 #define H_CUR_PROC    0xFFFF8001u
 #define H_CUR_THREAD  0xFFFF8000u
@@ -38,16 +43,11 @@ typedef struct {
 } SvcRec;
 
 /* kernel.c */
-extern PMutex g_klock;
-extern u64 g_title_id;
-extern u64 g_sysres_size;
-extern int g_exiting;
 extern u64 g_next_tid;
 extern SvcRec g_svc_ring[64];
 extern u32 g_svc_ring_n;
-u32 h_new(KObj* o);
 KObj* h_get_nl(u32 h);
-KObj* h_get(u32 h);
+KObj* h_get(u32 h); /* no ref taken: only for threads, which are never freed */
 KObj* h_get_type(u32 h, int t);
 int h_close(u32 h);
 void waiter_add(KObj* o, KThread* t);
@@ -55,13 +55,12 @@ void waiter_del(KObj* o, KThread* t);
 void wake(KThread* t, int result);
 void kobj_signal_nl(KObj* o);
 int sleep_nl(KThread* t, i64 timeout);
-KEvent* kevent_new(const char* name, int autoclear);
-void kevent_signal(KEvent* e);
 
 /* thread.c */
+#define THREAD_MAX 96 /* the application resource limit's ThreadCountMax */
 extern KThread* g_threads[256];
 extern int g_nthreads;
-KThread* kthread_cur(void);
+int kthread_live_count(void);
 KThread* kthread_create(u64 entry, u64 arg, u64 stack_top, int prio, int core);
 void kthread_start(KThread* t);
 void svc_exit_thread(KThread* t);
@@ -85,11 +84,11 @@ u32 svc_map_shm(u32 h, u64 addr, u64 size, u32 perm);
 u32 svc_unmap_shm(u32 h, u64 addr, u64 size);
 void tmem_destroy(KObj* o);
 u64 mem_total(void);
-extern u64 g_phys_mapped;
+extern u64 g_phys_mapped; /* atomic */
 u64 used_memory(void);
+u32 svc_set_heap_size(u64 size);
+u32 svc_map_physical(u64 addr, u64 size);
+u32 svc_unmap_physical(u64 addr, u64 size);
 u32 svc_get_info(u32 id0, u32 h, u64 id1, u64* out);
-
-/* debug.c */
-void kernel_dump_regs(CPU* c);
 
 #endif

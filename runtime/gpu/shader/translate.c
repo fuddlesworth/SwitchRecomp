@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* translating each instruction to GLSL, with the attribute and texture helpers */
@@ -21,11 +21,11 @@ static char* attr_read(Ctx* c, u32 addr, int is_output) {
         if (c->stage == ST_FS) {
             c->si->uses_position_in = 1;
             if (comp == 3) return "floatBitsToUint(1.0/gl_FragCoord.w)";
-            if (comp < 2) return T("floatBitsToUint(gl_FragCoord.%c*swr_rs.x)", "xy"[comp]);
+            if (comp < 2) return T("floatBitsToUint(gl_FragCoord.%c*snx_rs.x)", "xy"[comp]);
             return T("floatBitsToUint(gl_FragCoord.%c)", "xyzw"[comp]);
         }
-        if (c->stage == ST_VS) return T("floatBitsToUint(gl_Position.%c)", "xyzw"[comp]);
-        return T("floatBitsToUint(gl_in[0].gl_Position.%c)", "xyzw"[comp]);
+        /* only vertex, fragment and compute programs get translated (no geometry or tessellation stage) */
+        return c->stage == ST_VS ? T("floatBitsToUint(gl_Position.%c)", "xyzw"[comp]) : "0u";
     }
     switch (addr) {
         /* Vulkan's instance index counts from the draw's first instance, the guest's instance ID from 0 */
@@ -34,7 +34,7 @@ static char* attr_read(Ctx* c, u32 addr, int is_output) {
             if (c->stage != ST_VS) return "0u";
             c->uses_draw_params = 1;
             return "uint(gl_InstanceIndex - gl_BaseInstanceARB)";
-        case 0x3FC: c->si->uses_front_face = 1; return c->stage == ST_FS ? "(gl_FrontFacing? 0xFFFFFFFFu : 0u)" : "0u";
+        case 0x3FC: return c->stage == ST_FS ? "(gl_FrontFacing? 0xFFFFFFFFu : 0u)" : "0u";
         case 0x60: return c->stage == ST_FS ? "uint(gl_PrimitiveID)" : "0u";
         case 0x64: return c->stage == ST_FS ? "uint(gl_Layer)" : "0u";
         case 0x68: return "0u";
@@ -64,45 +64,50 @@ static void attr_write(Ctx* c, u32 addr, const char* val) {
             return;
         case 0x64:
             c->si->writes_layer = 1;
-            emitl(c, "SWR_SET_LAYER(int(%s));", val);
+            emitl(c, "SNX_SET_LAYER(int(%s));", val);
             return;
         case 0x68: emitl(c, "/* viewport index */"); return;
     }
     if (addr >= 0x2C0 && addr < 0x2E0) {
-        emitl(c, "gl_ClipDistance[%u] = uintBitsToFloat(%s);", (addr - 0x2C0) >> 2, val);
-        c->si->uses_clip_mask |= 1 << ((addr - 0x2C0) >> 2);
+        /* a distance the 3D engine doesn't enable doesn't clip, and Vulkan clips with every one written */
+        u32 i = (addr - 0x2C0) >> 2;
+        if (!((c->si->clip_enable >> i) & 1)) {
+            emitl(c, "/* clip distance %u not enabled */", i);
+            return;
+        }
+        emitl(c, "gl_ClipDistance[%u] = uintBitsToFloat(%s);", i, val);
+        c->si->uses_clip_mask |= 1 << i;
         return;
     }
-    emitl(c, "/* escritura a atributo %x ignorada */", addr);
+    emitl(c, "/* write to attribute %x ignored */", addr);
 }
 
 /* ============================================================ textures */
-static u8 g_bl2;
-static u32 g_bl2_bank, g_bl2_off; /* second handle read for split handles, set by track_handle */
-static int tex_slot2(Ctx* c, u32 cbuf_off_words, int type, int array, int shadow, int fetch, int bl, u32 bank);
-static int tex_slot(Ctx* c, u32 cbuf_off_words, int type, int array, int shadow, int fetch) {
-    return tex_slot2(c, cbuf_off_words, type, array, shadow, fetch, 0, 0);
+static void unsupported(Ctx* c, const char* name, u64 w);
+static int tex_slot2(Ctx* c, u32 cbuf_off_words, int type, int array, int shadow, int bl, u32 bank);
+static int tex_slot(Ctx* c, u32 cbuf_off_words, int type, int array, int shadow) {
+    return tex_slot2(c, cbuf_off_words, type, array, shadow, 0, 0);
 }
-static int tex_slot2(Ctx* c, u32 cbuf_off_words, int type, int array, int shadow, int fetch, int bl, u32 bank) {
+static int tex_slot2(Ctx* c, u32 cbuf_off_words, int type, int array, int shadow, int bl, u32 bank) {
     ShaderInfo* si = c->si;
-    u8 b2 = bl ? g_bl2 : 0;
+    u8 b2 = bl ? c->bl2 : 0;
     for (int i = 0; i < si->ntex; i++) {
         ShTex* t = &si->tex[i];
         if (t->cbuf_off == cbuf_off_words && t->type == type && t->array == array && t->shadow == shadow &&
             t->bindless == bl && (!bl || t->bl_cbuf == bank) && t->bl2 == b2 &&
-            (!b2 || (t->bl2_cbuf == g_bl2_bank && t->bl2_off == g_bl2_off))) {
-            if (!fetch) t->fetch_only = 0;
+            (!b2 || (t->bl2_cbuf == c->bl2_bank && t->bl2_off == c->bl2_off)))
             return i;
-        }
     }
-    if (si->ntex >= SH_MAXTEX) return 0;
+    if (si->ntex >= SH_MAXTEX) { /* no binding left: the access reads slot 0, so say so */
+        unsupported(c, "texture (too many textures)", 0);
+        return 0;
+    }
     ShTex* t = &si->tex[si->ntex];
     memset(t, 0, sizeof *t);
     t->cbuf_off = cbuf_off_words;
     t->type = (u8)type;
     t->array = (u8)array;
     t->shadow = (u8)shadow;
-    t->fetch_only = (u8)fetch;
     t->bindless = (u8)bl;
     t->bl_cbuf = (u8)bank;
     if (bl && bank < 18) {
@@ -111,15 +116,24 @@ static int tex_slot2(Ctx* c, u32 cbuf_off_words, int type, int array, int shadow
     }
     if (b2) {
         t->bl2 = 1;
-        t->bl2_cbuf = (u8)g_bl2_bank;
-        t->bl2_off = g_bl2_off;
-        u32 b = g_bl2_bank;
+        t->bl2_cbuf = (u8)c->bl2_bank;
+        t->bl2_off = c->bl2_off;
+        u32 b = c->bl2_bank;
         if (b < 18) {
             si->cbuf_mask |= 1u << b;
-            if (g_bl2_off * 4 + 16 > si->cbuf_max[b]) si->cbuf_max[b] = ((g_bl2_off * 4) | 15) + 1;
+            if (c->bl2_off * 4 + 16 > si->cbuf_max[b]) si->cbuf_max[b] = ((c->bl2_off * 4) | 15) + 1;
         }
     }
     return si->ntex++;
+}
+/* bits 0-7 aren't a destination register for these (stores keep their data register there) */
+static int no_rd(const Op* o) {
+    const char* nm = o->name;
+    return strstr(nm, "SETP") || !strncmp(nm, "ST", 2) || !strncmp(nm, "BR", 2) || !strcmp(nm, "EXIT") ||
+           !strcmp(nm, "SSY") || !strcmp(nm, "SYNC") || !strcmp(nm, "PBK") || !strcmp(nm, "PCNT") ||
+           !strcmp(nm, "CONT") || !strcmp(nm, "KIL") || !strcmp(nm, "NOP") || !strcmp(nm, "DEPBAR") ||
+           !strcmp(nm, "BAR") || !strcmp(nm, "AST") || !strcmp(nm, "RED") || !strcmp(nm, "MEMBAR") ||
+           !strcmp(nm, "CAL") || !strcmp(nm, "RET");
 }
 /* TEX.B / TXQ.B: handle comes in a register. Find the LDC / MOV from cbuf that produced it and treat it
    as a regular bound texture from that bank. */
@@ -134,13 +148,7 @@ static int track_src(Ctx* c, u32 idx, u32 rb, u32* bank, u32* off, int* n, int d
         const Op* o = decode(w);
         if (!o) continue;
         if (B(w, 0, 8) != rb) continue;
-        const char* nm = o->name;
-        if (strstr(nm, "SETP") || !strncmp(nm, "ST", 2) || !strncmp(nm, "BR", 2) || !strcmp(nm, "EXIT") ||
-            !strcmp(nm, "SSY") || !strcmp(nm, "SYNC") || !strcmp(nm, "PBK") || !strcmp(nm, "PCNT") ||
-            !strcmp(nm, "CONT") || !strcmp(nm, "KIL") || !strcmp(nm, "NOP") || !strcmp(nm, "DEPBAR") ||
-            !strcmp(nm, "BAR") || !strcmp(nm, "AST") || !strcmp(nm, "RED") || !strcmp(nm, "MEMBAR") ||
-            !strcmp(nm, "CAL") || !strcmp(nm, "RET"))
-            continue;
+        if (no_rd(o)) continue;
         if (o->id == O_LDC) {
             u32 sz = B(w, 48, 3);
             if (sz != 4 && sz != 5) return 0;
@@ -176,23 +184,88 @@ static int track_src(Ctx* c, u32 idx, u32 rb, u32* bank, u32* off, int* n, int d
 static int track_handle(Ctx* c, u32 idx, u32 rb, u32* bank, u32* off) {
     u32 bk[2] = {0, 0}, of[2] = {0, 0};
     int n = 0;
-    g_bl2 = 0;
+    c->bl2 = 0;
     if (!track_src(c, idx, rb, bk, of, &n, 0) || !n) return 0;
     *bank = bk[0];
     *off = of[0];
     if (n == 2) {
-        g_bl2 = 1;
-        g_bl2_bank = bk[1];
-        g_bl2_off = of[1] / 4;
+        c->bl2 = 1;
+        c->bl2_bank = bk[1];
+        c->bl2_off = of[1] / 4;
     }
     return 1;
+}
+/* the constant in r at idx, when it was moved there in the same block (MOV32I, MOV with an immediate, or a copy of
+   such a register). GLSL's sampling functions only take constant offsets, and a shader's source had them as
+   constants, which its compiler puts in a register for TEX/TXD/TLD4.PTP. 0 if it can't tell */
+static int track_const(Ctx* c, u32 idx, u32 r, u32* v, int depth) {
+    if (r == 255) {
+        *v = 0;
+        return 1;
+    }
+    if (depth > 6) return 0;
+    for (u32 j = idx; j-- > 11;) {
+        if ((c->leader[(j + 1) >> 3] >> ((j + 1) & 7)) & 1) return 0; /* another path can come in after j */
+        if (!IDX_OK(j)) continue;
+        u64 w = c->w[j];
+        const Op* o = decode(w);
+        if (!o || B(w, 0, 8) != r || no_rd(o)) continue;
+        if (o->id == O_MOV32I) {
+            *v = B(w, 20, 32);
+            return 1;
+        }
+        if (o->id == O_MOV_I) { /* imm20 with its sign at bit 56 */
+            *v = B(w, 20, 19) | (B(w, 56, 1) ? 0xFFF80000u : 0);
+            return 1;
+        }
+        if (o->id == O_MOV_R) return track_const(c, j, B(w, 20, 8), v, depth + 1);
+        return 0;
+    }
+    return 0;
+}
+/* the offsets packed in a register as an ivecN (n components of bits each, component k at shift + k*stride, signed),
+   a constant expression when track_const knows the value; pad1d adds the 0 for a 1D texture read as 2D */
+static const char* tex_offsets(Ctx* c, u32 idx, u32 r, int n, int shift, int stride, int bits, int pad1d,
+                               int* is_const) {
+    u32 v;
+    char k[3][48];
+    *is_const = track_const(c, idx, r, &v, 0);
+    for (int i = 0; i < n; i++) {
+        int lo = shift + i * stride;
+        if (*is_const)
+            snprintf(k[i], sizeof k[i], "%d", (i32)(v << (32 - lo - bits)) >> (32 - bits));
+        else
+            snprintf(k[i], sizeof k[i], "bitfieldExtract(int(%s),%d,%d)", R(c, r), lo, bits);
+    }
+    if (n == 1) return pad1d ? T("ivec2(%s, 0)", k[0]) : T("%s", k[0]);
+    if (n == 2) return T("ivec2(%s, %s)", k[0], k[1]);
+    return T("ivec3(%s, %s, %s)", k[0], k[1], k[2]);
+}
+/* the Dim (Ryujinx TexDim, as TEX bits 28-30 hold it) the program's other accesses use for the bound texture at
+   word off, -1 when none does. TEXS/TLDS give theirs through their encoding */
+static int tex_dim_of(Ctx* c, u32 off) {
+    /* TEXS and TLDS encodings to TexDim: 1D 0, 2D 2, 2D array 3, 3D 4, cube 6 */
+    static const i8 texs[16] = {0, 2, 2, 2, 2, 2, 2, 3, 3, 3, 4, 4, 6, 6, -1, -1};
+    static const i8 tlds[16] = {0, 0, 2, 2, 2, 2, 2, 4, 3, -1, -1, -1, 2, -1, -1, -1};
+    for (u32 i = 11; i < c->nwords; i++) {
+        if (!IDX_OK(i)) continue;
+        u64 w = c->w[i];
+        const Op* o = decode(w);
+        if (!o || B(w, 36, 13) != off) continue;
+        int id = o->id;
+        if (id == O_TEX || id == O_TLD || id == O_TLD4 || id == O_TMML || id == O_TXD) return (int)B(w, 28, 3);
+        if (id == O_TEXS && texs[B(w, 53, 4)] >= 0) return texs[B(w, 53, 4)];
+        if (id == O_TLDS && tlds[B(w, 53, 4)] >= 0) return tlds[B(w, 53, 4)];
+        if (id == O_TLD4S) return 2;
+    }
+    return -1;
 }
 static const char* IW(Ctx* c, int s, const char* smp) {
     if (s < 0 || s >= 32 || !((c->si->tex_int_mask >> s) & 1)) return smp;
     return T("uintBitsToFloat(uvec4(%s))", smp);
 }
 const char* samp_type(int type, int array, int shadow) {
-    /* GLES has no 1D textures, and Vulkan can't view the 2D images they are stored in as 1D: both read them as 2D */
+    /* Vulkan can't view the 2D images 1D textures are stored in as 1D, so they are read as 2D */
     static const char* n[4] = {"1D", "2D", "3D", "Cube"};
     if (type == 0) type = 1;
     return T("sampler%s%s%s", n[type & 3], array ? "Array" : "", shadow ? "Shadow" : "");
@@ -205,6 +278,17 @@ static void write_masked(Ctx* c, u32 d, u32 mask, const char* v) {
             if (r != 255) setrf(c, r, T("%s.%c", v, "xyzw"[k]));
             r = r == 255 ? 255 : r + 1;
         }
+}
+
+/* SULD/SUST coordinates for Dim 33-35 (Ryujinx SuDim: 0 1D, 2 1D array, 3 2D, 4 2D array, 5 3D) from ra on, with x
+   given: for an image as declared, for a sampler (sampled) with 1D read as 2D like everywhere else */
+static const char* su_coords(Ctx* c, u32 ty, u32 ra, const char* x, int sampled) {
+    switch (ty) {
+        case 0: return sampled ? T("ivec2(%s, 0)", x) : x;
+        case 2: return sampled ? T("ivec3(%s, 0, int(%s))", x, R(c, ra + 1)) : T("ivec2(%s, int(%s))", x, R(c, ra + 1));
+        case 3: return T("ivec2(%s, int(%s))", x, R(c, ra + 1));
+        default: return T("ivec3(%s, int(%s), int(%s))", x, R(c, ra + 1), R(c, ra + 2));
+    }
 }
 
 /* TEXS/TLDS/TLD4S write two reg pairs */
@@ -261,13 +345,11 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op);
 static void global_atomic(Ctx* c, u64 w, const char* name, u32 ra, u32 rv, i32 off, u32 sz, u32 op, u32 dst) {
     if (op == 10) op = 0; /* SAFEADD */
     if (!c->gtag[ra] || (sz != 0 && sz != 1 && sz != 3) || op > 8 || (sz == 3 && op != 0 && op != 8)) {
-        c->si->uses_global = 1;
         unsupported(c, name, w);
         if (dst != 255) setr(c, dst, "0u");
         return;
     }
     int gi = c->gtag[ra] - 1;
-    c->si->uses_global = 1;
     c->si->gbuf_wmask |= 1u << gi;
     emitl(c, "{ uint o_ = (%s + %uu - %s) >> 2u; uint v_ = %s; uint old_;", R(c, ra), (u32)off,
           CB(c, 0, c->si->gbuf_cbuf_off[gi]), R(c, rv));
@@ -297,11 +379,153 @@ static void global_atomic(Ctx* c, u64 w, const char* name, u32 ra, u32 rv, i32 o
     emitl(c, "}");
 }
 
+/* the condition code test of BRA/BRX/SYNC/BRK/CONT/EXIT/KIL/RET and CSETP (Ryujinx InstBra.Ccc, the Ccc enum and
+   InstEmitConditionCode.GetCondition): N is cc_s, Z cc_z, C cc_c, V cc_o. NULL for the codes it doesn't model */
+static const char* cc_test(Ctx* c, u32 ccc) {
+    if (ccc == 15) return "true";
+    if (ccc == 0) return "false";
+    c->uses_cc = 1;
+    switch (ccc) {
+        case 1: return "((cc_s && !cc_z) != cc_o)";    /* LT */
+        case 2: return "(!cc_s && cc_z)";              /* EQ */
+        case 3: return "(cc_s != (cc_z || cc_o))";     /* LE */
+        case 4: return "(!((cc_s != cc_o) || cc_z))";  /* GT */
+        case 5: return "(!cc_z)";                      /* NE */
+        case 6: return "(cc_s == cc_o)";               /* GE */
+        case 7: return "(!(cc_s && cc_z))";            /* NUM */
+        case 8: return "(cc_s && cc_z)";               /* NAN */
+        case 9: return "(cc_s != cc_o)";               /* LTU */
+        case 10: return "cc_z";                        /* EQU */
+        case 11: return "((cc_s != cc_o) || cc_z)";    /* LEU */
+        case 12: return "((!cc_s) != (cc_o || cc_z))"; /* GTU */
+        case 13: return "(cc_s || !cc_z)";             /* NEU */
+        case 14: return "(((!cc_s) || cc_z) != cc_o)"; /* GEU */
+        case 16: return "(!cc_o)";                     /* OFF */
+        case 17: return "(!cc_c)";                     /* LO */
+        case 18: return "(!cc_s)";                     /* SFF */
+        case 19: return "(cc_z || !cc_c)";             /* LS */
+        case 20: return "(cc_c && !cc_z)";             /* HI */
+        case 21: return "cc_s";                        /* SFT */
+        case 22: return "cc_c";                        /* HS */
+        case 23: return "cc_o";                        /* OFT */
+        case 30: return "(cc_s || cc_z)";              /* RLE */
+        case 31: return "(!(cc_s || cc_z))";           /* RGT */
+    }
+    return NULL; /* CSM_* / FCSM_*: states of the hardware's own, not flags */
+}
+static int has_ccc(int id) {
+    return id == O_BRA || id == O_BRX || id == O_SYNC || id == O_BRK || id == O_CONT || id == O_EXIT || id == O_KIL ||
+           id == O_RET;
+}
+/* a flow instruction that always runs: predicate PT and condition code T */
+int flow_always(u64 w) { return B(w, 16, 3) == 7 && !B(w, 19, 1) && B(w, 0, 5) == 15; }
+/* when a flow instruction runs: its predicate and its condition code */
+const char* flow_cond(Ctx* c, u64 w) {
+    u32 pg = B(w, 16, 3), pn = B(w, 19, 1);
+    const char* p = pg == 7 ? (pn ? "false" : "true") : PN(c, pg, pn);
+    const char* t = cc_test(c, B(w, 0, 5));
+    if (!t) { /* as in Ryujinx, an EXIT on a condition it can't test doesn't run, the others do */
+        const Op* op = decode(w);
+        unsupported(c, "condition code", w);
+        t = op && op->id == O_EXIT ? "false" : "true";
+    }
+    if (!strcmp(t, "true")) return p;
+    if (!strcmp(p, "true")) return t;
+    return T("(%s && %s)", p, t);
+}
+
+/* d = e, and with WriteCC the Z and N flags of the result (Ryujinx SetZnFlags, SetFPZnFlags for a float one): a
+   branch or CSETP on a condition code reads them. Through a temporary, since d can be RZ (FSET RZ.CC) */
+static void setr_cc(Ctx* c, u32 d, const char* e, int cc, int fp) {
+    if (!cc) {
+        setr(c, d, e);
+        return;
+    }
+    c->uses_cc = 1;
+    emitl(c, "{ uint v_ = %s;", e);
+    c->indent++;
+    setr(c, d, "v_");
+    emitl(c, fp ? "cc_z = uintBitsToFloat(v_) == 0.0; cc_s = uintBitsToFloat(v_) < 0.0;"
+                : "cc_z = v_ == 0u; cc_s = int(v_) < 0;");
+    c->indent--;
+    emitl(c, "}");
+}
+static void setrf_cc(Ctx* c, u32 d, const char* e, int cc) { setr_cc(c, d, T("floatBitsToUint(%s)", e), cc, 1); }
+
+/* IADD/IADD32I: AvgMode (Ryujinx AvgMode) 1 negates B, 2 negates A, 3 adds one. .X adds the carry in, .CC sets the
+   flags (Ryujinx SetIaddFlags: C the carry out, V the signed overflow, and after .X Z only stays set if the earlier
+   words were zero too). Under .CC or .X a negated operand goes through the adder as ~B + 1, so C comes out as the
+   subtraction's no-borrow (also for B = 0, which 0u-B would lose), and under .X the carry in takes the place of the
+   +1: a multiword subtraction (IADD.CC on the low words, IADD.X on the high ones) needs exactly that */
+static void emit_iadd(Ctx* c, u32 d, const char* A, const char* Bv, u32 avg, int x, int cc) {
+    if (!x && !cc) {
+        if (avg == 2) A = T("(0u-%s)", A);
+        if (avg == 1) Bv = T("(0u-%s)", Bv);
+        setr(c, d, T("(%s + %s%s)", A, Bv, avg == 3 ? " + 1u" : ""));
+        return;
+    }
+    if (avg == 2) A = T("(~%s)", A);
+    if (avg == 1) Bv = T("(~%s)", Bv);
+    const char* cin = x ? (avg == 3 ? "(cc_c?2u:1u)" : "(cc_c?1u:0u)") : avg ? "1u" : "0u";
+    c->uses_cc = 1;
+    emitl(c, "{ uint a_ = %s, b_ = %s, c1_, c2_ = 0u; uint s_ = uaddCarry(a_, b_, c1_);", A, Bv);
+    c->indent++;
+    if (strcmp(cin, "0u")) emitl(c, "s_ = uaddCarry(s_, %s, c2_);", cin);
+    if (cc)
+        emitl(
+            c,
+            "cc_c = (c1_|c2_)!=0u; cc_o = ((s_ ^ a_) & ~(a_ ^ b_)) >= 0x80000000u; cc_z = s_==0u%s; cc_s = int(s_)<0;",
+            x ? " && cc_z" : "");
+    setr(c, d, "s_");
+    c->indent--;
+    emitl(c, "}");
+}
+
+/* local memory per thread in words: the SPH's ShaderLocalMemoryLowSize + HighSize (common words 1 and 2, bits 0-23,
+   as Ryujinx ShaderHeader reads them) rounded up to a power of two. Compute programs come without an SPH (zeros), so
+   they, and a header that gives no size, get 1024 words */
+u32 lmem_words(Ctx* c) {
+    u32 bytes = (c->si->sph[1] & 0xFFFFFF) + (c->si->sph[2] & 0xFFFFFF), n = 1;
+    if (c->stage == ST_CS || !bytes) return 1024;
+    while (n * 4 < bytes && n < 65536) n <<= 1;
+    return n;
+}
+
+/* opens a block in which h_ is the high word of a * b, each operand signed or not (Ryujinx EmitImad: a signed
+   multiply when both are, else the unsigned one corrected for the signed operand); the caller closes it */
+static void open_mulhi(Ctx* c, const char* a, const char* b, int sa, int sb) {
+    emitl(c, "{ uint a_ = %s, b_ = %s, h_, l_;", a, b);
+    c->indent++;
+    if (sa && sb)
+        emitl(c, "{ int hs_, ls_; imulExtended(int(a_), int(b_), hs_, ls_); h_ = uint(hs_); }");
+    else {
+        emitl(c, "umulExtended(a_, b_, h_, l_);");
+        if (sa) emitl(c, "h_ += b_ * uint(int(a_) >> 31);");
+        if (sb) emitl(c, "h_ += a_ * uint(int(b_) >> 31);");
+    }
+}
+
+/* ISETP/ISET: IComp 49-51, Signed 48. With .X (bit 43) they compare the high words of a multiword value and the low
+   words' subtraction left its result in the flags (Ryujinx GetIntComparisonExtended) */
+static const char* icmp_xe(Ctx* c, u64 w, const char* a, const char* b) {
+    u32 op = B(w, 49, 3);
+    int sgn = B(w, 48, 1);
+    if (!B(w, 43, 1) || op == 0 || op == 7) return icmp_expr(op, a, b, sgn);
+    c->uses_cc = 1;
+    const char *lt = icmp_expr(1, a, b, sgn), *gt = icmp_expr(4, a, b, sgn), *eq = icmp_expr(2, a, b, 0);
+    switch (op) {
+        case 1: return T("(%s || (%s && !cc_c))", lt, eq);
+        case 2: return T("(%s && cc_z)", eq);
+        case 3: return T("(%s || (%s && (cc_z || !cc_c)))", lt, eq);
+        case 4: return T("(%s || (%s && !cc_z && cc_c))", gt, eq);
+        case 5: return T("(%s || !cc_z)", icmp_expr(5, a, b, 0));
+        default: return T("(%s || (%s && cc_c))", gt, eq);
+    }
+}
+
 static void emit_guarded(Ctx* c, u32 idx, u64 w, const Op* op) {
     u32 pg = B(w, 16, 3), pn = B(w, 19, 1);
     int id = op->id;
-    int is_flow = id == O_BRA || id == O_SYNC || id == O_BRK || id == O_EXIT || id == O_KIL || id == O_CONT ||
-                  id == O_SSY || id == O_PBK || id == O_PCNT;
     /* SSY/PBK/PCNT/PRET/CAL ignore the predicate field (reads as P0) */
     if (id == O_SSY || id == O_PBK || id == O_PCNT || id == O_PRET || id == O_CAL || id == O_PEXIT) {
         inst(c, idx, w, op);
@@ -311,7 +535,15 @@ static void emit_guarded(Ctx* c, u32 idx, u64 w, const Op* op) {
         emitl(c, "/* never: %s */", op->name);
         return;
     }
-    if (pg == 7 || is_flow == 2) {
+    if (has_ccc(id) && B(w, 0, 5) != 15) { /* also depends on a condition code */
+        emitl(c, "if(%s) {", flow_cond(c, w));
+        c->indent++;
+        inst(c, idx, w, op);
+        c->indent--;
+        emitl(c, "}");
+        return;
+    }
+    if (pg == 7) {
         inst(c, idx, w, op);
         return;
     }
@@ -352,7 +584,6 @@ void exit_epilogue(Ctx* c) {
         for (int rt = 0; rt < 8; rt++) {
             u32 m = (target >> (rt * 4)) & 15;
             if (!m) continue;
-            c->si->frag_rt_mask |= 1u << rt;
             for (int k = 0; k < 4; k++) {
                 if (m & (1u << k)) {
                     if ((c->si->rt_int_mask >> rt) & 1)
@@ -364,11 +595,10 @@ void exit_epilogue(Ctx* c) {
                 reg++;
             }
         }
-        if (flags & 1) reg++;
-        if (flags & 2) {
-            c->si->writes_depth = 1;
-            emitl(c, "gl_FragDepth = %s;", RF(c, reg + 1));
-        }
+        /* after the colours: the sample mask in the next register, depth in the one after it whether or not the
+           mask is written (Ryujinx TranslatorContext.GetDepthRegister: two registers after the last colour) */
+        if (flags & 1) emitl(c, "gl_SampleMask[0] = int(%s);", R(c, reg));
+        if (flags & 2) emitl(c, "gl_FragDepth = %s;", RF(c, reg + 1));
     }
     emitl(c, "return;");
 }
@@ -383,13 +613,13 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_FADD_I: {
             char* A = fneg_abs(RF(c, a), B(w, 48, 1), B(w, 46, 1));
             char* Bv = fneg_abs(opBf(c, w, id - O_FADD_R), B(w, 45, 1), B(w, 49, 1));
-            setrf(c, d, fsat(T("(%s + %s)", A, Bv), B(w, 50, 1)));
+            setrf_cc(c, d, fsat(T("(%s + %s)", A, Bv), B(w, 50, 1)), B(w, 47, 1));
             break;
         }
-        case O_FADD32I: {
+        case O_FADD32I: { /* WriteCC 52 on the 32-bit immediate forms (Ryujinx InstFadd32i, Fmul32i, Ffma32i) */
             char* A = fneg_abs(RF(c, a), B(w, 56, 1), B(w, 54, 1));
             char* Bv = fneg_abs(imm32f(w), B(w, 53, 1), B(w, 57, 1));
-            setrf(c, d, T("(%s + %s)", A, Bv));
+            setrf_cc(c, d, T("(%s + %s)", A, Bv), B(w, 52, 1));
             break;
         }
         case O_FMUL_R:
@@ -401,13 +631,15 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             u32 sc = B(w, 41, 3); /* 0*x=0 only matters for .FMZ */
             static const char* scl[8] = {"", "*0.5", "*0.25", "*0.125", "*8.0", "*4.0", "*2.0", ""};
             if (sc) e = T("(%s%s)", e, scl[sc]);
-            setrf(c, d, fsat(e, B(w, 50, 1)));
+            setrf_cc(c, d, fsat(e, B(w, 50, 1)), B(w, 47, 1));
             break;
         }
         case O_FMUL32I:
-            setrf(c, d,
-                  fsat(B(w, 53, 2) == 2 ? T("fmz(%s, %s)", RF(c, a), imm32f(w)) : T("(%s * %s)", RF(c, a), imm32f(w)),
-                       B(w, 55, 1)));
+            setrf_cc(
+                c, d,
+                fsat(B(w, 53, 2) == 2 ? T("fmz(%s, %s)", RF(c, a), imm32f(w)) : T("(%s * %s)", RF(c, a), imm32f(w)),
+                     B(w, 55, 1)),
+                B(w, 52, 1));
             break;
         case O_FFMA_R:
         case O_FFMA_RC:
@@ -429,10 +661,11 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             }
             if (B(w, 48, 1)) Bv = T("(-%s)", Bv);
             if (B(w, 49, 1)) Cv = T("(-%s)", Cv);
-            setrf(c, d,
-                  fsat(B(w, 53, 2) == 2 ? T("ffmz(%s, %s, %s)", RF(c, a), Bv, Cv)
-                                        : T("fma(%s, %s, %s)", RF(c, a), Bv, Cv),
-                       B(w, 50, 1)));
+            setrf_cc(c, d,
+                     fsat(B(w, 53, 2) == 2 ? T("ffmz(%s, %s, %s)", RF(c, a), Bv, Cv)
+                                           : T("fma(%s, %s, %s)", RF(c, a), Bv, Cv),
+                          B(w, 50, 1)),
+                     B(w, 47, 1));
             break;
         }
         case O_FFMA32I: {
@@ -440,10 +673,11 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             if (B(w, 56, 1)) A = T("(-%s)", A);
             char* Cv = RF(c, d);
             if (B(w, 57, 1)) Cv = T("(-%s)", Cv);
-            setrf(c, d,
-                  fsat(B(w, 53, 2) == 2 ? T("ffmz(%s, %s, %s)", A, imm32f(w), Cv)
-                                        : T("fma(%s, %s, %s)", A, imm32f(w), Cv),
-                       B(w, 55, 1)));
+            setrf_cc(c, d,
+                     fsat(B(w, 53, 2) == 2 ? T("ffmz(%s, %s, %s)", A, imm32f(w), Cv)
+                                           : T("fma(%s, %s, %s)", A, imm32f(w), Cv),
+                          B(w, 55, 1)),
+                     B(w, 52, 1));
             break;
         }
         case O_FMNMX_R:
@@ -451,7 +685,15 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_FMNMX_I: {
             char* A = fneg_abs(RF(c, a), B(w, 48, 1), B(w, 46, 1));
             char* Bv = fneg_abs(opBf(c, w, id - O_FMNMX_R), B(w, 45, 1), B(w, 49, 1));
-            setrf(c, d, T("(%s ? min(%s, %s) : max(%s, %s))", PN(c, B(w, 39, 3), B(w, 42, 1)), A, Bv, A, Bv));
+            /* with one NaN operand the result is the other one (GLSL's min/max leave it undefined) */
+            emitl(c, "{ float a_ = %s, b_ = %s;", A, Bv);
+            c->indent++;
+            setrf_cc(c, d,
+                     T("(isnan(a_) ? b_ : isnan(b_) ? a_ : %s ? min(a_, b_) : max(a_, b_))",
+                       PN(c, B(w, 39, 3), B(w, 42, 1))),
+                     B(w, 47, 1));
+            c->indent--;
+            emitl(c, "}");
             break;
         }
         case O_FSETP_R:
@@ -470,7 +712,8 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             char* A = fneg_abs(RF(c, a), B(w, 43, 1), B(w, 54, 1));
             char* Bv = fneg_abs(opBf(c, w, id - O_FSET_R), B(w, 53, 1), B(w, 44, 1));
             const char* t = bop(B(w, 45, 2), fcmp_expr(B(w, 48, 4), A, Bv), PN(c, B(w, 39, 3), B(w, 42, 1)));
-            setr(c, d, T("(%s ? %s : 0u)", t, B(w, 52, 1) ? "floatBitsToUint(1.0)" : "0xFFFFFFFFu"));
+            setr_cc(c, d, T("(%s ? %s : 0u)", t, B(w, 52, 1) ? "floatBitsToUint(1.0)" : "0xFFFFFFFFu"), B(w, 47, 1),
+                    B(w, 52, 1));
             break;
         }
         case O_FCMP_R:
@@ -527,13 +770,11 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             } else
                 src = opBf(c, w, id - O_F2F_R);
             src = fneg_abs(src, B(w, 45, 1), B(w, 49, 1));
-            if (ds == ss && ss == 2) {
-                u32 rm = B(w, 39, 2);
+            /* rounding to an integer only with bit 42 (Ryujinx InstF2fR.RoundMode, IntegerRound 4-7); without it bits
+               39-40 are the float rounding mode, which a same-size conversion doesn't use */
+            if (ds == ss && ss == 2 && B(w, 42, 1)) {
                 static const char* fn[4] = {"roundEven", "floor", "ceil", "trunc"};
-                if (B(w, 42, 1))
-                    src = T("%s(%s)", fn[rm], src);
-                else if (rm)
-                    src = T("%s(%s)", fn[rm], src);
+                src = T("%s(%s)", fn[B(w, 39, 2)], src);
             }
             if (ds == 1)
                 setr(c, d, T("packHalf2x16(vec2(%s,0.0))", fsat(src, B(w, 50, 1))));
@@ -546,13 +787,19 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_F2I_I: {
             char* src = opBf(c, w, id - O_F2I_R);
             if (B(w, 10, 2) == 1) src = T("unpackHalf2x16(%s).%c", opB(c, w, id - O_F2I_R), B(w, 41, 1) ? 'y' : 'x');
-            src = fneg_abs(src, B(w, 49, 1), B(w, 45, 1));
+            src = fneg_abs(src, B(w, 45, 1), B(w, 49, 1)); /* Ryujinx InstF2iR: NegB 45, AbsB 49 */
             static const char* fn[4] = {"roundEven", "floor", "ceil", "trunc"};
             src = T("%s(%s)", fn[B(w, 39, 2)], src);
-            if (B(w, 12, 1))
-                setr(c, d, T("uint(int(clamp(%s,-2147483648.0,2147483520.0)))", src));
-            else
-                setr(c, d, T("uint(clamp(%s,0.0,4294967040.0))", src));
+            /* saturating, NaN to 0, and a 16-bit destination (IDstFmt bits 8-9 = 1) clamped to its range */
+            int sg = B(w, 12, 1), small = B(w, 8, 2) == 1;
+            const char* v = sg ? "(isnan(f_) ? 0 : f_ >= 2147483648.0 ? 0x7FFFFFFF : int(max(f_, -2147483648.0)))"
+                               : "(isnan(f_) ? 0u : f_ >= 4294967296.0 ? 0xFFFFFFFFu : uint(max(f_, 0.0)))";
+            if (small) v = sg ? T("clamp(%s, -32768, 32767)", v) : T("min(%s, 65535u)", v);
+            emitl(c, "{ float f_ = %s;", src);
+            c->indent++;
+            setr(c, d, sg ? T("uint(%s)", v) : v);
+            c->indent--;
+            emitl(c, "}");
             break;
         }
         case O_I2F_R:
@@ -601,7 +848,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 else if (df == 1)
                     v = ds ? T("bitfieldExtract(%s,0,16)", v) : T("(%s & 65535)", v);
             }
-            setr(c, d, T("uint(%s)", v));
+            setr_cc(c, d, T("uint(%s)", v), B(w, 47, 1), 0);
             break;
         }
         /* ---------------- moves */
@@ -657,43 +904,13 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 if (!tg && id == O_IADD_R) tg = c->gtag[B(w, 20, 8)];
                 c->gtag[d] = tg;
             }
-            char* A = R(c, a);
-            char* Bv = opB(c, w, id - O_IADD_R);
-            if (B(w, 49, 1)) A = T("(0u-%s)", A);
-            if (B(w, 48, 1)) Bv = T("(0u-%s)", Bv);
-            const char* e = T("(%s + %s)", A, Bv);
-            if (B(w, 43, 1)) { /* .X: adds the carry of an earlier .CC */
-                c->uses_cc = 1;
-                e = T("(%s + (cc_c?1u:0u))", e);
-            }
-            if (B(w, 47, 1)) {
-                c->uses_cc = 1;
-                emitl(
-                    c,
-                    "{ uint t_ = %s; uint c1_; uint s_ = uaddCarry(%s,%s,c1_); uint c2_=0u; %s cc_c = (c1_|c2_)!=0u; cc_z = t_==0u; cc_s = int(t_)<0; t_=s_%s; %s }",
-                    e, A, Bv, B(w, 43, 1) ? "s_ = uaddCarry(s_, cc_c?1u:0u, c2_);" : "", "",
-                    d != 255 ? T("r%u = t_;", d) : "");
-                c->used_reg[d] = 1;
-            } else
-                setr(c, d, e);
+            /* AvgMode 48-49, X 43, CC 47 (Ryujinx InstIaddR) */
+            emit_iadd(c, d, R(c, a), opB(c, w, id - O_IADD_R), B(w, 48, 2), B(w, 43, 1), B(w, 47, 1));
             break;
         }
-        case O_IADD32I: {
-            char* A = R(c, a);
-            if (B(w, 56, 1)) A = T("(0u-%s)", A);
-            const char* e = T("(%s + %s)", A, imm32(w));
-            if (B(w, 53, 1)) {
-                c->uses_cc = 1;
-                e = T("(%s + (cc_c?1u:0u))", e);
-            }
-            if (B(w, 52, 1)) {
-                c->uses_cc = 1;
-                emitl(c, "{ uint c1_; uint s_ = uaddCarry(%s,%s,c1_); cc_c = c1_!=0u; cc_z = s_==0u; cc_s=int(s_)<0; }",
-                      A, imm32(w));
-            }
-            setr(c, d, e);
+        case O_IADD32I: /* AvgMode 55-56, X 53, CC 52 (Ryujinx InstIadd32i) */
+            emit_iadd(c, d, R(c, a), imm32(w), B(w, 55, 2), B(w, 53, 1), B(w, 52, 1));
             break;
-        }
         case O_IADD3_R:
         case O_IADD3_C:
         case O_IADD3_I: {
@@ -709,41 +926,61 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             if (B(w, 51, 1)) A = T("(0u-%s)", A);
             if (B(w, 50, 1)) Bv = T("(0u-%s)", Bv);
             if (B(w, 49, 1)) Cv = T("(0u-%s)", Cv);
-            const char* ab = T("(%s + %s)", A, Bv);
-            if (id == O_IADD3_R) {
-                u32 sh = B(w, 37, 2);
-                if (sh == 1)
-                    ab = T("(%s >> 16)", ab);
-                else if (sh == 2)
-                    ab = T("(%s << 16)", ab);
+            u32 sh = id == O_IADD3_R ? B(w, 37, 2) : 0;
+            int x = B(w, 48, 1), cc = B(w, 47, 1); /* Ryujinx InstIadd3R: X 48, WriteCC 47 */
+            if (cc || x) {
+                /* .X adds the carry in; .CC: Z and N of the sum, C if any of its adds carried (A + B's own carry
+                   only counts when no shift drops it) */
+                c->uses_cc = 1;
+                emitl(c, "{ uint c0_ = 0u, c1_, c2_ = 0u; uint s_ = %s;",
+                      sh == 1 || sh == 2 ? T("(%s + %s)", A, Bv) : T("uaddCarry(%s, %s, c0_)", A, Bv));
+                c->indent++;
+                if (sh == 1) emitl(c, "s_ >>= 16;");
+                if (sh == 2) emitl(c, "s_ <<= 16;");
+                emitl(c, "s_ = uaddCarry(s_, %s, c1_);", Cv);
+                if (x) emitl(c, "s_ = uaddCarry(s_, cc_c?1u:0u, c2_);");
+                if (cc) emitl(c, "cc_c = (c0_|c1_|c2_)!=0u; cc_z = s_==0u%s; cc_s = int(s_)<0;", x ? " && cc_z" : "");
+                setr(c, d, "s_");
+                c->indent--;
+                emitl(c, "}");
+                break;
             }
+            const char* ab = T("(%s + %s)", A, Bv);
+            if (sh == 1)
+                ab = T("(%s >> 16)", ab);
+            else if (sh == 2)
+                ab = T("(%s << 16)", ab);
             setr(c, d, T("(%s + %s)", ab, Cv));
             break;
         }
         case O_ISCADD_R:
         case O_ISCADD_C:
         case O_ISCADD_I: {
+            /* AvgMode 48-49 (Ryujinx InstIscaddR): 1 negates B, 2 negates A, 3 adds one */
             /* a scaled index added to a global buffer's base keeps pointing into that buffer */
             if (d != 255)
-                c->gtag[d] = B(w, 48, 1)        ? 0
+                c->gtag[d] = B(w, 48, 2) == 1   ? 0
                              : id == O_ISCADD_C ? gbuf_tag(c, w)
                              : id == O_ISCADD_R ? c->gtag[B(w, 20, 8)]
                                                 : 0;
             char* A = R(c, a);
             char* Bv = opB(c, w, id - O_ISCADD_R);
-            if (B(w, 49, 1)) A = T("(0u-%s)", A);
-            if (B(w, 48, 1)) Bv = T("(0u-%s)", Bv);
-            A = T("(%s << %uu)", A, B(w, 39, 5));
-            if (B(w, 47, 1)) { /* .CC: the low half of a 64-bit address, IADD.X adds its carry to the high half */
-                c->uses_cc = 1;
-                emitl(c,
-                      "{ uint c1_; uint s_ = uaddCarry(%s,%s,c1_); cc_c = c1_!=0u; cc_z = s_==0u; cc_s = int(s_)<0; }",
-                      A, Bv);
+            u32 avg = B(w, 48, 2);
+            if (B(w, 47, 1)) { /* WriteCC: the flags of the add, as IADD's (Ryujinx EmitIscadd) */
+                emit_iadd(c, d, T("(%s << %uu)", A, B(w, 39, 5)), Bv, avg, 0, 1);
+                break;
             }
-            setr(c, d, T("(%s + %s)", A, Bv));
+            if (avg == 2) A = T("(0u-%s)", A);
+            if (avg == 1) Bv = T("(0u-%s)", Bv);
+            setr(c, d, T("((%s << %uu) + %s%s)", A, B(w, 39, 5), Bv, avg == 3 ? " + 1u" : ""));
             break;
         }
-        case O_ISCADD32I: setr(c, d, T("((%s << %uu) + %s)", R(c, a), B(w, 53, 5), imm32(w))); break;
+        case O_ISCADD32I: /* Imm5 53-57, WriteCC 52 (Ryujinx InstIscadd32i) */
+            if (B(w, 52, 1))
+                emit_iadd(c, d, T("(%s << %uu)", R(c, a), B(w, 53, 5)), imm32(w), 0, 0, 1);
+            else
+                setr(c, d, T("((%s << %uu) + %s)", R(c, a), B(w, 53, 5), imm32(w)));
+            break;
         case O_IMNMX_R:
         case O_IMNMX_C:
         case O_IMNMX_I: {
@@ -751,15 +988,16 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             char* Bv = opB(c, w, id - O_IMNMX_R);
             const char* pr = PN(c, B(w, 39, 3), B(w, 42, 1));
             if (B(w, 48, 1))
-                setr(c, d, T("uint(%s ? min(int(%s),int(%s)) : max(int(%s),int(%s)))", pr, A, Bv, A, Bv));
+                setr_cc(c, d, T("uint(%s ? min(int(%s),int(%s)) : max(int(%s),int(%s)))", pr, A, Bv, A, Bv),
+                        B(w, 47, 1), 0);
             else
-                setr(c, d, T("(%s ? min(%s,%s) : max(%s,%s))", pr, A, Bv, A, Bv));
+                setr_cc(c, d, T("(%s ? min(%s,%s) : max(%s,%s))", pr, A, Bv, A, Bv), B(w, 47, 1), 0);
             break;
         }
         case O_ISETP_R:
         case O_ISETP_C:
         case O_ISETP_I: {
-            const char* t = icmp_expr(B(w, 49, 3), R(c, a), opB(c, w, id - O_ISETP_R), B(w, 48, 1));
+            const char* t = icmp_xe(c, w, R(c, a), opB(c, w, id - O_ISETP_R));
             const char* pc = PN(c, B(w, 39, 3), B(w, 42, 1));
             setp2(c, B(w, 3, 3), B(w, 0, 3), B(w, 45, 2), t, pc);
             break;
@@ -767,9 +1005,10 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_ISET_R:
         case O_ISET_C:
         case O_ISET_I: {
-            const char* t = bop(B(w, 45, 2), icmp_expr(B(w, 49, 3), R(c, a), opB(c, w, id - O_ISET_R), B(w, 48, 1)),
-                                PN(c, B(w, 39, 3), B(w, 42, 1)));
-            setr(c, d, T("(%s ? %s : 0u)", t, B(w, 44, 1) ? "floatBitsToUint(1.0)" : "0xFFFFFFFFu"));
+            const char* t =
+                bop(B(w, 45, 2), icmp_xe(c, w, R(c, a), opB(c, w, id - O_ISET_R)), PN(c, B(w, 39, 3), B(w, 42, 1)));
+            setr_cc(c, d, T("(%s ? %s : 0u)", t, B(w, 44, 1) ? "floatBitsToUint(1.0)" : "0xFFFFFFFFu"), B(w, 47, 1),
+                    B(w, 44, 1));
             break;
         }
         case O_ICMP_R:
@@ -882,15 +1121,25 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             char* sh = (id == O_SHF_LR || id == O_SHF_RR) ? R(c, B(w, 20, 8)) : T("%uu", B(w, 20, 6));
             char* hi = R(c, B(w, 39, 8));
             int left = id == O_SHF_LR || id == O_SHF_LI;
-            const char* s = T("(%s & 63u)", sh);
+            /* Ryujinx InstShf* and EmitShf: MaxShift 37-38 (2 U64, 3 S64) makes it a 64-bit shift of hi:lo, M (bit
+               50) wraps the amount to the shift's width, without M an amount past it gives 0. (XModeShf 48-49 has
+               no reference semantics, Ryujinx leaves it too) */
+            u32 maxs = B(w, 37, 2);
+            int lng = maxs >= 2, s64 = maxs == 3;
+            emitl(c, "{ uint s_ = %s%s, lo_ = %s, hi_ = %s;", sh, B(w, 50, 1) ? (lng ? " & 63u" : " & 31u") : "", lo,
+                  hi);
+            c->indent++;
+            const char* e;
             if (left)
-                setr(c, d,
-                     T("(%s >= 32u ? (%s << (%s-32u)) : (%s == 0u ? %s : ((%s << %s) | (%s >> (32u-%s)))))", s, lo, s,
-                       s, hi, hi, s, lo, s));
+                e = T(
+                    "(s_ >= %uu ? 0u : s_ >= 32u ? (lo_ << (s_-32u)) : s_ == 0u ? hi_ : ((hi_ << s_) | (lo_ >> (32u-s_))))",
+                    lng ? 64 : 32);
             else
-                setr(c, d,
-                     T("(%s >= 32u ? (%s >> (%s-32u)) : (%s == 0u ? %s : ((%s >> %s) | (%s << (32u-%s)))))", s, hi, s,
-                       s, lo, lo, s, hi, s));
+                e = T("(s_ >= %uu ? 0u : s_ >= 32u ? %s : s_ == 0u ? lo_ : ((lo_ >> s_) | (hi_ << (32u-s_))))",
+                      lng ? 64 : 32, s64 ? "uint(int(hi_) >> int(s_-32u))" : "(hi_ >> (s_-32u))");
+            setr_cc(c, d, e, B(w, 47, 1), 0); /* WriteCC 47: Z and N of the result */
+            c->indent--;
+            emitl(c, "}");
             break;
         }
         case O_BFE_R:
@@ -977,6 +1226,18 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             }
             emitl(c, "{ uint s_ = %s; uint a_ = %s, c_ = %s; uint o_ = 0u;", Bv, R(c, a), Cv);
             c->indent++;
+            /* PMode 48-51 (Ryujinx InstPrmtR, enum PMode: F4E B4E RC8 ECL ECR RC16) picks the bytes from the
+               selector's low 2 bits instead, as PTX's prmt modes do: the table holds each mode's byte indices, d.b0
+               in the low nibble */
+            static const u16 pm[6][4] = {{0x3210, 0x4321, 0x5432, 0x6543}, {0x5670, 0x6701, 0x7012, 0x0123},
+                                         {0x0000, 0x1111, 0x2222, 0x3333}, {0x3210, 0x3211, 0x3222, 0x3333},
+                                         {0x0000, 0x1110, 0x2210, 0x3210}, {0x1010, 0x3232, 0x1010, 0x3232}};
+            u32 pmode = B(w, 48, 4);
+            if (pmode >= 1 && pmode <= 6) {
+                const u16* t = pm[pmode - 1];
+                emitl(c, "s_ = uint[4](0x%Xu, 0x%Xu, 0x%Xu, 0x%Xu)[s_ & 3u];", t[0], t[1], t[2], t[3]);
+            } else if (pmode)
+                unsupported(c, "PRMT mode", w);
             emitl(
                 c,
                 "for(int i=0;i<4;i++){ uint sel=(s_>>(i*4))&15u; uint src=(sel&4u)!=0u? c_ : a_; uint by=(src>>((sel&3u)*8u))&255u; if((sel&8u)!=0u) by=(by&128u)!=0u?255u:0u; o_ |= by<<(i*8); }");
@@ -989,9 +1250,12 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_XMAD_RC:
         case O_XMAD_CR:
         case O_XMAD_I: {
+            /* fields per Ryujinx InstXmadR/I/C/Rc: HiloA 53, ASigned 48, BSigned 49, WriteCC 47; R and I: XmadCop
+               50-52, HiloB 35 (R), Psl 36, Mrg 37, X 38; C and RC: XmadCop 50-51, HiloB 52, X 54, and only C has Psl 55
+               and Mrg 56 */
             char *Bv, *Cv;
             u32 mode, hb;
-            int psl = 0, mrg = 0;
+            int psl = 0, mrg = 0, x;
             if (id == O_XMAD_R) {
                 Bv = R(c, B(w, 20, 8));
                 Cv = R(c, B(w, 39, 8));
@@ -999,16 +1263,21 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 hb = B(w, 35, 1);
                 psl = B(w, 36, 1);
                 mrg = B(w, 37, 1);
+                x = B(w, 38, 1);
             } else if (id == O_XMAD_RC) {
                 Bv = R(c, B(w, 39, 8));
                 Cv = CB(c, cb_idx(w), cb_off(w));
                 mode = B(w, 50, 2);
                 hb = B(w, 52, 1);
+                x = B(w, 54, 1);
             } else if (id == O_XMAD_CR) {
                 Bv = CB(c, cb_idx(w), cb_off(w));
                 Cv = R(c, B(w, 39, 8));
                 mode = B(w, 50, 2);
                 hb = B(w, 52, 1);
+                psl = B(w, 55, 1);
+                mrg = B(w, 56, 1);
+                x = B(w, 54, 1);
             } else {
                 Bv = T("%uu", B(w, 20, 16));
                 Cv = R(c, B(w, 39, 8));
@@ -1016,26 +1285,40 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 hb = 0;
                 psl = B(w, 36, 1);
                 mrg = B(w, 37, 1);
+                x = B(w, 38, 1);
             }
             int sa = B(w, 48, 1), sb = B(w, 49, 1), ha = B(w, 53, 1);
             const char* A = sa ? T("uint(bitfieldExtract(int(%s),%d,16))", R(c, a), ha ? 16 : 0)
                                : T("bitfieldExtract(%s,%d,16)", R(c, a), ha ? 16 : 0);
             const char* Bb = sb ? T("uint(bitfieldExtract(int(%s),%d,16))", Bv, hb ? 16 : 0)
                                 : T("bitfieldExtract(%s,%d,16)", Bv, hb ? 16 : 0);
+            /* XmadCop: 1 CLO, 2 CHI, 3 CSFU (C less the sign adjustments of the 16-bit operands, Ryujinx EmitXmad),
+               4 CBCC */
             const char* C = mode == 1   ? T("(%s & 0xFFFFu)", Cv)
                             : mode == 2 ? T("(%s >> 16)", Cv)
+                            : mode == 3 ? T("(%s - (((%s >> 31) << 16) + ((%s >> 31) << 16)))", Cv, A, Bb)
                             : mode == 4 ? T("((%s << 16) + %s)", Bv, Cv)
                                         : Cv;
             const char* prod = T("(%s * %s)", A, Bb);
             if (psl) prod = T("(%s << 16)", prod);
+            if (B(w, 47, 1) || x) {
+                /* .X adds the carry in, .CC sets the flags like IADD (Ryujinx EmitXmad, SetIaddFlags) */
+                c->uses_cc = 1;
+                emitl(c, "{ uint a_ = %s, b_ = %s, c1_, c2_ = 0u; uint s_ = uaddCarry(a_, b_, c1_);", prod, C);
+                c->indent++;
+                if (x) emitl(c, "s_ = uaddCarry(s_, cc_c?1u:0u, c2_);");
+                if (B(w, 47, 1))
+                    emitl(
+                        c,
+                        "cc_c = (c1_|c2_)!=0u; cc_o = ((s_ ^ a_) & ~(a_ ^ b_)) >= 0x80000000u; cc_z = s_==0u%s; cc_s = int(s_)<0;",
+                        x ? " && cc_z" : "");
+                setr(c, d, mrg ? T("((s_ & 0xFFFFu) | (%s << 16))", Bv) : "s_");
+                c->indent--;
+                emitl(c, "}");
+                break;
+            }
             const char* e = T("(%s + %s)", prod, C);
             if (mrg) e = T("((%s & 0xFFFFu) | (%s << 16))", e, Bv);
-            if (B(w, 47, 1)) {
-                c->uses_cc = 1;
-                emitl(c,
-                      "{ uint t_=%s; cc_z = t_==0u; cc_s = int(t_)<0; uint k_; uaddCarry(%s,%s,k_); cc_c = k_!=0u; }",
-                      e, prod, C);
-            }
             setr(c, d, e);
             break;
         }
@@ -1043,17 +1326,15 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_IMUL_C:
         case O_IMUL_I:
         case O_IMUL32I: {
+            /* Ryujinx InstImul*: Hilo 39, ASigned 40, BSigned 41; IMUL32I Hilo 53, ASigned 54, BSigned 55 */
             char* Bv = id == O_IMUL32I ? imm32(w) : opB(c, w, id - O_IMUL_R);
             int hi = id == O_IMUL32I ? B(w, 53, 1) : B(w, 39, 1);
-            int sgn = id == O_IMUL32I ? B(w, 54, 1) : B(w, 40, 1);
             if (hi) {
-                if (sgn)
-                    emitl(c, "{ int h_, l_; imulExtended(int(%s),int(%s),h_,l_); %s }", R(c, a), Bv,
-                          d != 255 ? T("r%u = uint(h_);", d) : "");
-                else
-                    emitl(c, "{ uint h_, l_; umulExtended(%s,%s,h_,l_); %s }", R(c, a), Bv,
-                          d != 255 ? T("r%u = h_;", d) : "");
-                if (d != 255) c->used_reg[d] = 1;
+                open_mulhi(c, R(c, a), Bv, id == O_IMUL32I ? B(w, 54, 1) : B(w, 40, 1),
+                           id == O_IMUL32I ? B(w, 55, 1) : B(w, 41, 1));
+                setr(c, d, "h_");
+                c->indent--;
+                emitl(c, "}");
             } else
                 setr(c, d, T("(%s * %s)", R(c, a), Bv));
             break;
@@ -1080,20 +1361,24 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 Bv = imm32(w);
                 Cv = R(c, d);
             }
-            /* IMAD.HI (bit 54, A signed @48, B signed @53): hi32(a*b) + c. this is how div-by-constant gets compiled */
-            if (id != O_IMAD32I && B(w, 54, 1)) {
-                const char* cv = Cv;
-                if (d != 255) {
-                    if (B(w, 48, 1) || B(w, 53, 1))
-                        emitl(c, "{ int h_, l_; imulExtended(int(%s),int(%s),h_,l_); r%u = uint(h_) + %s; }", R(c, a),
-                              Bv, d, cv);
-                    else
-                        emitl(c, "{ uint h_, l_; umulExtended(%s,%s,h_,l_); r%u = h_ + %s; }", R(c, a), Bv, d, cv);
-                    c->used_reg[d] = 1;
-                }
+            /* Ryujinx InstImad*: Hilo 54, ASigned 48, BSigned 53, AvgMode 51-52, X 49; IMAD32I: Hilo 53, ASigned 54,
+               BSigned 57, AvgMode 55-56. AvgMode (Ryujinx EmitImad) 2 negates B, 1 negates C, 3 adds one. IMAD.HI is
+               hi32(a*b) + c: this is how div-by-constant gets compiled */
+            int i32i = id == O_IMAD32I;
+            int hi = i32i ? B(w, 53, 1) : B(w, 54, 1), x = i32i ? 0 : B(w, 49, 1);
+            u32 avg = i32i ? B(w, 55, 2) : B(w, 51, 2);
+            if (avg == 2) Bv = T("(0u-%s)", Bv);
+            if (avg == 1) Cv = T("(0u-%s)", Cv);
+            const char* add = T("%s%s%s", Cv, avg == 3 ? " + 1u" : "", x ? " + (cc_c?1u:0u)" : "");
+            if (x) c->uses_cc = 1;
+            if (hi) {
+                open_mulhi(c, R(c, a), Bv, i32i ? B(w, 54, 1) : B(w, 48, 1), i32i ? B(w, 57, 1) : B(w, 53, 1));
+                setr(c, d, T("h_ + %s", add));
+                c->indent--;
+                emitl(c, "}");
                 break;
             }
-            setr(c, d, T("(%s * %s + %s)", R(c, a), Bv, Cv));
+            setr(c, d, T("(%s * %s + %s)", R(c, a), Bv, add));
             break;
         }
         case O_LEA_LR:
@@ -1104,14 +1389,23 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             char* Bv = id == O_LEA_LR || id == O_LEA_HR ? R(c, B(w, 20, 8))
                        : id == O_LEA_LI                 ? imm20i(w)
                                                         : CB(c, cb_idx(w), cb_off(w));
-            u32 sh = (id == O_LEA_LR || id == O_LEA_LI || id == O_LEA_LC) ? B(w, 39, 5) : B(w, 28, 5);
+            /* Ryujinx InstLea*: the LO forms take ImmU5 39-43 and NegA 45; LEA.HI R ImmU5 28-32 and NegA 37, LEA.HI C
+               ImmU5 51-55 and NegA 56 (its 28-32 are the cbuf offset) */
+            int hiform = id == O_LEA_HR || id == O_LEA_HC;
+            u32 sh = !hiform ? B(w, 39, 5) : id == O_LEA_HR ? B(w, 28, 5) : B(w, 51, 5);
+            int nega = !hiform ? B(w, 45, 1) : id == O_LEA_HR ? B(w, 37, 1) : B(w, 56, 1);
             char* A = R(c, a);
-            if (B(w, 45, 1)) A = T("(0u-%s)", A);
-            if (id == O_LEA_HR || id == O_LEA_HC) {
+            if (hiform) {
+                /* the high word of (C:A) << sh, plus B (Ryujinx EmitLeaHi); NegA negates the 64-bit value, so the +1
+                   carries into the high word only when the low word is 0 */
                 char* hi = R(c, B(w, 39, 8));
-                setr(c, d, T("((%s >> (32u-%uu)) | (%s << %uu)) + %s", A, sh ? sh : 32, hi, sh, Bv));
-            } else
+                const char* h = sh ? T("((%s >> %uu) | (%s << %uu))", A, 32 - sh, hi, sh) : hi;
+                if (nega) h = T("(~%s + ((%s << %uu) == 0u ? 1u : 0u))", h, A, sh);
+                setr(c, d, T("(%s + %s)", h, Bv));
+            } else {
+                if (nega) A = T("(0u-%s)", A);
                 setr(c, d, T("((%s << %uu) + %s)", A, sh, Bv));
+            }
             if (B(w, 48, 3) != 7 && (id == O_LEA_LR || id == O_LEA_LI || id == O_LEA_LC)) setp(c, B(w, 48, 3), "false");
             break;
         }
@@ -1131,12 +1425,17 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_P2R_R:
         case O_P2R_C:
         case O_P2R_I: {
-            char* M = opB(c, w, id - O_P2R_R);
+            /* ByteSel 41-42; Ccpr (bit 40) moves the flags Z N C V instead of P0-P6 (Ryujinx InstP2r*, EmitP2r, which
+               also keeps the mask to a byte) */
+            char* M = T("(%s & 0xFFu)", opB(c, w, id - O_P2R_R));
             u32 sh = B(w, 41, 2) * 8;
+            int ccpr = B(w, 40, 1);
+            static const char* fl[4] = {"cc_z", "cc_s", "cc_c", "cc_o"};
             Sb e = {0};
             sb_put(&e, "(0u");
-            for (int i = 0; i < 7; i++) sb_f(&e, " | (%s ? %du : 0u)", P(c, i), 1 << i);
+            for (int i = 0; i < (ccpr ? 4 : 7); i++) sb_f(&e, " | (%s ? %du : 0u)", ccpr ? fl[i] : P(c, i), 1 << i);
             sb_put(&e, ")");
+            if (ccpr) c->uses_cc = 1;
             setr(c, d, T("((%s & ~(%s << %uu)) | ((%s & %s) << %uu))", R(c, a), M, sh, e.p, M, sh));
             free(e.p);
             break;
@@ -1144,26 +1443,34 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_R2P_R:
         case O_R2P_C:
         case O_R2P_I: {
+            /* ByteSel 41-42, Ccpr 40 as for P2R (Ryujinx EmitR2p) */
             char* M = opB(c, w, id - O_R2P_R);
             u32 sh = B(w, 41, 2) * 8;
+            int ccpr = B(w, 40, 1);
+            static const char* fl[4] = {"cc_z", "cc_s", "cc_c", "cc_o"};
             emitl(c, "{ uint v_ = %s >> %uu; uint m_ = %s;", R(c, a), sh, M);
             c->indent++;
-            for (int i = 0; i < 7; i++)
-                emitl(c, "if((m_ & %du) != 0u) %s = (v_ & %du) != 0u;", 1 << i, P(c, i), 1 << i);
+            if (ccpr) c->uses_cc = 1;
+            for (int i = 0; i < (ccpr ? 4 : 7); i++)
+                emitl(c, "if((m_ & %du) != 0u) %s = (v_ & %du) != 0u;", 1 << i, ccpr ? fl[i] : P(c, i), 1 << i);
             c->indent--;
             emitl(c, "}");
             break;
         }
-        case O_CSETP: { /* condition on CC */
-            c->uses_cc = 1;
-            u32 ft = B(w, 8, 5);
-            const char* t = ft == 15              ? "true"
-                            : ft == 2 || ft == 10 ? "cc_z"
-                            : ft == 5 || ft == 13 ? "!cc_z"
-                            : ft == 1             ? "cc_s"
-                            : ft == 6             ? "!cc_s"
-                                                  : "true";
+        case O_CSETP:  /* condition on CC: Ccc 8-12 (Ryujinx InstCsetp) */
+        case O_CSET: { /* the same into a register, BVal 44 picks 1.0 over all ones (Ryujinx InstCset) */
+            const char* t = cc_test(c, B(w, 8, 5));
+            if (!t) {
+                unsupported(c, id == O_CSET ? "CSET condition" : "CSETP condition", w);
+                t = "false";
+            }
             const char* pc = PN(c, B(w, 39, 3), B(w, 42, 1));
+            if (id == O_CSET) {
+                setr(
+                    c, d,
+                    T("(%s ? %s : 0u)", bop(B(w, 45, 2), t, pc), B(w, 44, 1) ? "floatBitsToUint(1.0)" : "0xFFFFFFFFu"));
+                break;
+            }
             setp(c, B(w, 3, 3), bop(B(w, 45, 2), t, pc));
             setp(c, B(w, 0, 3), bop(B(w, 45, 2), T("(!%s)", t), pc));
             break;
@@ -1172,7 +1479,10 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_IPA: {
             u32 addr = B(w, 30, 8) * 4;
             const char* v = attr_read(c, addr, 0);
-            if (B(w, 38, 1)) v = "0u";
+            if (B(w, 38, 1)) { /* Idx (Ryujinx InstIpa): the attribute indexed by a register */
+                unsupported(c, "indexed IPA", w);
+                v = "0u";
+            }
             /* hw semantics: perspective generics come out pre-multiplied by w (1/gl_FragCoord.w). PASS keeps that,
        MULTIPLY multiplies by the given reg */
             else if (c->stage == ST_FS && addr >= 0x80 && addr < 0x280) {
@@ -1217,7 +1527,11 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                     c->indent++;
                     for (u32 q = 0; q < 4; q++)
                         emitl(c, "case %uu: gl_Position.%c = uintBitsToFloat(%s); break;", 0x70 + q * 4, "xyzw"[q], v);
-                    for (u32 i = 0; i < 16; i++) {
+                    /* the generics the program header says it writes: OmapGenericVector, 4 bits per generic from
+                       bit 432 of the SPH (checked against every VertexB program Catherine ships) */
+                    for (u32 i = 0; i < 32; i++) {
+                        u32 bit = 432 + i * 4;
+                        if (!((c->si->sph[bit >> 5] >> (bit & 31)) & 15)) continue;
                         c->out_used[i] = 1;
                         for (u32 q = 0; q < 4; q++)
                             emitl(c, "case %uu: out_attr%u.%c = uintBitsToFloat(%s); break;", 0x80 + i * 16 + q * 4, i,
@@ -1240,9 +1554,14 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             u32 sz = B(w, 48, 3);
             u32 ar = a;
             c->si->cbuf_mask |= 1u << idx;
-            if (idx < 18) c->si->cbuf_max[idx] = 65536;
+            if (idx < 18) { /* a register base can reach the whole buffer, a constant address only what it reads */
+                u32 end = sz == 5 ? 8 : 4;
+                if (ar != 255 || off < 0 || (u32)off + end > 65536)
+                    c->si->cbuf_max[idx] = 65536;
+                else if (((((u32)off + end - 1) | 15) + 1) > c->si->cbuf_max[idx])
+                    c->si->cbuf_max[idx] = (((u32)off + end - 1) | 15) + 1;
+            }
             const char* addr = ar == 255 ? T("%uu", (u32)off) : T("(%s + %uu)", R(c, ar), (u32)off);
-            if (ar != 255) c->si->cbuf_indirect_mask |= 1u << idx;
             /* compute the address first, dst can alias the address reg */
             emitl(c, "{ uint ca_ = %s;", addr);
             c->indent++;
@@ -1281,18 +1600,32 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             else
                 c->uses_local = 1;
             const char* addr = a == 255 ? T("%uu", (u32)off) : T("(%s + %uu)", R(c, a), (u32)off);
-            u32 n = sz == 5 ? 2 : sz == 6 ? 4 : 1;
+            /* LsSize (Ryujinx InstLds/Ldl/Sts/Stl 48-50): 0 U8, 1 S8, 2 U16, 3 S16, 4 B32, 5 B64, 6 B128, 7 UB128 */
+            u32 n = sz == 5 ? 2 : sz >= 6 ? 4 : 1;
             emitl(c, "{ uint la_ = %s;", addr);
             c->indent++;
             addr = "la_";
+            const char* bo = sz < 2 ? "int((la_&3u)*8u)" : "int((la_&2u)*8u)"; /* the byte or halfword in its word */
             for (u32 k = 0; k < n; k++) {
-                const char* ix = T("(((%s)>>2)+%uu) & %su", addr, k, shared ? "0xFFFF" : "0x3FF");
+                const char* ix = T("(((%s)>>2)+%uu) & %uu", addr, k, shared ? 0xFFFF : lmem_words(c) - 1);
                 if (load) {
                     if (sz < 4)
                         setr(c, d + k,
-                             T("bitfieldExtract(%s[%s], int(((%s)&3u)*8u), %d)", mem, ix, addr, sz < 2 ? 8 : 16));
+                             (sz & 1) ? T("uint(bitfieldExtract(int(%s[%s]), %s, %d))", mem, ix, bo, sz < 2 ? 8 : 16)
+                                      : T("bitfieldExtract(%s[%s], %s, %d)", mem, ix, bo, sz < 2 ? 8 : 16));
                     else
                         setr(c, d + k, T("%s[%s]", mem, ix));
+                } else if (sz < 4) { /* only the byte or halfword: shared memory with atomics, its neighbours can
+                                        be other threads' */
+                    const char* m = sz < 2 ? "0xFFu" : "0xFFFFu";
+                    if (shared)
+                        emitl(
+                            c,
+                            "{ uint s_ = uint(%s); atomicAnd(smem[%s], ~(%s<<s_)); atomicOr(smem[%s], (%s & %s)<<s_); }",
+                            bo, ix, m, ix, R(c, d), m);
+                    else
+                        emitl(c, "lmem[%s] = bitfieldInsert(lmem[%s], %s, %s, %d);", ix, ix, R(c, d), bo,
+                              sz < 2 ? 8 : 16);
                 } else
                     emitl(c, "%s[%s] = %s;", mem, ix, R(c, d + k));
             }
@@ -1307,7 +1640,6 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 u32 goff = c->si->gbuf_cbuf_off[gi];
                 i32 imm = (i32)(B(w, 20, 24) << 8) >> 8;
                 u32 sz = B(w, 48, 3);
-                c->si->uses_global = 1;
                 emitl(c, "{ uint o_ = %s + %uu - %s;", R(c, a), (u32)imm, CB(c, 0, goff));
                 c->indent++;
                 if (sz <= 3) {
@@ -1333,7 +1665,6 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 u32 goff = c->si->gbuf_cbuf_off[gi];
                 i32 imm = (i32)(B(w, 20, 24) << 8) >> 8;
                 u32 sz = B(w, 48, 3);
-                c->si->uses_global = 1;
                 c->si->gbuf_wmask |= 1u << gi;
                 emitl(c, "{ uint o_ = %s + %uu - %s;", R(c, a), (u32)imm, CB(c, 0, goff));
                 c->indent++;
@@ -1354,7 +1685,6 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 break;
             }
             {
-                c->si->uses_global = 1;
                 unsupported(c, id == O_LDG ? "LDG" : "STG", w);
                 if (id == O_LDG) {
                     u32 sz = B(w, 48, 3), n = sz == 5 ? 2 : sz >= 6 ? 4 : 1;
@@ -1501,7 +1831,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                     lod = RF(c, rb + 1);
                     break; /* cube + LL: z in rb, lod in rb+1 (matches what NVN's compiler emits) */
             }
-            int s = tex_slot(c, off, type, array, shadow, 0);
+            int s = tex_slot(c, off, type, array, shadow);
             if (type == 0) crd = T("vec2(%s, 0.5)", crd);
             if (array) crd = T("vec3(%s, float(%s))", crd, arr);
             const char* smp;
@@ -1510,7 +1840,11 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 smp = lod ? T("vec4(textureLod(tex%d, %s, %s))", s, array ? T("%s", cc) : cc, lod)
                           : T("vec4(texture(tex%d, %s))", s, cc);
                 if (lod && !array) smp = T("vec4(textureLod(tex%d, vec3(%s,%s), %s))", s, crd, dref, lod);
-                if (array) smp = T("vec4(texture(tex%d, vec4(%s,%s)))", s, crd, dref);
+                if (array) { /* an array's depth compare at a level needs GL_EXT_texture_shadow_lod */
+                    smp = lod ? T("vec4(textureLod(tex%d, vec4(%s,%s), %s))", s, crd, dref, lod)
+                              : T("vec4(texture(tex%d, vec4(%s,%s)))", s, crd, dref);
+                    if (lod) c->uses_shadow_lod = 1;
+                }
             } else
                 smp = lod ? T("textureLod(tex%d, %s, %s)", s, crd, lod) : T("texture(tex%d, %s)", s, crd);
             emitl(c, "{ vec4 t_ = %s;", IW(c, s, smp));
@@ -1524,7 +1858,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_SUST: {
             /* compute images. SUST -> imageStore, SULD -> texelFetch on the same texture.
        .P = formatted (mask 20..23), .D = raw bytes (size 20..22) converted using the format class
-       uniforms swr_ic / swr_tc the runtime sets at dispatch */
+       uniforms snx_ic / snx_tc the runtime sets at dispatch */
             u32 isd = B(w, 52, 1), bound = B(w, 51, 1), ty = B(w, 33, 3), ra = a, rdd = d;
             if (c->stage != ST_CS || ty == 1 || ty > 5) {
                 unsupported(c, id == O_SUST ? "SUST" : "SULD", w);
@@ -1544,16 +1878,15 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 }
                 off = bo / 4;
                 bl = 1;
-            }
-            const char* crd;
-            switch (ty) {
-                case 0: crd = T("int(%s)", R(c, ra)); break;
-                case 2: crd = T("ivec2(int(%s), int(%s))", R(c, ra), R(c, ra + 1)); break;
-                case 3: crd = T("ivec2(int(%s), int(%s))", R(c, ra), R(c, ra + 1)); break;
-                default: crd = T("ivec3(int(%s), int(%s), int(%s))", R(c, ra), R(c, ra + 1), R(c, ra + 2));
+                if (id == O_SUST && c->bl2) { /* the image list has no place for the second read of a split handle */
+                    unsupported(c, "SUST.B (split handle)", w);
+                    break;
+                }
             }
             int ba = isd && B(w, 23, 1); /* x is in bytes, divide by texel size */
-            u32 sz = B(w, 20, 3), nw = isd ? (sz == 5 ? 2 : sz == 6 ? 4 : 1) : 0;
+            /* Size 20-22 (Ryujinx InstSuldD/SustD, SuSize): 5 B64 two words, 6 B128 and 7 UB128 four */
+            u32 sz = B(w, 20, 3), nw = isd ? (sz == 5 ? 2 : sz >= 6 ? 4 : 1) : 0;
+            const char* crd = su_coords(c, ty, ra, T("int(%s)", R(c, ra)), 0);
             if (id == O_SUST) {
                 ShaderInfo* si = c->si;
                 int k = 0;
@@ -1578,11 +1911,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 }
                 if (ba) {
                     c->uses_img_raw = 1;
-                    crd = ty == 0 || ty == 2 ? T("int(%s) / swr_ib[%d]", R(c, ra), k)
-                          : ty == 3 ? T("ivec2(int(%s) / swr_ib[%d], int(%s))", R(c, ra), k, R(c, ra + 1))
-                                    : T("ivec3(int(%s) / swr_ib[%d], int(%s), int(%s))", R(c, ra), k, R(c, ra + 1),
-                                        R(c, ra + 2));
-                    if (ty == 2) crd = T("ivec2(int(%s) / swr_ib[%d], int(%s))", R(c, ra), k, R(c, ra + 1));
+                    crd = su_coords(c, ty, ra, T("int(%s) / snx_ib[%d]", R(c, ra), k), 0);
                 }
                 if (!isd) {
                     u32 m = B(w, 20, 4), r = rdd;
@@ -1595,21 +1924,16 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                     emitl(c, "imageStore(img%d, %s, vec4(%s, %s, %s, %s));", k, crd, cc[0], cc[1], cc[2], cc[3]);
                 } else {
                     c->uses_img_raw = 1;
-                    emitl(c, "imageStore(img%d, %s, swr_r2v(uvec4(%s, %s, %s, %s), %uu, %uu, swr_ic[%d]));", k, crd,
+                    emitl(c, "imageStore(img%d, %s, snx_r2v(uvec4(%s, %s, %s, %s), %uu, %uu, snx_ic[%d]));", k, crd,
                           R(c, rdd), nw > 1 ? R(c, rdd + 1) : "0u", nw > 2 ? R(c, rdd + 2) : "0u",
                           nw > 2 ? R(c, rdd + 3) : "0u", nw, sz, k);
                 }
             } else {
                 int tt = ty == 5 ? 2 : (ty == 0 || ty == 2) ? 0 : 1, arr = ty == 2 || ty == 4;
-                int ts = tex_slot2(c, off, tt, arr, 0, 1, bl, bank);
-                if (ba) {
-                    c->uses_img_raw = 1;
-                    c->si->sutex_mask |= 1u << ts;
-                    crd = ty == 0              ? T("int(%s) / swr_tb[%d]", R(c, ra), ts)
-                          : ty == 2 || ty == 3 ? T("ivec2(int(%s) / swr_tb[%d], int(%s))", R(c, ra), ts, R(c, ra + 1))
-                                               : T("ivec3(int(%s) / swr_tb[%d], int(%s), int(%s))", R(c, ra), ts,
-                                                   R(c, ra + 1), R(c, ra + 2));
-                }
+                int ts = tex_slot2(c, off, tt, arr, 0, bl, bank);
+                if (ba) c->uses_img_raw = 1;
+                /* read through a sampler, where 1D is a 2D texture */
+                crd = su_coords(c, ty, ra, ba ? T("int(%s) / snx_tb[%d]", R(c, ra), ts) : T("int(%s)", R(c, ra)), 1);
                 const char* f = T("texelFetch(tex%d, %s, 0)", ts, crd);
                 if (!isd) {
                     emitl(c, "{ vec4 t_ = %s;", f);
@@ -1619,8 +1943,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                     emitl(c, "}");
                 } else {
                     c->uses_img_raw = 1;
-                    c->si->sutex_mask |= 1u << ts;
-                    emitl(c, "{ uvec4 t_ = swr_v2r(%s, %uu, swr_tc[%d]);", f, sz, ts);
+                    emitl(c, "{ uvec4 t_ = snx_v2r(%s, %uu, snx_tc[%d]);", f, sz, ts);
                     c->indent++;
                     for (u32 q = 0; q < nw; q++)
                         if (rdd != 255) setr(c, rdd + q, T("t_.%c", "xyzw"[q]));
@@ -1672,7 +1995,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                     break;
                 default: crd = T("ivec2(%s,%s)", R(c, ra), R(c, rb)); break;
             }
-            int s = tex_slot(c, off, type, array, 0, 1);
+            int s = tex_slot(c, off, type, array, 0);
             if (type == 0) crd = T("ivec2(%s, 0)", crd);
             const char* smp =
                 ofs ? T("texelFetch(tex%d, %s + ivec2(bitfieldExtract(int(%s),0,4),bitfieldExtract(int(%s),4,4)), %s)",
@@ -1701,7 +2024,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 } else
                     dref = RF(c, rb);
             }
-            int s = tex_slot(c, off, 1, 0, dc, 0);
+            int s = tex_slot(c, off, 1, 0, dc);
             const char* smp;
             if (dc)
                 smp =
@@ -1746,6 +2069,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             if (bl) {
                 if (!track_handle(c, idx, mr, &blbank, &bloff)) {
                     unsupported(c, "TEX.B (untracked handle)", w);
+                    write_masked(c, d, mask ? mask : 15, "vec4(0.0)");
                     break;
                 }
                 off = bloff / 4;
@@ -1753,23 +2077,29 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             }
             int type = (int)(ty >> 1), array = ty & 1;
             if (type > 3) type = 3;
-            int dc = 0, aoffi = 0;
+            int dc = 0, aoffi = 0, ptp = 0, ms = 0;
             u32 blod = 0;
             if (eid == O_TEX) {
+                /* Ryujinx InstTex: Dc 50, Aoffi 54, Lod 55-57; InstTexB: Dc 50, Aoffib 36, Lodb 37-39 */
                 dc = B(w, 50, 1);
-                aoffi = B(w, 54, 1);
-                blod = B(w, 55, 3);
+                aoffi = bl ? B(w, 36, 1) : B(w, 54, 1);
+                blod = bl ? B(w, 37, 3) : B(w, 55, 3);
             } else if (eid == O_TLD4) {
+                /* Ryujinx InstTld4: Dc 50, Toff 54-55 (1 AOFFI, 2 PTP), TexComp 56-57 */
                 dc = B(w, 50, 1);
-                aoffi = B(w, 54, 2) != 0;
+                aoffi = B(w, 54, 2) == 1;
+                ptp = B(w, 54, 2) == 2;
             } else if (eid == O_TLD) {
+                /* Ryujinx InstTld: Lod 55, Toff 35, Ms 50 */
                 blod = B(w, 55, 1) ? 3 : 1;
                 aoffi = B(w, 35, 1);
-            }
-            int dim = type == 0 ? 1 : type == 1 ? 2 : 3;
+                ms = B(w, 50, 1);
+            } else if (eid == O_TXD)
+                aoffi = B(w, 35, 1); /* Ryujinx InstTxd: Toff 35 */
+            int dim = type == 0 ? 1 : type == 1 ? 2 : 3, ncrd = dim;
             const char* arr = NULL;
             u32 r = cr;
-            if (array) {
+            if (array && eid != O_TXD) { /* TXD has the array index after the coordinates */
                 arr = R(c, r);
                 r++;
             }
@@ -1787,61 +2117,118 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             const char* bias = NULL;
             const char* ofs = NULL;
             const char* dref = NULL;
-            if (blod == 2 || blod == 6) {
-                bias = RF(c, m);
-                m++;
-            } else if (blod == 3 || blod == 7) {
-                lod = eid == O_TLD ? T("int(%s)", R(c, m)) : RF(c, m);
-                m++;
-            } else if (blod == 1) {
-                lod = eid == O_TLD ? "0" : "0.0";
+            int ofs_const = 1;
+            if (eid == O_TXD) {
+                /* after the coordinates a register with the array index (bits 0-15) and the offsets (4 bits each
+                   from bit 16); the derivatives from rb, dPdx then dPdy (Ryujinx EmitTxd) */
+                u32 pk = r + dim;
+                if (array) arr = T("(%s & 0xFFFFu)", R(c, pk));
+                if (aoffi) ofs = tex_offsets(c, idx, pk, ncrd, 16, 4, 4, type == 0, &ofs_const);
+            } else {
+                /* rb on: the LOD or bias, the offsets, the depth reference, the sample (Ryujinx EmitTex, EmitTld4) */
+                if (blod == 2 || blod == 6) {
+                    bias = RF(c, m);
+                    m++;
+                } else if (blod == 3 || blod == 7) {
+                    lod = eid == O_TLD ? T("int(%s)", R(c, m)) : RF(c, m);
+                    m++;
+                } else if (blod == 1) {
+                    lod = eid == O_TLD ? "0" : "0.0";
+                }
+                if (aoffi) {
+                    /* TEX/TLD: 4 bits per coordinate, TLD4: 6 bits in each byte */
+                    ofs = eid == O_TLD4 ? tex_offsets(c, idx, m, ncrd, 0, 8, 6, type == 0, &ofs_const)
+                                        : tex_offsets(c, idx, m, ncrd, 0, 4, 4, type == 0, &ofs_const);
+                    m++;
+                } else if (ptp) { /* four texels' offsets in two registers: textureGatherOffsets takes constants */
+                    int k0, k1;
+                    const char* o0 = tex_offsets(c, idx, m, 2, 0, 8, 6, 0, &k0);
+                    const char* o1 = tex_offsets(c, idx, m, 2, 16, 8, 6, 0, &k0);
+                    const char* o2 = tex_offsets(c, idx, m + 1, 2, 0, 8, 6, 0, &k1);
+                    const char* o3 = tex_offsets(c, idx, m + 1, 2, 16, 8, 6, 0, &k1);
+                    if (k0 && k1 && type == 1)
+                        ofs = T("ivec2[4](%s, %s, %s, %s)", o0, o1, o2, o3);
+                    else
+                        unsupported(c, "TLD4.PTP (offsets not constant)", w);
+                    m += 2;
+                }
+                if (dc) {
+                    dref = RF(c, m);
+                    m++;
+                }
+                if (ms) /* no multisampled texture types here: sample 0's texel */
+                    unsupported(c, "TLD.MS", w);
             }
-            if (aoffi) {
-                ofs = R(c, m);
-                m++;
-            }
-            if (dc) {
-                dref = RF(c, m);
-                m++;
-            }
-            int s = tex_slot2(c, off, type, array, dc, eid == O_TLD, bl, blbank);
+            int s = tex_slot2(c, off, type, array, dc, bl, blbank);
             if (type == 0) {
                 crd = eid == O_TLD ? T("ivec2(%s, 0)", crd) : T("vec2(%s, 0.5)", crd);
                 dim = 2;
             }
-            if (array && id != O_TLD) crd = T("vec%d(%s, float(%s))", dim + 1, crd, arr);
+            const char* crd0 = crd; /* textureQueryLod takes no array index */
+            if (array && eid != O_TLD) crd = T("vec%d(%s, float(%s))", dim + 1, crd, arr);
             if (array && eid == O_TLD) crd = T("ivec%d(%s, int(%s))", dim + 1, crd, arr);
+            /* the sampling functions take constant offsets only, and none on cube maps */
+            if (ofs && eid != O_TLD && ((eid != O_TLD4 && !ofs_const) || type == 3)) {
+                unsupported(c, type == 3 ? "texture offset on a cube map" : "texture offset not constant", w);
+                ofs = NULL;
+            }
             const char* smp;
             if (eid == O_TMML) {
-                smp = T("vec4(textureQueryLod(tex%d, %s), 0.0, 0.0)", s, crd);
+                /* x the LOD the hardware computes, y the level it reads, 8.8 fixed point; z and w 0 (Ryujinx
+                   EmitTmml: GLSL's order is the other way round) */
+                emitl(c, "{ vec2 q_ = textureQueryLod(tex%d, %s);", s, crd0);
+                c->indent++;
+                static const char* tv[4] = {"uint(int(q_.y * 256.0))", "uint(int(q_.x * 256.0))", "0u", "0u"};
+                u32 rr = d;
+                for (int k = 0; k < 4; k++)
+                    if ((mask ? mask : 15) & (1u << k)) setr(c, rr++, tv[k]);
+                c->indent--;
+                emitl(c, "}");
+                break;
             } else if (eid == O_TLD) {
+                /* integer coordinates: the offset is just added */
+                if (ofs && array)
+                    crd = T("(%s + ivec%d(%s, 0))", crd, dim + 1, ofs);
+                else if (ofs)
+                    crd = T("(%s + %s)", crd, ofs);
                 smp = T("texelFetch(tex%d, %s, %s)", s, crd, lod ? lod : "0");
             } else if (eid == O_TLD4) {
                 u32 comp = B(w, 56, 2);
-                smp = dc ? T("textureGather(tex%d, %s, %s)", s, crd, dref)
-                         : T("textureGather(tex%d, %s, %u)", s, crd, comp);
+                const char* fn = !ofs ? "textureGather" : ptp ? "textureGatherOffsets" : "textureGatherOffset";
+                const char* o = ofs ? T(", %s", ofs) : "";
+                smp =
+                    dc ? T("%s(tex%d, %s, %s%s)", fn, s, crd, dref, o) : T("%s(tex%d, %s%s, %u)", fn, s, crd, o, comp);
             } else if (eid == O_TXD) {
-                smp = T("texture(tex%d, %s)", s, crd);
+                u32 rb = mr, nd = ncrd;
+                const char *dx, *dy;
+                if (nd == 1) {
+                    dx = T("vec2(%s, 0.0)", RF(c, rb));
+                    dy = T("vec2(%s, 0.0)", RF(c, rb + 1));
+                } else if (nd == 2) {
+                    dx = T("vec2(%s,%s)", RF(c, rb), RF(c, rb + 1));
+                    dy = T("vec2(%s,%s)", RF(c, rb + 2), RF(c, rb + 3));
+                } else {
+                    dx = T("vec3(%s,%s,%s)", RF(c, rb), RF(c, rb + 1), RF(c, rb + 2));
+                    dy = T("vec3(%s,%s,%s)", RF(c, rb + 3), RF(c, rb + 4), RF(c, rb + 5));
+                }
+                smp = ofs ? T("textureGradOffset(tex%d, %s, %s, %s, %s)", s, crd, dx, dy, ofs)
+                          : T("textureGrad(tex%d, %s, %s, %s)", s, crd, dx, dy);
             } else {
-                const char* cc = crd;
-                int dc_comb = dc && !(dim == 3 && array);
-                if (dc) cc = dc_comb ? T("vec%d(%s, %s)", dim + array + 1, crd, dref) : crd;
+                /* a cube array's depth reference goes separately, the others' after the coordinates. With an LOD,
+                   a bias or an offset, the array and cube forms need GL_EXT_texture_shadow_lod */
+                int sep = dc && type == 3 && array;
+                const char* cc = dc && !sep ? T("vec%d(%s, %s)", dim + array + 1, crd, dref) : crd;
+                const char* cmp = sep ? T(", %s", dref) : "";
+                const char* o = ofs ? T(", %s", ofs) : "";
+                const char* fo = ofs ? "Offset" : "";
+                if (dc && (array || type == 3) && (lod || bias || ofs)) c->uses_shadow_lod = 1;
                 if (lod)
-                    smp = dc ? T("vec4(textureLod(tex%d, %s, %s))", s, cc, lod)
-                             : T("textureLod(tex%d, %s, %s)", s, cc, lod);
+                    smp = T("textureLod%s(tex%d, %s%s, %s%s)", fo, s, cc, cmp, lod, o);
                 else if (bias)
-                    smp =
-                        dc ? T("vec4(texture(tex%d, %s, %s))", s, cc, bias) : T("texture(tex%d, %s, %s)", s, cc, bias);
+                    smp = T("texture%s(tex%d, %s%s%s, %s)", fo, s, cc, cmp, o, bias);
                 else
-                    smp = dc ? (dc_comb ? T("vec4(texture(tex%d, %s))", s, cc)
-                                        : T("vec4(texture(tex%d, %s, %s))", s, cc, dref))
-                             : T("texture(tex%d, %s)", s, cc);
-                /* offset from a register. GLSL asks for a constant expression here, and glslang takes this one for
-                   Vulkan */
-                if (ofs && !dc && dim == 2 && !lod && !bias)
-                    smp =
-                        T("textureOffset(tex%d, %s, ivec2(bitfieldExtract(int(%s),0,4),bitfieldExtract(int(%s),4,4)))",
-                          s, cc, ofs, ofs);
+                    smp = T("texture%s(tex%d, %s%s%s)", fo, s, cc, cmp, o);
+                if (dc) smp = T("vec4(%s)", smp);
             }
             emitl(c, "{ vec4 t_ = %s;", IW(c, s, smp));
             c->indent++;
@@ -1858,16 +2245,23 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             if (bl) {
                 if (!track_handle(c, idx, a, &blbank, &bloff)) {
                     unsupported(c, "TXQ.B (untracked handle)", w);
+                    write_masked(c, d, mask, "vec4(0.0)");
                     break;
                 }
                 off = bloff / 4;
                 a++;
             }
-            int s = tex_slot2(c, off, 1, 0, 0, 1, bl, blbank);
+            /* TXQ has no Dim of its own: the texture's type is what the program's other accesses to it use (2D when
+               none does, or for a bindless handle) */
+            int dm = bl ? -1 : tex_dim_of(c, off);
+            int type = dm < 0 ? 1 : dm >> 1 > 3 ? 3 : dm >> 1, array = dm < 0 ? 0 : dm & 1;
+            int s = tex_slot2(c, off, type, array, 0, bl, blbank);
             if (q == 1) {
+                /* x width, y height, z depth or layers, w levels */
+                int n3 = array || type == 2;
                 emitl(c,
-                      "{ ivec2 sz_ = textureSize(tex%d, int(%s)); uvec4 t_ = uvec4(uint(sz_.x), uint(sz_.y), 1u, %s);",
-                      s, R(c, a), T("uint(textureQueryLevels(tex%d))", s));
+                      "{ ivec%d sz_ = textureSize(tex%d, int(%s)); uvec4 t_ = uvec4(uint(sz_.x), uint(sz_.y), %s, %s);",
+                      n3 ? 3 : 2, s, R(c, a), n3 ? "uint(sz_.z)" : "1u", T("uint(textureQueryLevels(tex%d))", s));
                 c->indent++;
                 u32 r = d;
                 for (int k = 0; k < 4; k++)
@@ -1895,53 +2289,31 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                   (int)idx + 1, R(c, a), off);
             break;
         }
-        case O_BRA: {
-            u32 t = bra_target(w, idx);
-            if (B(w, 0, 5) != 15) { c->uses_cc = 1; }
-            emitl(c, "pc = %uu; break;", t);
-            break;
-        }
-        /* if the stacks were resolved statically: push = nothing, pop = fixed jump */
+        case O_BRA:
+            emitl(c, "pc = %uu; break;", bra_target(w, idx));
+            break; /* its condition is emit_guarded's */
+        /* SSY/PBK/PCNT push a token and their target on the one CRS stack; SYNC/BRK/CONT pop entries down to the
+           nearest token of their kind and jump to it, so a BRK or CONT out of an SSY drops the SSY entry. Resolved
+           statically: push = nothing, pop = fixed jump. A pop that finds no entry of its kind falls through */
         case O_SSY:
-            if (!c->stk_static) {
-                c->uses_stk[0] = 1;
-                emitl(c, "ssy[ssy_sp++] = %uu;", bra_target(w, idx));
-            }
-            break;
         case O_PBK:
-            if (!c->stk_static) {
-                c->uses_stk[1] = 1;
-                emitl(c, "pbk[pbk_sp++] = %uu;", bra_target(w, idx));
-            }
-            break;
         case O_PCNT:
             if (!c->stk_static) {
-                c->uses_stk[2] = 1;
-                emitl(c, "pcnt[pcnt_sp++] = %uu;", bra_target(w, idx));
+                c->uses_crs = 1;
+                emitl(c, "if(crs_sp < 32) crs[crs_sp++] = %uu;", bra_target(w, idx) | (u32)CRS_KIND(id) << 16);
             }
             break;
         case O_SYNC:
-            if (c->stk_static)
-                emitl(c, "pc = %uu; break;", c->pop_tgt[idx]);
-            else {
-                c->uses_stk[0] = 1;
-                emitl(c, "pc = ssy[--ssy_sp]; break;");
-            }
-            break;
         case O_BRK:
-            if (c->stk_static)
-                emitl(c, "pc = %uu; break;", c->pop_tgt[idx]);
-            else {
-                c->uses_stk[1] = 1;
-                emitl(c, "pc = pbk[--pbk_sp]; break;");
-            }
-            break;
         case O_CONT:
             if (c->stk_static)
                 emitl(c, "pc = %uu; break;", c->pop_tgt[idx]);
             else {
-                c->uses_stk[2] = 1;
-                emitl(c, "pc = pcnt[--pcnt_sp]; break;");
+                c->uses_crs = 1;
+                emitl(
+                    c,
+                    "{ int s_ = crs_sp; while(s_ > 0 && (crs[s_-1] >> 16) != %uu) s_--; if(s_ > 0) { crs_sp = s_-1; pc = crs[crs_sp] & 0xFFFFu; break; } }",
+                    (u32)CRS_KIND(id));
             }
             break;
         case O_EXIT: exit_epilogue(c); break;
@@ -1966,10 +2338,15 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             setr(c, d, T("(%s ? 1u : 0u)", pr));
             break;
         }
-        case O_SHFL:
+        case O_SHFL: {
+            /* a warp of one: the thread is lane 0 (S2R LaneId reads 0), so the lane it reads from is only there,
+               and the predicate set, when that's lane 0; the value is its own either way. Ryujinx InstShfl: b is
+               the 5-bit immediate at 20 with BFixShfl (bit 28), DestPred 48-50 */
+            const char* b = B(w, 28, 1) ? T("%uu", B(w, 20, 5)) : R(c, B(w, 20, 8));
+            setp(c, B(w, 48, 3), T("((%s & 31u) == 0u)", b));
             setr(c, d, R(c, a));
-            setp(c, B(w, 48, 3), "true");
             break;
+        }
         case O_FSWZADD: {
             /* derivatives the nouveau way: SHFL.BFLY + FSWZADD.
        0x99 = QUADOP(SUB,SUBR,SUB,SUBR) -> dFdx(Rb), 0xA5 = QUADOP(SUB,SUB,SUBR,SUBR) -> dFdy(Rb) */
@@ -1990,9 +2367,8 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_OUT_R:
         case O_OUT_C:
         case O_OUT_I: {
-            u32 k = B(w, 39, 2);
-            if (k & 1) emitl(c, "EmitVertex();");
-            if (k & 2) emitl(c, "EndPrimitive();");
+            /* a geometry program's, and those aren't translated */
+            unsupported(c, "OUT", w);
             setr(c, d, R(c, a));
             break;
         }
@@ -2193,6 +2569,51 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
             emitl(c, "}");
             break;
         }
-        default: unsupported(c, op->name, w); break;
+        default: {
+            unsupported(c, op->name, w);
+            /* zero what it would have written, so what reads it later sees no stale value: the destination at bits
+               0-7 for the ones that have one there (stores, RED and SURED keep their data register there) */
+            u32 n = 0;
+            switch (id) {
+                case O_LD: n = B(w, 53, 3) == 5 ? 2 : B(w, 53, 3) >= 6 ? 4 : 1; break; /* Ryujinx InstLd LsSize */
+                case O_DADD_R:
+                case O_DADD_C:
+                case O_DADD_I:
+                case O_DMUL_R:
+                case O_DMUL_C:
+                case O_DMUL_I:
+                case O_DFMA_R:
+                case O_DFMA_RC:
+                case O_DFMA_CR:
+                case O_DFMA_I:
+                case O_DMNMX_R:
+                case O_DMNMX_C:
+                case O_DMNMX_I: n = 2; break;
+                case O_TXA: n = (u32)__builtin_popcount(B(w, 31, 4)); break;
+                case O_ATOM:
+                case O_ATOMS:
+                case O_ATOM_CAS:
+                case O_ATOMS_CAS:
+                case O_SUATOM:
+                case O_SUATOM_CAS:
+                case O_DSET_R:
+                case O_DSET_C:
+                case O_DSET_I:
+                case O_HSET2_R:
+                case O_HSET2_C:
+                case O_HSET2_I:
+                case O_VMNMX:
+                case O_VMAD:
+                case O_VADD:
+                case O_ISBERD:
+                case O_AL2P:
+                case O_PIXLD:
+                case O_B2R:
+                case O_LEPC:
+                case O_GETCRSPTR: n = 1; break;
+            }
+            for (u32 k = 0; k < n; k++) setr(c, d + k, "0u");
+            break;
+        }
     }
 }

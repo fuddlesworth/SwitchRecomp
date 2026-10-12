@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
-   Copyright 2026 the SwitchRecomp fork contributors */
-/* GLSL (from the Maxwell translator in Vulkan mode) to SPIR-V, with glslang. Shared by the Vulkan renderer and
-   tools/swr_shaderc.c, so it depends on nothing else of the runtime. */
+   Copyright 2026 the ScarletNX contributors */
+/* GLSL (from the Maxwell translator) to SPIR-V, with glslang. Shared by the Vulkan renderer and tools/snx_shaderc.c,
+   so it depends on nothing else of the runtime. */
 #include "gpu/shader/shader.h"
 #include "gpu/vk/spirv.h"
 #include <glslang/Include/glslang_c_interface.h>
@@ -9,8 +9,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 static int g_glslang_ready;
+/* what the GLSL is compiled for: part of the cache key too */
+static const int g_target[3] = {GLSLANG_TARGET_VULKAN_1_3, GLSLANG_TARGET_SPV_1_6,
+                                GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT};
 
 static glslang_stage_t glslang_stage(int stage) {
     switch (stage) {
@@ -23,7 +31,7 @@ static glslang_stage_t glslang_stage(int stage) {
     }
 }
 
-u32* vk_glsl_to_spirv(const char* glsl, int stage, size_t* nwords, char* err, size_t errn) {
+static u32* vk_glsl_to_spirv(const char* glsl, int stage, size_t* nwords, char* err, size_t errn) {
     if (!g_glslang_ready) {
         glslang_initialize_process();
         g_glslang_ready = 1;
@@ -32,13 +40,13 @@ u32* vk_glsl_to_spirv(const char* glsl, int stage, size_t* nwords, char* err, si
     glslang_input_t in = {.language = GLSLANG_SOURCE_GLSL,
                           .stage = glslang_stage(stage),
                           .client = GLSLANG_CLIENT_VULKAN,
-                          .client_version = GLSLANG_TARGET_VULKAN_1_3,
+                          .client_version = (glslang_target_client_version_t)g_target[0],
                           .target_language = GLSLANG_TARGET_SPV,
-                          .target_language_version = GLSLANG_TARGET_SPV_1_6,
+                          .target_language_version = (glslang_target_language_version_t)g_target[1],
                           .code = glsl,
                           .default_version = 450,
                           .default_profile = GLSLANG_NO_PROFILE,
-                          .messages = GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT,
+                          .messages = (glslang_messages_t)g_target[2],
                           .resource = glslang_default_resource()};
     u32* words = NULL;
     glslang_shader_t* sh = glslang_shader_create(&in);
@@ -51,7 +59,7 @@ u32* vk_glsl_to_spirv(const char* glsl, int stage, size_t* nwords, char* err, si
     else {
         pr = glslang_program_create();
         glslang_program_add_shader(pr, sh);
-        if (!glslang_program_link(pr, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT))
+        if (!glslang_program_link(pr, g_target[2]))
             what = "link";
         else {
             glslang_program_SPIRV_generate(pr, in.stage);
@@ -83,6 +91,7 @@ u32* vk_spirv_cached(const char* glsl, int stage, const char* cache_dir, size_t*
     h = fnv64(h, &stage, sizeof stage);
     int ver[3] = {v.major, v.minor, v.patch}; /* not the struct: its flavor is a pointer */
     h = fnv64(h, ver, sizeof ver);
+    h = fnv64(h, g_target, sizeof g_target);
     char path[1200];
     snprintf(path, sizeof path, "%s/%016llx.spv", cache_dir, (unsigned long long)h);
     FILE* f = fopen(path, "rb");
@@ -101,37 +110,46 @@ u32* vk_spirv_cached(const char* glsl, int stage, const char* cache_dir, size_t*
     }
     u32* w = vk_glsl_to_spirv(glsl, stage, nwords, err, errn);
     if (w) {
-        /* written under a temporary name and renamed, so a reader never sees half a file */
-        char tmp[1300];
-        snprintf(tmp, sizeof tmp, "%s.tmp", path);
+        /* written under a temporary name of this process's own and renamed, so a reader never sees half a file.
+           Windows doesn't rename over a file: the one there (unreadable, or another process's copy of the same
+           contents, the name being their hash) is removed first, and a reader in between only compiles again. Plain
+           rename and remove, as this file uses nothing else of the runtime (snx-shaderc links it alone) */
+        char tmp[1320];
+#ifdef _WIN32
+        snprintf(tmp, sizeof tmp, "%s.%d.tmp", path, (int)_getpid());
+#else
+        snprintf(tmp, sizeof tmp, "%s.%d.tmp", path, (int)getpid());
+#endif
         f = fopen(tmp, "wb");
         if (f) {
             int ok = fwrite(w, 4, *nwords, f) == *nwords;
-            fclose(f);
-            if (ok)
-                rename(tmp, path);
-            else
-                remove(tmp);
+            if (fclose(f)) ok = 0;
+            if (ok && rename(tmp, path)) {
+                remove(path);
+                ok = !rename(tmp, path);
+            }
+            if (!ok) remove(tmp);
         }
     }
     return w;
 }
 
-/* what the translated GLSL needs on Vulkan: the alpha test discards before every return of a fragment shader, and a vertex
-   shader for a guest in -1..1 depth mode moves z to Vulkan's 0..1 (the viewport handles y, see gpu/vk/render.c) */
+/* what the translated GLSL needs on Vulkan: the alpha test discards before every return of a fragment shader, and a
+   vertex shader for a guest in -1..1 depth mode moves z to Vulkan's 0..1 (the viewport handles y, see
+   gpu/vk/render.c) */
 char* vk_glsl_post(char* src, int stage) {
     if (!src) return src;
     const char* fn = NULL;
     const char* ret = NULL;
     if (stage == ST_FS && strstr(src, "out vec4 frag_color0")) {
         fn =
-            "layout(push_constant) uniform SWR_PC { layout(offset=16) vec4 swr_at; };\n"
-            "bool swr_atest(float a){ int f=int(swr_at.y); float r=swr_at.z;\n"
+            "layout(push_constant) uniform SNX_PC { layout(offset=16) vec4 snx_at; };\n"
+            "bool snx_atest(float a){ int f=int(snx_at.y); float r=snx_at.z;\n"
             "  if(f==0) return false; if(f==1) return a<r; if(f==2) return a==r; if(f==3) return a<=r; if(f==4) return a>r; if(f==5) return a!=r; if(f==6) return a>=r; return true; }\n";
-        ret = "{ if(swr_at.x!=0.0 && !swr_atest(frag_color0.w)) discard; return; }";
+        ret = "{ if(snx_at.x!=0.0 && !snx_atest(frag_color0.w)) discard; return; }";
     } else if (stage == ST_VS) {
-        fn = "layout(push_constant) uniform SWR_PC { vec4 swr_vp; };\n";
-        ret = "{ if(swr_vp.y!=0.0) gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5; return; }";
+        fn = "layout(push_constant) uniform SNX_PC { vec4 snx_vp; };\n";
+        ret = "{ if(snx_vp.y!=0.0) gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5; return; }";
     }
     char* p = fn ? strstr(src, "void main(){") : NULL;
     if (!p) return src;

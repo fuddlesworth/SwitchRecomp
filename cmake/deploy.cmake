@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
+# Copyright 2026 the ScarletNX contributors
 # Copies the runtime to games/<Game> for every games/<Game>_code.so (games/<Game>.exe for every _code.dll on
 # Windows). The runtime finds its game module by its own file name, so each game gets a copy under its name.
 if(WINDOWS)

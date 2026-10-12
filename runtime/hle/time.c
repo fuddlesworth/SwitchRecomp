@@ -1,35 +1,58 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* time: clocks and the time zone */
 #include "hle/services_int.h"
 #include "core/clock.h"
 /* ================================================================ time */
-static KShmem* g_time_shm;
+/* The steady clock is the guest clock (guest_ns, the time base of the ticks the game reads) in seconds, with
+   g_clock_id as its source id. The system clocks are a SystemClockContext {i64 offset; SteadyClockTimePoint
+   {i64 time; u8 source_id[16]}} on it: the time is offset + the steady time, and offset is set once at startup
+   from the host's clock, so the IPC answers and the shared memory agree */
+static struct {
+    KShmem* shm;
+    i64 tz_off;  /* local - UTC, seconds: the guest's wall clock is the host's local time */
+    i64 sys_off; /* the system clocks' offset */
+} timesvc;
+static u8 g_clock_id[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+static i64 steady_s(void) { return (i64)(guest_ns() / 1000000000ull); }
+static void sysclock_ctx(u8 out[0x20]) {
+    i64 tp = steady_s();
+    memcpy(out, &timesvc.sys_off, 8);
+    memcpy(out + 8, &tp, 8);
+    memcpy(out + 16, g_clock_id, 16);
+}
+/* the time a SystemClockContext gives now: 0 (and failure) when it is on another steady clock */
+static int ctx_time(const u8* ctx, i64* t) {
+    i64 off;
+    memcpy(&off, ctx, 8);
+    if (memcmp(ctx + 16, g_clock_id, 16)) {
+        *t = 0;
+        return 0;
+    }
+    *t = off + steady_s();
+    return 1;
+}
 static int sysclock_disp(SvcObj* o, IpcCtx* c) {
     switch (c->cmd) {
-        case 0: out64(c, (u64)plat_unix_time()); return 0;
+        case 0: out64(c, (u64)(timesvc.sys_off + steady_s())); return 0; /* GetCurrentTime */
         case 1: return 0;
-        case 2: {
+        case 2: { /* GetSystemClockContext */
             u8 ctx[0x20];
-            memset(ctx, 0, sizeof ctx);
-            i64 t = plat_unix_time();
-            memcpy(ctx, &t, 8);
+            sysclock_ctx(ctx);
             outbytes(c, ctx, 0x20);
             return 0;
         }
         case 3: return 0;
-        case 4: out_copy_h(c, ev_handle(kevent_new("clock op", 0))); return 0; /* GetOperationEventReadableHandle */
+        case 4: out_copy_h(c, ev_handle(kevent_new("clock op"))); return 0; /* GetOperationEventReadableHandle */
     }
     return stub_ok(o, c);
 }
-static u8 g_clock_id[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
 static int steady_disp(SvcObj* o, IpcCtx* c) {
     switch (c->cmd) {
-        case 0: {
-            u64 s = plat_ns() / 1000000000ull;
-            out64(c, s);
+        case 0: { /* GetCurrentTimePoint */
+            out64(c, (u64)steady_s());
             outbytes(c, g_clock_id, 16);
             return 0;
         }
@@ -44,8 +67,17 @@ static int steady_disp(SvcObj* o, IpcCtx* c) {
     }
     return stub_ok(o, c);
 }
-static i64 g_tz_off;
-static void to_calendar(i64 t, IpcCtx* c) {
+static i64 days_from_civil(i64 y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    i64 era = (y >= 0 ? y : y - 399) / 400;
+    unsigned yoe = (unsigned)(y - era * 400);
+    unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (i64)doe - 719468;
+}
+/* CalendarTime {i16 year; i8 month, day, hour, minute, second; pad} then CalendarAdditionalInfo {u32 day_of_week;
+   u32 day_of_year; char tz_name[8]; u32 is_dst; i32 utc_offset} of a local time t */
+static void to_calendar(i64 t, u8 out[0x20]) {
     i64 days = t / 86400, rem = t % 86400;
     if (rem < 0) {
         rem += 86400;
@@ -63,33 +95,23 @@ static void to_calendar(i64 t, IpcCtx* c) {
     unsigned d = doy - (153 * mp + 2) / 5 + 1;
     unsigned m = mp < 10 ? mp + 3 : mp - 9;
     y += m <= 2;
+    memset(out, 0, 0x20);
     u16 yy = (u16)y;
-    outbytes(c, &yy, 2);
-    out8(c, (u8)m);
-    out8(c, (u8)d);
-    out8(c, (u8)hh);
-    out8(c, (u8)mm);
-    out8(c, (u8)ss);
-    out8(c, 0);
-    /* CalendarAdditionalInfo */
+    memcpy(out, &yy, 2);
+    out[2] = (u8)m;
+    out[3] = (u8)d;
+    out[4] = (u8)hh;
+    out[5] = (u8)mm;
+    out[6] = (u8)ss;
     u32 wday = (u32)((days % 7 + 11) % 7);
-    out32(c, wday);
-    u32 yday = 0;
-    out32(c, yday);
-    char tz[8] = "UTC";
-    outbytes(c, tz, 8);
-    out32(c, 0);
-    out32(c, (u32)(i32)g_tz_off);
+    u32 yday = (u32)(days - days_from_civil(y, 1, 1));
+    memcpy(out + 8, &wday, 4);
+    memcpy(out + 12, &yday, 4);
+    memcpy(out + 16, "UTC", 4);
+    i32 off = (i32)timesvc.tz_off;
+    memcpy(out + 28, &off, 4);
 }
 static int tz_disp(SvcObj* o, IpcCtx* c) {
-    {
-        static int init;
-        if (!init) {
-            init = 1;
-            g_tz_off = plat_tz_offset();
-            LOG("time: PC time zone UTC%+.1f\n", g_tz_off / 3600.0);
-        }
-    }
     switch (c->cmd) {
         case 0: {
             char n[0x24];
@@ -100,14 +122,21 @@ static int tz_disp(SvcObj* o, IpcCtx* c) {
         }
         case 1: return 0;
         case 2: out32(c, 1); return 0;
-        case 3: {
-            out32(c, 1);
+        case 3: { /* LoadLocationNameList(u32 index): the one location, "UTC" */
+            u64 a, s;
+            buf_out(c, 0, &a, &s);
+            u32 n = in32(c, 0) == 0 && a && s >= 0x24;
+            if (n) {
+                memset(GP(a), 0, 0x24);
+                memcpy(GP(a), "UTC", 4);
+            }
+            out32(c, n);
             return 0;
         }
         case 4: {
             u64 a, s;
             buf_out(c, 0, &a, &s);
-            memset(GP(a), 0, s);
+            if (a) memset(GP(a), 0, s);
             return 0;
         }
         case 5: {
@@ -118,25 +147,19 @@ static int tz_disp(SvcObj* o, IpcCtx* c) {
         /* guest wall clock = host local time */
         case 100:
         case 101: {
-            i64 t = (i64)in64(c, 0) + g_tz_off;
-            to_calendar(t, c);
+            u8 cal[0x20];
+            to_calendar((i64)in64(c, 0) + timesvc.tz_off, cal);
+            outbytes(c, cal, 0x20);
             return 0;
         }
         case 201:
         case 202: {
             u64 a, s;
             buf_out(c, 0, &a, &s); /* rough inverse */
-            u16 y;
-            memcpy(&y, c->raw, 2);
-            u8 mo = c->raw[2], d = c->raw[3], h = c->raw[4], mi = c->raw[5], se = c->raw[6];
-            i64 yy = y - (mo <= 2);
-            i64 era = (yy >= 0 ? yy : yy - 399) / 400;
-            unsigned yoe = (unsigned)(yy - era * 400);
-            unsigned doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-            unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-            i64 days = era * 146097 + (i64)doe - 719468;
-            i64 t = days * 86400 + h * 3600 + mi * 60 + se;
-            t -= g_tz_off;
+            u16 y = (u16)(in8(c, 0) | in8(c, 1) << 8);
+            u8 mo = in8(c, 2), d = in8(c, 3), h = in8(c, 4), mi = in8(c, 5), se = in8(c, 6);
+            i64 t = days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + se;
+            t -= timesvc.tz_off;
             if (a && s >= 8) gw64(a, (u64)t);
             out32(c, 1);
             return 0;
@@ -145,8 +168,7 @@ static int tz_disp(SvcObj* o, IpcCtx* c) {
     return stub_ok(o, c);
 }
 static void time_shm_update(void) {
-    if (!g_time_shm) return;
-    u8* p = kshmem_ptr(g_time_shm);
+    u8* p = kshmem_ptr(timesvc.shm);
     /* steady clock {i64 base_time_ns; u8 id[16]} x2 @0x08/0x20; system clocks {i64 offset; i64 time_point; u8 id[16]} x2 */
     u32 cnt = 0;
     memcpy(p, &cnt, 4);
@@ -155,15 +177,13 @@ static void time_shm_update(void) {
         memcpy(p + 8 + k * 0x18, &base, 8);
         memcpy(p + 8 + k * 0x18 + 8, g_clock_id, 16);
     }
-    i64 elapsed = (i64)((plat_ns() - g_t0_ns()) / 1000000000ull);
-    i64 off = plat_unix_time() - elapsed;
     for (int c2 = 0; c2 < 2; c2++) {
         u8* q = p + (c2 ? 0x80 : 0x38);
         memcpy(q, &cnt, 4);
         for (int k = 0; k < 2; k++) {
             u8* e = q + 8 + k * 0x20;
             i64 tp = 0;
-            memcpy(e, &off, 8);
+            memcpy(e, &timesvc.sys_off, 8);
             memcpy(e + 8, &tp, 8);
             memcpy(e + 16, g_clock_id, 16);
         }
@@ -181,6 +201,47 @@ static void time_shm_update(void) {
         memcpy(e + 0x30 + 8, g_clock_id, 16);
     }
 }
+/* ClockSnapshot (0xD0): the user and network contexts (0x00, 0x20), their times (0x40, 0x48), CalendarTimes (0x50,
+   0x58) and CalendarAdditionalInfos (0x60, 0x78), the steady clock's time point (0x90), the location name (0xA8),
+   automatic correction (0xCC) and the type asked for (0xCD). A context on another steady clock gives time 0 */
+static int clock_snapshot(IpcCtx* c, const u8* user, const u8* net, u8 type) {
+    u64 a, s;
+    buf_out(c, 0, &a, &s);
+    if (!a || s < 0xD0) return RC(116, 1);
+    u8 b[0xD0], cal[0x20];
+    memset(b, 0, sizeof b);
+    memcpy(b, user, 0x20);
+    memcpy(b + 0x20, net, 0x20);
+    i64 ut, nt;
+    if (!ctx_time(user, &ut)) return RC(116, 102); /* TimeMismatch */
+    ctx_time(net, &nt);
+    memcpy(b + 0x40, &ut, 8);
+    memcpy(b + 0x48, &nt, 8);
+    to_calendar(ut + timesvc.tz_off, cal);
+    memcpy(b + 0x50, cal, 8);
+    memcpy(b + 0x60, cal + 8, 0x18);
+    to_calendar(nt + timesvc.tz_off, cal);
+    memcpy(b + 0x58, cal, 8);
+    memcpy(b + 0x78, cal + 8, 0x18);
+    i64 tp = steady_s();
+    memcpy(b + 0x90, &tp, 8);
+    memcpy(b + 0x98, g_clock_id, 16);
+    memcpy(b + 0xA8, "UTC", 4);
+    b[0xCC] = 1;
+    b[0xCD] = type;
+    memcpy(GP(a), b, sizeof b);
+    return 0;
+}
+/* the two ClockSnapshots of CalculateStandardUserSystemClockDifferenceByUser and CalculateSpanBetween, in X buffers */
+static int two_snapshots(IpcCtx* c, u8 sa[0xD0], u8 sb[0xD0]) {
+    u64 a0, s0, a1, s1;
+    buf_in(c, 0, &a0, &s0);
+    buf_in(c, 1, &a1, &s1);
+    if (!a0 || !a1 || s0 < 0xD0 || s1 < 0xD0) return 0;
+    memcpy(sa, GP(a0), 0xD0);
+    memcpy(sb, GP(a1), 0xD0);
+    return 1;
+}
 static int time_disp(SvcObj* o, IpcCtx* c) {
     switch (c->cmd) {
         case 0:
@@ -189,31 +250,70 @@ static int time_disp(SvcObj* o, IpcCtx* c) {
         case 2: out_obj(c, svcobj_new("ISteadyClock", steady_disp, 0)); return 0;
         case 3: out_obj(c, svcobj_new("ITimeZoneService", tz_disp, 0)); return 0;
         case 5: out_obj(c, svcobj_new("IEphemeralNetworkSystemClock", sysclock_disp, 0)); return 0;
-        case 20: {
-            if (!g_time_shm) {
-                g_time_shm = kshmem_new(0x1000, "time");
-                time_shm_update();
-            }
-            out_copy_h(c, h_new(&g_time_shm->o));
+        case 20: out_copy_h(c, h_new(&timesvc.shm->o)); return 0;
+        case 30: /* GetStandardNetworkClockOperationEventReadableHandle */
+        case 31: /* GetEphemeralNetworkClockOperationEventReadableHandle */
+            out_copy_h(c, ev_handle(kevent_new("clock op")));
             return 0;
-        }
-        case 100:
-        case 101: out8(c, 1); return 0;
+        case 100: out8(c, 1); return 0; /* IsStandardUserSystemClockAutomaticCorrectionEnabled */
+        case 101: return 0;
+        case 102: out32(c, 2019); return 0; /* GetStandardUserSystemClockInitialYear */
         case 200: out8(c, 1); return 0;
-        case 300: {
-            i64 t = plat_unix_time();
-            out64(c, (u64)t);
+        case 300: { /* CalculateMonotonicSystemClockBaseTimePoint(SystemClockContext): offset + steady - ticks */
+            if (c->raw_size < 0x20 || memcmp(c->raw + 16, g_clock_id, 16)) return RC(116, 102); /* TimeMismatch */
+            out64(c, in64(c, 0));
             return 0;
         }
-        case 400: out8(c, 0); return 0;
-        case 500:
-        case 501: {
-            u8 ctx[0x20];
-            memset(ctx, 0, 0x20);
-            outbytes(c, ctx, 0x20);
+        case 400: { /* GetClockSnapshot(u8 type) */
+            u8 user[0x20], net[0x20];
+            sysclock_ctx(user);
+            sysclock_ctx(net);
+            return clock_snapshot(c, user, net, in8(c, 0));
+        }
+        case 401: { /* GetClockSnapshotFromSystemClockContext(u8 type, user context @8, network context @0x28) */
+            u8 user[0x20], net[0x20];
+            for (u32 i = 0; i < 0x20; i++) {
+                user[i] = in8(c, 8 + i);
+                net[i] = in8(c, 0x28 + i);
+            }
+            return clock_snapshot(c, user, net, in8(c, 0));
+        }
+        case 500: { /* CalculateStandardUserSystemClockDifferenceByUser: TimeSpan (ns) between the user contexts */
+            u8 sa[0xD0], sb[0xD0];
+            if (!two_snapshots(c, sa, sb)) return RC(116, 1);
+            i64 oa, ob;
+            memcpy(&oa, sa, 8);
+            memcpy(&ob, sb, 8);
+            int same = !memcmp(sa + 16, sb + 16, 16), auto_corrected = sa[0xCC] && sb[0xCC];
+            out64(c, (u64)(same && !auto_corrected ? (ob - oa) * 1000000000ll : 0));
+            return 0;
+        }
+        case 501: { /* CalculateSpanBetween: TimeSpan (ns) between the steady time points, or the network times */
+            u8 sa[0xD0], sb[0xD0];
+            if (!two_snapshots(c, sa, sb)) return RC(116, 1);
+            i64 ta, tb;
+            if (!memcmp(sa + 0x98, sb + 0x98, 16)) {
+                memcpy(&ta, sa + 0x90, 8);
+                memcpy(&tb, sb + 0x90, 8);
+            } else {
+                memcpy(&ta, sa + 0x48, 8);
+                memcpy(&tb, sb + 0x48, 8);
+                if (!ta || !tb) return RC(116, 102); /* TimeMismatch */
+            }
+            out64(c, (u64)((tb - ta) * 1000000000ll));
             return 0;
         }
     }
     return stub_ok(o, c);
 }
 SvcObj* new_time(void) { return svcobj_new("time", time_disp, 0); }
+/* at startup, before any session: the clocks' offsets and the shared memory, which the service keeps for the whole
+   run (its reference keeps it alive when the game closes its handle) */
+void time_init(void) {
+    timesvc.tz_off = plat_tz_offset();
+    LOG("time: PC time zone UTC%+.1f\n", timesvc.tz_off / 3600.0);
+    timesvc.sys_off = plat_unix_time() - steady_s();
+    timesvc.shm = kshmem_new(0x1000, "time");
+    kobj_ref(&timesvc.shm->o);
+    time_shm_update();
+}
