@@ -178,7 +178,10 @@ static int audren_disp(SvcObj* o, IpcCtx* c) {
             u64 sz = 0x4000;
             u32 voices = in32(c, 0x10), sinks = in32(c, 0x14), effects = in32(c, 0x18);
             sz += (u64)voices * 0x400 + sinks * 0x200 + effects * 0x800 + 0x40000;
-            out64(c, sz);
+            /* in whole pages, as the console's service gives it (Ryujinx aligns it to 0x1000): the SDK passes it to
+               svcCreateTransferMemory, which refuses a size that isn't, and Tears of the Kingdom's voice and sink
+               counts don't add up to whole pages */
+            out64(c, (sz + 0xFFF) & ~0xFFFull);
             return 0;
         }
         case 2:
