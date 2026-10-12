@@ -9,7 +9,9 @@ previous one is finished where it says so.
 Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 
 Current order (2026-10-11): Phases 4, 5 and 6 are done, apart from trying a real controller (Phase 4), which needs
-someone with a pad. Phase 8 (code layout) is done. Next: Phase 2's remaining items and sound (Phase 3).
+someone with a pad. Phase 8 (code layout) is done. A code audit of the whole project (2026-10-11) fixed what it found
+in every part, and the larger follow-ups it left are open items in the phases below. Next: Phase 2's remaining items
+and sound (Phase 3).
 
 ## Where things stand (2026-10-11)
 
@@ -27,7 +29,9 @@ How the pieces fit:
   command buffers. `runtime/gpu/` decodes them (`gpu.c`, the engines, `maxwell3d.c`), `gpu/shader/` translates
   Maxwell shader binaries to GLSL, and the Vulkan renderer (`gpu/vk/`) draws.
   The front end reaches it through `g_renderer`, the table of operations in `gpu/renderer.h`.
-- **Video**: `runtime/video/` emulates NVDEC and VIC, with FFmpeg's libavcodec doing the H.264 decode.
+- **Video**: `runtime/video/` emulates NVDEC and VIC, with FFmpeg's libavcodec doing the H.264 decode. Each NVDEC
+  or VIC device the game opens is a channel of its own, NVDEC writes each picture into the surface its job names,
+  and VIC composes from those surfaces in guest memory.
 
 ## Phase 0: repository and build
 
@@ -57,7 +61,8 @@ How the pieces fit:
 - [x] The fork is GPL-3.0-or-later since 2026-10-11, so code from yuzu and its forks can be ported. MZ Labs' files
       keep their Apache-2.0 headers and NOTICE, with `LICENSE.apache`.
 - [x] FFmpeg's libavcodec decodes the NVDEC H.264 jobs instead of OpenH264: FFmpeg 9.0.2, built from source with only
-      the H.264, VP8 and VP9 decoders, so VP8 and VP9 videos only need NVDEC's side now.
+      the H.264, VP8 and VP9 decoders, so VP8 and VP9 videos only need NVDEC's side now. The Opus decoder (with
+      libswresample, which it needs) was added for `hwopus`.
 
 ## Phase 1: Claude Code setup
 
@@ -77,8 +82,8 @@ renderer rewrite on top of a memory-corruption bug would have made every regress
 
 - [~] Smoke test: a scripted run from boot to the New Game cutscene that checks for crashes, FPS and screenshots,
       runnable unattended (Xvfb or a headless Wayland compositor). `tools/run_game.py` runs the New Game script any
-      number of times and reports each run's exit, crash site and frame count, with the last frame as a picture.
-      Still missing: an FPS figure, a check of the pictures against known-good ones, and a run without a display.
+      number of times and reports each run's exit, crash site, frame count and average FPS, with the last frame as a
+      picture. Still missing: a check of the pictures against known-good ones, and a run without a display.
 - [x] VIC jobs wrote past NvRmStream's 128-entry syncpoint table into the game's heap (host1x syncpoints now come
       from the GPU's allocator).
 - [x] Compute write-back wrote the whole SSBO range back late, reverting game writes made in the meantime. Only
@@ -117,7 +122,9 @@ Catherine uses two audio paths, and both are silent today.
       routing through submixes to the final mix, biquad filters, then effects (delay, reverb, aux) and the device and
       circular-buffer sinks. Ryujinx's `Ryujinx.Audio` renderer (MIT) is the reference. yuzu's `audio_core`
       (GPL-2.0-or-later) can be ported too, keeping its copyright lines.
-- [ ] Check `hwopus` and other audio services the game opens once `audren` produces sound.
+- [~] `hwopus` decodes the game's Opus packets with FFmpeg's Opus decoder, with the commands the SDK's code sends
+      (read from its disassembly, and from Ryujinx for the ones Catherine doesn't use). Still to check by ear once
+      `audren` produces sound, with the other audio services the game opens.
 
 ## Phase 4: Wayland and the platform layer
 
@@ -133,6 +140,9 @@ Catherine uses two audio paths, and both are silent today.
       with headless for tests. The android backend went with OpenGL the same day, since it drew with GLES. SDL3
       still hasn't run on real Windows, only under Wine.
 - [ ] Try a real controller: the mapping follows SDL's positional buttons, but no pad was at hand to test it.
+- [ ] On Windows the game freezes while the window is dragged. Windows runs its own loop inside the event pump for
+      as long as the drag lasts, and vi's vsync tick runs in the same 60 Hz loop as the pump (`core/main.c`), so no
+      vsync reaches the game until the drag ends. It goes with the frame loop's part of the GPU rewrite (Phase 6).
 
 ## Phase 5: shaders
 
@@ -228,6 +238,11 @@ underneath. What can change is how much of the hardware is emulated and how well
         agree on object state.
         With the register-level Vulkan renderer now matching OpenGL, this stays a possible later rewrite rather
         than a next step: the cost is large and it fixes nothing that is broken today.
+- [ ] A GPU architecture rewrite. The command stream runs on the thread that submitted it, under one lock for every
+      channel, so a semaphore acquire or syncpoint wait in the stream holds up every other channel's submissions, and
+      a wait for another channel's work can't end. The waits give up after 2 seconds and log it rather than hang. A
+      GPU thread (or a lock per channel) with the waits outside the submit lock is the fix, and it touches most of the
+      front end.
 - [x] The OpenGL renderer removed (2026-10-11). Vulkan had drawn by default since step 4, matched OpenGL from boot to
       the New Game cutscene, and doesn't have the title-screen crash. A GPU or driver without Vulkan 1.3 now stops
       the runtime at startup with a message. Gone with OpenGL, and not on Vulkan yet: LSFG frame generation (and
@@ -237,11 +252,18 @@ underneath. What can change is how much of the hardware is emulated and how well
 
 ## Phase 7: polish and games
 
-- [ ] Performance: the CPU side is the limit in 3D scenes (GPU thread about 45% busy at 40 FPS). Try LTO and
-      `-march=native` for the game module, then profile the hot runtime paths.
+- [ ] Performance: the CPU side was the limit in 3D scenes when this was measured under OpenGL. Measure again under
+      Vulkan, try LTO and `-march=native` for the game module, then profile the hot runtime paths.
 - [x] The Western release with its update (TID 0100BF00112C0000), extracted with its BKTR update. It replaced the
       Asian release as the game everything is checked against on 2026-10-11.
 - [ ] Other games, to keep the fixes general rather than tuned to Catherine.
+- [ ] NaNs in f64 fused multiply-add and in the arithmetic the recompiler emits inline (`+ - * /`) are the host's.
+      x86 makes a negative default NaN where ARM's is positive, and of two NaN operands it returns the first rather
+      than the first signalling one. f32 fused multiply-add follows ARM's rules now. Only NaN signs and payloads
+      differ.
+- [ ] `svcSetThreadActivity` stops a thread only on its way into or out of an SVC. A thread spinning on WFE without
+      making SVCs runs on until its next one, since WFE is not a pause point (the generated code doesn't store `pc`
+      before it). Catherine never pauses a thread.
 
 ## Phase 8: code layout
 

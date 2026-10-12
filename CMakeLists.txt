@@ -47,7 +47,7 @@ if(SWR_BACKEND STREQUAL "sdl3")
 else()
     set(SWR_VULKAN OFF)
 endif()
-option(SWR_H264 "Decode NVDEC video (H.264) with FFmpeg" ON)
+option(SWR_H264 "Decode NVDEC video (H.264) and hwopus audio (Opus) with FFmpeg" ON)
 option(SWR_DEPLOY "Copy the runtime next to every recompiled game in SWR_GAMES_DIR after building" ON)
 set(SWR_GAMES_DIR "${CMAKE_SOURCE_DIR}/games" CACHE PATH "Folder holding the recompiled games")
 

@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the 3D engine's methods: registers, macro calls, draws (merging instanced ones), constant buffer data, report
@@ -41,12 +41,8 @@ void query_get(GpuChannel* ch, u32* r, int base, u32 v) {
     if (op != 1) gpu_signal_point();
     if (op == 0) {                                /* release */
         if (((v >> 4) & 1) && !((v >> 28) & 1)) { /* the size is bit 28: does bit 4 alone mean one word? */
-            static int said;
-            if (said < 4) {
-                said++;
-                LOG("gpu: report release %x at %llx with bit 4 set and bit 28 clear, written as one word\n", v,
-                    (unsigned long long)addr);
-            }
+            LOG_LIMIT(4, "gpu: report release %x at %llx with bit 4 set and bit 28 clear, written as one word\n", v,
+                      (unsigned long long)addr);
         }
         if (((v >> 4) & 1) || ((v >> 28) & 1))
             gmem_w32(addr, seq);
@@ -137,11 +133,7 @@ void maxwell3d_method(GpuChannel* ch, u32 m, u32 v, int last) {
             if (v & (1u << 20))
                 g_renderer->stream_incr(v & 0xFFFF);
             else { /* Ryujinx increments on every write of SyncpointAction: does the game write it with bit 20 clear? */
-                static int said;
-                if (said < 4) {
-                    said++;
-                    LOG("gpu: 3D syncpoint action %x without bit 20, not incremented\n", v);
-                }
+                LOG_LIMIT(4, "gpu: 3D syncpoint action %x without bit 20, not incremented\n", v);
             }
             break;
         case 0x674: r3d_clear(ch, v); break; /* ClearBuffers */
@@ -157,13 +149,11 @@ void maxwell3d_method(GpuChannel* ch, u32 m, u32 v, int last) {
             } /* one more instance */
             else {
                 if (g_instance_count) { /* a draw at instance N that doesn't merge is sent as instances 0..N */
-                    static int said;
-                    if (said < 4) {
-                        said++;
-                        LOG("gpu: draw at instance %u doesn't continue the one before (topology %x, first %u, count %u), "
-                            "drawn as %u instances\n",
-                            g_instance_count, topo, first, count, g_instance_count + 1);
-                    }
+                    LOG_LIMIT(
+                        4,
+                        "gpu: draw at instance %u doesn't continue the one before (topology %x, first %u, count %u), "
+                        "drawn as %u instances\n",
+                        g_instance_count, topo, first, count, g_instance_count + 1);
                 }
                 r3d_pending_flush();
                 g_pd.on = 1;

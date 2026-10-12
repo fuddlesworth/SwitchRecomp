@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* vi's framebuffers: handed to the renderer, or converted to RGBA on the CPU when there is none */
@@ -74,9 +74,7 @@ void vi_convert_cpu(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt
 void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
     u64 a = nvmap_addr_by_id(nvmap_id);
     if (!a) { /* the game queues it every frame: said a few times */
-        static int said;
-        if (__atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 5)
-            WARN("vi: buffer without memory (nvmap %u)\n", nvmap_id);
+        WARN_LIMIT(5, "vi: buffer without memory (nvmap %u)\n", nvmap_id);
         return;
     }
     a += offset;
@@ -98,14 +96,9 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     /* fps_limit: 0 = no limit, 60 to 240 = that many fps, anything else = 60 */
     if (g_opt_fps) {
         u64 per = g_opt_fps >= 60 && g_opt_fps <= 240 ? 1000000000ull / (u64)g_opt_fps : 16666667ull;
-        if (g_opt_fps >= 10 && g_opt_fps < 60) {
-            static int said;
-            if (!said) {
-                said = 1;
-                WARN("fps_limit=%d would run the game at %d%% speed (one game step per image): using 60\n", g_opt_fps,
-                     g_opt_fps * 100 / 60);
-            }
-        }
+        if (g_opt_fps >= 10 && g_opt_fps < 60)
+            WARN_LIMIT(1, "fps_limit=%d would run the game at %d%% speed (one game step per image): using 60\n",
+                       g_opt_fps, g_opt_fps * 100 / 60);
         u64 now = plat_ns();
         u64 next = g_last_present + per;
         if (g_last_present && now < next) plat_sleep_ns((i64)(next - now));

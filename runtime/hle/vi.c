@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* vi + the nvnflinger buffer queue. QueueBuffer presents immediately, there's no compositor. */
@@ -26,12 +26,18 @@ typedef struct {
     u32 rawsize;
     int queued;
 } Slot;
-static Slot slots[64]; /* g_vilock */
-static KEvent* g_vsync_ev;
-static KEvent* g_bufavail_ev;
-static PMutex g_vilock;
-static int g_width = 1280, g_height = 720;
-static PCond g_free_cv;
+static struct {
+    Slot slots[64]; /* lock */
+    KEvent* vsync_ev;
+    KEvent* bufavail_ev;
+    PMutex lock;
+    int width, height;
+    PCond free_cv;
+    /* the last crop and transform QUEUE_BUFFER logged (lock) */
+    u32 crop_transform;
+    i32 crop[4];
+    u64 managed_layer, stray_layer; /* the next CreateManagedLayer and CreateStrayLayer ids */
+} vi = {.width = 1280, .height = 720, .crop_transform = 0xFFFFFFFFu, .managed_layer = 100, .stray_layer = 200};
 
 /* ============================================================ parcels */
 typedef struct {
@@ -96,9 +102,9 @@ static void pw_out(PW* w, u64 addr, u64 size) {
 
 /* ============================================================ present */
 static void present_slot(int i) {
-    pm_lock(&g_vilock);
-    Slot s = slots[i];
-    pm_unlock(&g_vilock);
+    pm_lock(&vi.lock);
+    Slot s = vi.slots[i];
+    pm_unlock(&vi.lock);
     if (!s.used) return;
     vi_show_buffer(s.nvmap_id, s.offset, s.w, s.h, s.pitch, s.layout, s.bhl, s.afmt);
 }
@@ -107,7 +113,7 @@ static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
     (void)id;
     switch (code) {
         case 10: { /* CONNECT */
-            u32 qo[4] = {(u32)g_width, (u32)g_height, 0, 0};
+            u32 qo[4] = {(u32)vi.width, (u32)vi.height, 0, 0};
             pw_bytes(out, qo, 16);
             pw_u32(out, 0);
             return 0;
@@ -161,23 +167,23 @@ static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
                     LOG("vi: buffer %d  %ux%u pitch=%u layout=%u bhl=%u fmt=%x nvmap=%u\n", slot, s->w, s->h, s->pitch,
                         s->layout, s->bhl, s->fmt, s->nvmap_id);
                 }
-                pm_lock(&g_vilock);
-                slots[slot] = ns;
-                pm_unlock(&g_vilock);
+                pm_lock(&vi.lock);
+                vi.slots[slot] = ns;
+                pm_unlock(&vi.lock);
             }
             pw_u32(out, 0);
             return 0;
         }
         case 1: { /* REQUEST_BUFFER */
             i32 slot = (i32)pr_u32(in);
-            pm_lock(&g_vilock);
-            Slot* s = (slot >= 0 && slot < 64) ? &slots[slot] : NULL;
+            pm_lock(&vi.lock);
+            Slot* s = (slot >= 0 && slot < 64) ? &vi.slots[slot] : NULL;
             if (s && s->used) {
                 pw_u32(out, 1);
                 pw_flat(out, s->raw, s->rawsize);
             } else
                 pw_u32(out, 0);
-            pm_unlock(&g_vilock);
+            pm_unlock(&vi.lock);
             pw_u32(out, 0);
             return 0;
         }
@@ -185,11 +191,11 @@ static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
             /* a slot is held from DEQUEUE until QUEUE or CANCEL. With every buffer held this waits for one; when the
                wait times out the holds are dropped, which hands out a buffer the game still holds. The log says when
                that happens, with the slots held */
-            pm_lock(&g_vilock);
+            pm_lock(&vi.lock);
             int k = -1, nused = 0;
-            for (int i = 0; i < 64; i++) nused += slots[i].used;
+            for (int i = 0; i < 64; i++) nused += vi.slots[i].used;
             if (!nused) { /* no buffers yet: nothing would ever free one */
-                pm_unlock(&g_vilock);
+                pm_unlock(&vi.lock);
                 WARN("binder: DEQUEUE_BUFFER before any buffer was set\n");
                 pw_u32(out, 0);
                 pw_u32(out, 0);
@@ -198,26 +204,23 @@ static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
             }
             for (;;) {
                 for (int i = 0; i < 64; i++)
-                    if (slots[i].used && !slots[i].queued) {
+                    if (vi.slots[i].used && !vi.slots[i].queued) {
                         k = i;
                         break;
                     }
                 if (k >= 0) break;
-                if (pc_wait(&g_free_cv, &g_vilock, 16000000)) { /* we release on present */
-                    static int said;
-                    if (__atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 8) {
-                        u64 held = 0;
-                        for (int i = 0; i < 64; i++)
-                            if (slots[i].used && slots[i].queued) held |= 1ull << i;
-                        WARN(
-                            "binder: DEQUEUE_BUFFER found all %d buffers held (slots %llx) for 16 ms: releasing them\n",
-                            nused, (unsigned long long)held);
-                    }
-                    for (int i = 0; i < 64; i++) slots[i].queued = 0;
+                if (pc_wait(&vi.free_cv, &vi.lock, 16000000)) { /* we release on present */
+                    u64 held = 0;
+                    for (int i = 0; i < 64; i++)
+                        if (vi.slots[i].used && vi.slots[i].queued) held |= 1ull << i;
+                    WARN_LIMIT(
+                        8, "binder: DEQUEUE_BUFFER found all %d buffers held (slots %llx) for 16 ms: releasing them\n",
+                        nused, (unsigned long long)held);
+                    for (int i = 0; i < 64; i++) vi.slots[i].queued = 0;
                 }
             }
-            slots[k].queued = 1;
-            pm_unlock(&g_vilock);
+            vi.slots[k].queued = 1;
+            pm_unlock(&vi.lock);
             pw_u32(out, (u32)k);
             pw_u32(out, 1);
             u32 fence[9];
@@ -245,11 +248,10 @@ static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
                     memcpy(&id, qi + 0x34 + i * 8, 4);
                     memcpy(&val, qi + 0x38 + i * 8, 4);
                     if (id != 0xFFFFFFFFu && !syncpt_wait(id, val, 100000000)) {
-                        static int said;
-                        if (__atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 8)
-                            WARN("binder: QUEUE_BUFFER slot %d: fence syncpoint %u did not reach %u in 100 ms, "
-                                 "presenting anyway\n",
-                                 slot, id, val);
+                        WARN_LIMIT(8,
+                                   "binder: QUEUE_BUFFER slot %d: fence syncpoint %u did not reach %u in 100 ms, "
+                                   "presenting anyway\n",
+                                   slot, id, val);
                     }
                 }
             }
@@ -260,42 +262,40 @@ static int binder_transact(u32 id, u32 code, PR* in, PW* out) {
                 memcpy(cr, qi + 0x0C, 16);
                 memcpy(&tr, qi + 0x20, 4);
                 {
-                    static u32 lt = 0xFFFFFFFFu;
-                    static i32 lc[4];
-                    pm_lock(&g_vilock);
-                    int changed = lt != tr || memcmp(lc, cr, 16);
-                    lt = tr;
-                    memcpy(lc, cr, 16);
-                    pm_unlock(&g_vilock);
+                    pm_lock(&vi.lock);
+                    int changed = vi.crop_transform != tr || memcmp(vi.crop, cr, 16);
+                    vi.crop_transform = tr;
+                    memcpy(vi.crop, cr, 16);
+                    pm_unlock(&vi.lock);
                     if (changed)
                         LOG("vi: crop (%d,%d)-(%d,%d) transform %x (not applied)\n", cr[0], cr[1], cr[2], cr[3], tr);
                 }
             }
             if (slot >= 0 && slot < 64) present_slot(slot);
-            pm_lock(&g_vilock);
-            if (slot >= 0 && slot < 64) slots[slot].queued = 0;
-            pc_broadcast(&g_free_cv);
-            pm_unlock(&g_vilock);
-            kevent_signal(g_bufavail_ev);
-            u32 qo[4] = {(u32)g_width, (u32)g_height, 0, 0};
+            pm_lock(&vi.lock);
+            if (slot >= 0 && slot < 64) vi.slots[slot].queued = 0;
+            pc_broadcast(&vi.free_cv);
+            pm_unlock(&vi.lock);
+            kevent_signal(vi.bufavail_ev);
+            u32 qo[4] = {(u32)vi.width, (u32)vi.height, 0, 0};
             pw_bytes(out, qo, 16);
             pw_u32(out, 0);
             return 0;
         }
         case 8: { /* CANCEL_BUFFER: the slot is free again, as after a present */
             i32 slot = (i32)pr_u32(in);
-            pm_lock(&g_vilock);
-            if (slot >= 0 && slot < 64) slots[slot].queued = 0;
-            pc_broadcast(&g_free_cv);
-            pm_unlock(&g_vilock);
-            kevent_signal(g_bufavail_ev);
+            pm_lock(&vi.lock);
+            if (slot >= 0 && slot < 64) vi.slots[slot].queued = 0;
+            pc_broadcast(&vi.free_cv);
+            pm_unlock(&vi.lock);
+            kevent_signal(vi.bufavail_ev);
             pw_u32(out, 0);
             return 0;
         }
         case 9: { /* QUERY: width, height, format, min undequeued buffers; 6/7 the default width and height */
             u32 what = pr_u32(in);
-            u32 v = what == 0 || what == 6   ? (u32)g_width
-                    : what == 1 || what == 7 ? (u32)g_height
+            u32 v = what == 0 || what == 6   ? (u32)vi.width
+                    : what == 1 || what == 7 ? (u32)vi.height
                     : what == 2 || what == 3 ? 1
                                              : 0;
             pw_u32(out, v);
@@ -339,7 +339,7 @@ static int hos_binder(SvcObj* o, IpcCtx* c) {
             return 0;
         }
         case 1: return 0;
-        case 2: out_copy_h(c, h_new(&g_bufavail_ev->o)); return 0;
+        case 2: out_copy_h(c, h_new(&vi.bufavail_ev->o)); return 0;
     }
     return stub_ok(o, c);
 }
@@ -349,12 +349,12 @@ static int sysdisp(SvcObj* o, IpcCtx* c) {
         case 1200: out64(c, 1); return 0;
         case 1202: out64(c, 255); return 0; /* GetZOrderCountMax */
         case 1203:                          /* GetDisplayLogicalResolution: two s32 */
-            out32(c, (u32)g_width);
-            out32(c, (u32)g_height);
+            out32(c, (u32)vi.width);
+            out32(c, (u32)vi.height);
             return 0;
         case 3200: {
-            out32(c, (u32)g_width);
-            out32(c, (u32)g_height);
+            out32(c, (u32)vi.width);
+            out32(c, (u32)vi.height);
             out32(c, 0x42700000);
             out32(c, 0);
             return 0;
@@ -365,13 +365,12 @@ static int sysdisp(SvcObj* o, IpcCtx* c) {
 static int mgrdisp(SvcObj* o, IpcCtx* c) {
     switch (c->cmd) {
         case 2010: {
-            static u64 l = 100;
-            out64(c, __atomic_fetch_add(&l, 1, __ATOMIC_RELAXED));
+            out64(c, __atomic_fetch_add(&vi.managed_layer, 1, __ATOMIC_RELAXED));
             return 0;
         }
         case 2300: /* AcquireLayerTexturePresentingEvent */
         case 2302: /* GetDisplayHotplugEvent */
-        case 2303: /* GetDisplayModeChangedEvent */ out_copy_h(c, h_new(&kevent_new("vi display", 0)->o)); return 0;
+        case 2303: /* GetDisplayModeChangedEvent */ out_copy_h(c, h_new(&kevent_new("vi display")->o)); return 0;
     }
     return stub_ok(o, c);
 }
@@ -411,7 +410,7 @@ static int appdisp(SvcObj* o, IpcCtx* c) {
                 memset(info, 0, sizeof info);
                 strcpy((char*)info, "Default");
                 info[0x40] = 1;
-                u64 lc = 1, w = (u64)g_width, h = (u64)g_height;
+                u64 lc = 1, w = (u64)vi.width, h = (u64)vi.height;
                 memcpy(info + 0x48, &lc, 8);
                 memcpy(info + 0x50, &w, 8);
                 memcpy(info + 0x58, &h, 8);
@@ -425,8 +424,8 @@ static int appdisp(SvcObj* o, IpcCtx* c) {
         case 1020:
         case 1101: return 0;
         case 1102:
-            out64(c, (u64)g_width);
-            out64(c, (u64)g_height);
+            out64(c, (u64)vi.width);
+            out64(c, (u64)vi.height);
             return 0;
         case 2020: {
             native_window(c, 1);
@@ -436,8 +435,7 @@ static int appdisp(SvcObj* o, IpcCtx* c) {
         case 2021:
         case 2031: return 0;
         case 2030: {
-            static u64 l = 200;
-            out64(c, __atomic_fetch_add(&l, 1, __ATOMIC_RELAXED));
+            out64(c, __atomic_fetch_add(&vi.stray_layer, 1, __ATOMIC_RELAXED));
             native_window(c, 1);
             out64(c, 0x3C);
             return 0;
@@ -460,7 +458,7 @@ static int appdisp(SvcObj* o, IpcCtx* c) {
             out64(c, 0x1000);
             return 0;
         case 5202:
-        case 5203: out_copy_h(c, h_new(&g_vsync_ev->o)); return 0;
+        case 5203: out_copy_h(c, h_new(&vi.vsync_ev->o)); return 0;
     }
     return stub_ok(o, c);
 }
@@ -473,20 +471,20 @@ static int vi_root(SvcObj* o, IpcCtx* c) {
 }
 static SvcObj* new_vi(void) { return svcobj_new("vi", vi_root, 0); }
 
-void vi_vsync_tick(void) { kevent_signal(g_vsync_ev); }
+void vi_vsync_tick(void) { kevent_signal(vi.vsync_ev); }
 
 void svc_vi_init(void) {
-    pm_init(&g_vilock);
-    pc_init(&g_free_cv);
+    pm_init(&vi.lock);
+    pc_init(&vi.free_cv);
     /* the service keeps these for the whole run: its reference keeps them alive when the game closes its handles */
-    g_vsync_ev = kevent_new("vsync", 0);
-    kobj_ref(&g_vsync_ev->o);
-    g_bufavail_ev = kevent_new("buffer", 0);
-    kobj_ref(&g_bufavail_ev->o);
-    kevent_signal(g_bufavail_ev);
+    vi.vsync_ev = kevent_new("vsync");
+    kobj_ref(&vi.vsync_ev->o);
+    vi.bufavail_ev = kevent_new("buffer");
+    kobj_ref(&vi.bufavail_ev->o);
+    kevent_signal(vi.bufavail_ev);
     if (g_opt_docked) {
-        g_width = 1920;
-        g_height = 1080;
+        vi.width = 1920;
+        vi.height = 1080;
     }
     svc_register("vi:u", new_vi);
     svc_register("vi:s", new_vi);

@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the events the services share, and the registration of the services in sm.c, am.c, set.c, time.c, acc.c,
@@ -12,8 +12,8 @@ int g_hle_docked, g_hle_lang;
 
 /* the service keeps these events for the whole run: its reference keeps them alive when the game closes the
    handles it was given */
-static KEvent* owned_event(const char* name) {
-    KEvent* e = kevent_new(name, 0);
+KEvent* owned_event(const char* name) {
+    KEvent* e = kevent_new(name);
     kobj_ref(&e->o);
     return e;
 }
@@ -21,16 +21,10 @@ static KEvent* owned_event(const char* name) {
 void svc_core_init(void) {
     g_hle_docked = g_opt_docked;
     g_hle_lang = g_opt_lang;
-    g_msg_event = owned_event("applet msg");
-    g_launch_ev = owned_event("launchable");
-    g_res_ev = owned_event("res change");
-    g_sleep_ev = owned_event("sleep lock");
-    g_aud_ev = owned_event("audio renderer");
+    am_init();
+    audio_init();
     time_init();
     plat_thread(audio_clock, NULL, 64 * 1024);
-    am_push_msg(0xF);  /* FocusStateChanged */
-    am_push_msg(0x1F); /* PerformanceModeChanged */
-    kevent_signal(g_launch_ev);
     svc_register("sm:", new_sm);
     svc_register("appletOE", new_appletoe);
     svc_register("appletAE", new_appletae);

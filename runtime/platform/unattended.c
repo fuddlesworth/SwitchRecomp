@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the unattended-run options, shared by the SDL3 and headless backends: they had a copy each, and the copies had
@@ -7,6 +7,7 @@
 #include "platform/unattended.h"
 #include "core/main.h"
 #include "core/rtapi.h"
+#include "gpu/renderer.h"
 #include "platform/log.h"
 #include "platform/plat.h"
 #include <math.h>
@@ -104,6 +105,8 @@ void unattended_exit(u64 hash, int w, int h) {
     else
         fprintf(stderr, "\nframes=%d hash=%016llx\n", g_frames, (unsigned long long)hash);
     save_hints();
+    /* the process ends without shutting the renderer down, so it saves its pipeline cache here */
+    if (g_renderer && g_renderer->save) g_renderer->save();
     plat_exit_now(0);
 }
 

@@ -1,27 +1,40 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* am: the applet manager (appletOE, appletAE) and its storages */
 #include "hle/services_int.h"
 /* ================================================================ am */
-KEvent* g_msg_event;
-static u32 g_msgq[16];
-static int g_nmsg;
-KEvent* g_launch_ev;
-KEvent* g_res_ev;
-KEvent* g_sleep_ev; /* GetAcquiredSleepLockEvent: signaled when a RequestToAcquireSleepLock is granted */
+static struct {
+    KEvent* msg_ev;
+    u32 msgq[16];
+    int nmsg;
+    KEvent* launch_ev;
+    KEvent* res_ev;
+    KEvent* sleep_ev; /* GetAcquiredSleepLockEvent: signaled when a RequestToAcquireSleepLock is granted */
+    u64 layer;        /* the next CreateManagedDisplayLayer id */
+    int user_given;   /* PreselectedUser was popped: it is there once */
+} am = {.layer = 1};
 u64 g_user_id[2] = {0x0123456789ABCDEFull, 0xFEDCBA9876543210ull};
-void am_push_msg(u32 m) {
+static void am_push_msg(u32 m) {
     pm_lock(&g_klock);
-    int queued = g_nmsg < 16;
-    if (queued) g_msgq[g_nmsg++] = m;
+    int queued = am.nmsg < 16;
+    if (queued) am.msgq[am.nmsg++] = m;
     pm_unlock(&g_klock);
     /* a full queue is already signaled, and the message is lost: say so rather than signal for nothing */
     if (queued)
-        kevent_signal(g_msg_event);
+        kevent_signal(am.msg_ev);
     else
         WARN("am: applet message queue full, message %u dropped\n", m);
+}
+void am_init(void) {
+    am.msg_ev = owned_event("applet msg");
+    am.launch_ev = owned_event("launchable");
+    am.res_ev = owned_event("res change");
+    am.sleep_ev = owned_event("sleep lock");
+    am_push_msg(0xF);  /* FocusStateChanged */
+    am_push_msg(0x1F); /* PerformanceModeChanged */
+    kevent_signal(am.launch_ev);
 }
 
 /* IStorage / IStorageAccessor */
@@ -66,7 +79,7 @@ static int storage_disp(SvcObj* o, IpcCtx* c) {
             return 0;
         }
         /* OpenTransferStorage gives an ITransferStorageAccessor, which only a storage made over transfer memory
-           has. These storages are plain memory (CreateTransferMemoryStorage copies nothing either) */
+           has. These storages are plain memory (CreateTransferMemoryStorage copies the transfer memory into one) */
         case 1: return RC(128, 503);
     }
     return stub_ok(o, c);
@@ -96,17 +109,17 @@ static int out_storage(IpcCtx* c, u64 size) {
 
 static int am_csg(SvcObj* o, IpcCtx* c) { /* ICommonStateGetter */
     switch (c->cmd) {
-        case 0: out_copy_h(c, ev_handle(g_msg_event)); return 0;
+        case 0: out_copy_h(c, ev_handle(am.msg_ev)); return 0;
         case 1: {
             pm_lock(&g_klock);
-            if (!g_nmsg) {
-                g_msg_event->signaled = 0;
+            if (!am.nmsg) {
+                am.msg_ev->signaled = 0;
                 pm_unlock(&g_klock);
                 return RC(128, 3);
             }
-            u32 m = g_msgq[0];
-            memmove(g_msgq, g_msgq + 1, (--g_nmsg) * 4);
-            if (!g_nmsg) g_msg_event->signaled = 0;
+            u32 m = am.msgq[0];
+            memmove(am.msgq, am.msgq + 1, (--am.nmsg) * 4);
+            if (!am.nmsg) am.msg_ev->signaled = 0;
             pm_unlock(&g_klock);
             out32(c, m);
             return 0;
@@ -116,8 +129,8 @@ static int am_csg(SvcObj* o, IpcCtx* c) { /* ICommonStateGetter */
         case 6: out32(c, (u32)g_hle_docked); return 0; /* GetPerformanceMode */
         case 8: out8(c, 0); return 0;                  /* GetBootMode */
         case 9: out8(c, 1); return 0;                  /* GetCurrentFocusState: InFocus */
-        case 10: kevent_signal(g_sleep_ev); return 0;  /* RequestToAcquireSleepLock: granted at once, no sleep here */
-        case 13: out_copy_h(c, ev_handle(g_sleep_ev)); return 0; /* GetAcquiredSleepLockEvent */
+        case 10: kevent_signal(am.sleep_ev); return 0; /* RequestToAcquireSleepLock: granted at once, no sleep here */
+        case 13: out_copy_h(c, ev_handle(am.sleep_ev)); return 0; /* GetAcquiredSleepLockEvent */
         case 11:
         case 12:
         case 50:
@@ -134,19 +147,18 @@ static int am_csg(SvcObj* o, IpcCtx* c) { /* ICommonStateGetter */
             out32(c, g_hle_docked ? 1920 : 1280);
             out32(c, g_hle_docked ? 1080 : 720);
             return 0; /* GetDefaultDisplayResolution */
-        case 61: out_copy_h(c, ev_handle(g_res_ev)); return 0;
+        case 61: out_copy_h(c, ev_handle(am.res_ev)); return 0;
         case 62: out32(c, 0); return 0; /* GetHdcpAuthenticationState: Unauthenticated, no TV link to protect */
-        case 63: out_copy_h(c, ev_handle(g_res_ev)); return 0;
+        case 63: out_copy_h(c, ev_handle(am.res_ev)); return 0;
         case 91: out32(c, 0x00020003); return 0; /* GetCurrentPerformanceConfiguration, the one apm reports */
     }
     return stub_ok(o, c);
 }
 static int am_self(SvcObj* o, IpcCtx* c) { /* ISelfController */
     switch (c->cmd) {
-        case 9: out_copy_h(c, ev_handle(g_launch_ev)); return 0; /* GetLibraryAppletLaunchableEvent */
+        case 9: out_copy_h(c, ev_handle(am.launch_ev)); return 0; /* GetLibraryAppletLaunchableEvent */
         case 40: {
-            static u64 layer = 1;
-            out64(c, __atomic_fetch_add(&layer, 1, __ATOMIC_RELAXED));
+            out64(c, __atomic_fetch_add(&am.layer, 1, __ATOMIC_RELAXED));
             return 0;
         } /* CreateManagedDisplayLayer */
         case 41: out64(c, 0); return 0;
@@ -158,7 +170,7 @@ static int am_self(SvcObj* o, IpcCtx* c) { /* ISelfController */
         case 63: out32(c, 0); return 0; /* GetIdleTimeDetectionExtension */
         case 69: out8(c, 0); return 0;  /* IsAutoSleepDisabled */
         case 90: out64(c, 0); return 0; /* GetAccumulatedSuspendedTickValue */
-        case 91: out_copy_h(c, ev_handle(kevent_new("suspend", 0))); return 0;
+        case 91: out_copy_h(c, ev_handle(kevent_new("suspend"))); return 0;
         case 100:
         case 110:
         case 120: return 0;
@@ -179,8 +191,7 @@ static int am_appfn(SvcObj* o, IpcCtx* c) { /* IApplicationFunctions */
         case 1: {
             u32 kind = in32(c, 0);
             if (kind == 2) { /* PreselectedUser */
-                static int given;
-                if (__atomic_exchange_n(&given, 1, __ATOMIC_SEQ_CST)) return RC(128, 2);
+                if (__atomic_exchange_n(&am.user_given, 1, __ATOMIC_SEQ_CST)) return RC(128, 2);
                 u8 buf[0x88];
                 memset(buf, 0, sizeof buf);
                 u32 magic = 0xC79497CA;
@@ -237,9 +248,7 @@ static int am_appfn(SvcObj* o, IpcCtx* c) { /* IApplicationFunctions */
         case 140:
         case 150:
         case 160:
-        case 210:
-            out_copy_h(c, ev_handle(kevent_new("appfn ev", 0)));
-            return 0; /* events (210 is new in recent SDKs) */
+        case 210: out_copy_h(c, ev_handle(kevent_new("appfn ev"))); return 0; /* events (210 is new in recent SDKs) */
         case 141: return RC(128, 2);
         case 170: out8(c, 0); return 0;
     }
@@ -289,7 +298,7 @@ static int am_lib_accessor(SvcObj* o, IpcCtx* c) {
     LibApplet* la = o->data;
     switch (c->cmd) {
         case 0: {
-            KEvent* e = kevent_new("applet state", 0);
+            KEvent* e = kevent_new("applet state");
             e->signaled = 1;
             out_copy_h(c, h_new(&e->o));
             return 0;
@@ -336,18 +345,14 @@ static int am_lib_accessor(SvcObj* o, IpcCtx* c) {
                 st = am_storage_new(n, NULL);
             }
             if (!st) return RC(128, 503);
-            {
-                static int said;
-                if (__atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 4)
-                    LOG("applet: library applet %02x closed right away (no applet UI here), %llu bytes of output\n", id,
-                        (unsigned long long)n);
-            }
+            LOG_LIMIT(4, "applet: library applet %02x closed right away (no applet UI here), %llu bytes of output\n",
+                      id, (unsigned long long)n);
             out_obj(c, st);
             return 0;
         }
         case 105:
         case 106: {
-            KEvent* e = kevent_new("applet data", 0);
+            KEvent* e = kevent_new("applet data");
             e->signaled = 1;
             out_copy_h(c, h_new(&e->o));
             return 0;
@@ -367,9 +372,19 @@ static int am_lac(SvcObj* o, IpcCtx* c) { /* ILibraryAppletCreator */
         }
         case 10:
             return out_storage(c, in64(c, 0)); /* CreateStorage(i64 size) */
-        /* CreateTransferMemoryStorage(bool writable, i64 size, copy handle): a plain storage of that size. Backing
-           it with the transfer memory needs a handle lookup the services can't do yet */
-        case 11: return out_storage(c, in64(c, 8));
+        /* CreateTransferMemoryStorage(bool writable, i64 size, copy handle): a storage holding what the transfer
+           memory holds. A copy is enough: the library applets here finish at once and only read what was pushed */
+        case 11: {
+            u64 size = in64(c, 8);
+            KTmem* m = c->ncopy ? (KTmem*)h_get_ref(c->copy_h[0], KO_TMEM) : NULL;
+            if (!m) return out_storage(c, size);
+            SvcObj* st = am_storage_new(size, NULL);
+            if (st) memcpy(((StorageData*)st->data)->d, GP(m->addr), size < m->size ? size : m->size);
+            kobj_unref(&m->o);
+            if (!st) return RC(128, 503);
+            out_obj(c, st);
+            return 0;
+        }
     }
     return stub_ok(o, c);
 }

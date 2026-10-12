@@ -159,12 +159,8 @@ static int blit_ok(VkFormat f, VkFormatFeatureFlags need) {
 static int moves_scaled(const Surf* s) {
     if (s->sw == s->w && s->sh == s->h) return 1;
     if (blit_ok(s->f.vk, VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT)) return 1;
-    static int said;
-    if (!said) {
-        said = 1;
-        LOG("vulkan: format %d can't be scaled: render targets in it don't move to or from guest memory\n",
-            (int)s->f.vk);
-    }
+    LOG_LIMIT(1, "vulkan: format %d can't be scaled: render targets in it don't move to or from guest memory\n",
+              (int)s->f.vk);
     return 0;
 }
 /* src (TRANSFER_SRC) scaled into dst (TRANSFER_DST), whole images */

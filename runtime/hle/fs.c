@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* fs: RomFS (built on the fly from an extracted romfs/ folder, or a romfs.bin), plus save data
@@ -41,15 +41,6 @@ typedef struct {
     u64 off, size;
     int logged;
 } RFile;
-static size_t g_romdir_len;
-static RFile* rfiles; /* in offset order: romfs_build lays the files out in this order */
-static int nrfiles;
-static u8* rmeta;
-static u64 rmeta_size; /* header + tables sit at the start of the image */
-static u64 rdata_off, rtotal;
-static FILE* rraw; /* plain romfs.bin */
-static PMutex g_romlock;
-
 typedef struct DNode {
     char* name;
     int parent;
@@ -63,36 +54,56 @@ typedef struct FNode {
     u64 size;
     char* host;
 } FNode;
-static DNode* dn;
-static int ndn, capdn;
-static FNode* fn;
-static int nfn, capfn;
+#define NOPEN 48
+static struct {
+    size_t romdir_len;
+    RFile* rfiles; /* in offset order: romfs_build lays the files out in this order */
+    int nrfiles;
+    u8* rmeta;
+    u64 rmeta_size; /* header + tables sit at the start of the image */
+    u64 rdata_off, rtotal;
+    FILE* rraw; /* plain romfs.bin */
+    PMutex romlock;
+    DNode* dn;
+    int ndn, capdn;
+    FNode* fn;
+    int nfn, capfn;
+    /* cache of open host files */
+    struct {
+        const char* path;
+        FILE* f;
+        u64 last;
+    } openf[NOPEN];
+    u64 openclk;
+    u8 emptyrom[0x200]; /* the empty RomFS of the system archives (emptyrom_init) */
+    PMutex savelock;
+} fsp;
 
 static int add_dir(const char* name, int parent) {
-    if (ndn == capdn) {
-        capdn = capdn ? capdn * 2 : 256;
-        dn = realloc(dn, sizeof(DNode) * capdn);
+    if (fsp.ndn == fsp.capdn) {
+        fsp.capdn = fsp.capdn ? fsp.capdn * 2 : 256;
+        fsp.dn = realloc(fsp.dn, sizeof(DNode) * fsp.capdn);
     }
-    DNode* d = &dn[ndn];
+    DNode* d = &fsp.dn[fsp.ndn];
     d->name = strdup(name);
     d->parent = parent;
     d->first_child = -1;
     d->next_sib = -1;
     d->first_file = -1;
-    return ndn++;
+    return fsp.ndn++;
 }
 static int add_file(const char* name, int parent, u64 size, const char* host) {
-    if (nfn == capfn) {
-        capfn = capfn ? capfn * 2 : 1024;
-        fn = realloc(fn, sizeof(FNode) * capfn);
+    if (fsp.nfn == fsp.capfn) {
+        fsp.capfn = fsp.capfn ? fsp.capfn * 2 : 1024;
+        fsp.fn = realloc(fsp.fn, sizeof(FNode) * fsp.capfn);
     }
-    FNode* f = &fn[nfn];
+    FNode* f = &fsp.fn[fsp.nfn];
     f->name = strdup(name);
     f->parent = parent;
     f->next_sib = -1;
     f->size = size;
     f->host = strdup(host);
-    return nfn++;
+    return fsp.nfn++;
 }
 /* a host directory that is a link (a symlink, or a junction on Windows): the RomFS builder doesn't follow them, so
    a link to a parent can't loop, and recursive deletes remove the link, not what it points to */
@@ -149,17 +160,17 @@ static void scan(const char* host, int di, int depth) {
                 }
                 int c = add_dir(ents[i].name, di);
                 if (lastd < 0)
-                    dn[di].first_child = c;
+                    fsp.dn[di].first_child = c;
                 else
-                    dn[lastd].next_sib = c;
+                    fsp.dn[lastd].next_sib = c;
                 lastd = c;
                 scan(p, c, depth + 1);
             } else {
                 int f = add_file(ents[i].name, di, ents[i].size, p);
                 if (lastf < 0)
-                    dn[di].first_file = f;
+                    fsp.dn[di].first_file = f;
                 else
-                    fn[lastf].next_sib = f;
+                    fsp.fn[lastf].next_sib = f;
                 lastf = f;
             }
         }
@@ -185,79 +196,81 @@ static u32 hcount(u32 n) {
 
 static void romfs_build(const char* dir) {
     add_dir("", 0);
-    dn[0].parent = 0;
-    g_romdir_len = strlen(dir);
+    fsp.dn[0].parent = 0;
+    fsp.romdir_len = strlen(dir);
     scan(dir, 0, 0);
     /* table offsets */
     u32 doff = 0;
-    for (int i = 0; i < ndn; i++) {
-        dn[i].off = doff;
-        doff += 0x18 + ((strlen(dn[i].name) + 3) & ~3u);
+    for (int i = 0; i < fsp.ndn; i++) {
+        fsp.dn[i].off = doff;
+        doff += 0x18 + ((strlen(fsp.dn[i].name) + 3) & ~3u);
     }
     u32 foff = 0;
-    for (int i = 0; i < nfn; i++) {
-        fn[i].off = foff;
-        foff += 0x20 + ((strlen(fn[i].name) + 3) & ~3u);
+    for (int i = 0; i < fsp.nfn; i++) {
+        fsp.fn[i].off = foff;
+        foff += 0x20 + ((strlen(fsp.fn[i].name) + 3) & ~3u);
     }
-    u32 dhc = hcount(ndn), fhc = hcount(nfn);
+    u32 dhc = hcount(fsp.ndn), fhc = hcount(fsp.nfn);
     u64 hdr = 0x50, dht = hdr, dmt = dht + dhc * 4, fht = dmt + doff, fmt = fht + fhc * 4, end = fmt + foff;
-    rdata_off = (end + 0x1FF) & ~0x1FFull;
-    rmeta_size = rdata_off;
-    rmeta = calloc(1, rmeta_size);
-    u64 H[10] = {0x50, dht, dhc * 4ull, dmt, doff, fht, fhc * 4ull, fmt, foff, rdata_off};
-    memcpy(rmeta, H, 0x50);
-    u32* dh = (u32*)(rmeta + dht);
+    fsp.rdata_off = (end + 0x1FF) & ~0x1FFull;
+    fsp.rmeta_size = fsp.rdata_off;
+    fsp.rmeta = calloc(1, fsp.rmeta_size);
+    u64 H[10] = {0x50, dht, dhc * 4ull, dmt, doff, fht, fhc * 4ull, fmt, foff, fsp.rdata_off};
+    memcpy(fsp.rmeta, H, 0x50);
+    u32* dh = (u32*)(fsp.rmeta + dht);
     for (u32 i = 0; i < dhc; i++) dh[i] = 0xFFFFFFFFu;
-    u32* fh = (u32*)(rmeta + fht);
+    u32* fh = (u32*)(fsp.rmeta + fht);
     for (u32 i = 0; i < fhc; i++) fh[i] = 0xFFFFFFFFu;
     u64 data = 0;
-    rfiles = calloc(nfn ? nfn : 1, sizeof(RFile));
-    for (int i = 0; i < nfn; i++) {
+    fsp.rfiles = calloc(fsp.nfn ? fsp.nfn : 1, sizeof(RFile));
+    for (int i = 0; i < fsp.nfn; i++) {
         data = (data + 0xF) & ~0xFull;
-        rfiles[nrfiles].path = fn[i].host;
-        rfiles[nrfiles].off = rdata_off + data;
-        rfiles[nrfiles].size = fn[i].size;
-        nrfiles++;
-        u8* e = rmeta + fmt + fn[i].off;
-        u32 w[2] = {dn[fn[i].parent].off, fn[i].next_sib >= 0 ? fn[fn[i].next_sib].off : 0xFFFFFFFFu};
+        fsp.rfiles[fsp.nrfiles].path = fsp.fn[i].host;
+        fsp.rfiles[fsp.nrfiles].off = fsp.rdata_off + data;
+        fsp.rfiles[fsp.nrfiles].size = fsp.fn[i].size;
+        fsp.nrfiles++;
+        u8* e = fsp.rmeta + fmt + fsp.fn[i].off;
+        u32 w[2] = {fsp.dn[fsp.fn[i].parent].off,
+                    fsp.fn[i].next_sib >= 0 ? fsp.fn[fsp.fn[i].next_sib].off : 0xFFFFFFFFu};
         memcpy(e, w, 8);
         memcpy(e + 8, &data, 8);
-        memcpy(e + 16, &fn[i].size, 8);
-        u32 h = rhash(dn[fn[i].parent].off, fn[i].name) % fhc;
-        u32 nl = (u32)strlen(fn[i].name);
+        memcpy(e + 16, &fsp.fn[i].size, 8);
+        u32 h = rhash(fsp.dn[fsp.fn[i].parent].off, fsp.fn[i].name) % fhc;
+        u32 nl = (u32)strlen(fsp.fn[i].name);
         memcpy(e + 0x18, &fh[h], 4);
-        fh[h] = fn[i].off;
+        fh[h] = fsp.fn[i].off;
         memcpy(e + 0x1C, &nl, 4);
-        memcpy(e + 0x20, fn[i].name, nl);
-        data += fn[i].size;
+        memcpy(e + 0x20, fsp.fn[i].name, nl);
+        data += fsp.fn[i].size;
     }
-    for (int i = 0; i < ndn; i++) {
-        u8* e = rmeta + dmt + dn[i].off;
-        u32 w[4] = {dn[dn[i].parent].off, dn[i].next_sib >= 0 ? dn[dn[i].next_sib].off : 0xFFFFFFFFu,
-                    dn[i].first_child >= 0 ? dn[dn[i].first_child].off : 0xFFFFFFFFu,
-                    dn[i].first_file >= 0 ? fn[dn[i].first_file].off : 0xFFFFFFFFu};
+    for (int i = 0; i < fsp.ndn; i++) {
+        u8* e = fsp.rmeta + dmt + fsp.dn[i].off;
+        u32 w[4] = {fsp.dn[fsp.dn[i].parent].off,
+                    fsp.dn[i].next_sib >= 0 ? fsp.dn[fsp.dn[i].next_sib].off : 0xFFFFFFFFu,
+                    fsp.dn[i].first_child >= 0 ? fsp.dn[fsp.dn[i].first_child].off : 0xFFFFFFFFu,
+                    fsp.dn[i].first_file >= 0 ? fsp.fn[fsp.dn[i].first_file].off : 0xFFFFFFFFu};
         memcpy(e, w, 16);
-        u32 h = rhash(i ? dn[dn[i].parent].off : 0, dn[i].name) % dhc;
-        u32 nl = (u32)strlen(dn[i].name);
+        u32 h = rhash(i ? fsp.dn[fsp.dn[i].parent].off : 0, fsp.dn[i].name) % dhc;
+        u32 nl = (u32)strlen(fsp.dn[i].name);
         memcpy(e + 16, &dh[h], 4);
-        dh[h] = dn[i].off;
+        dh[h] = fsp.dn[i].off;
         memcpy(e + 20, &nl, 4);
-        memcpy(e + 24, dn[i].name, nl);
+        memcpy(e + 24, fsp.dn[i].name, nl);
     }
-    rtotal = rdata_off + data;
+    fsp.rtotal = fsp.rdata_off + data;
     /* rfiles is already in offset order (offsets grow with i). No sort: one without a tie-break could put a zero
        size file after the file that starts at the same offset, and romfs_read would then find the empty one */
-    LOG("RomFS: %d folders, %d files, %.1f MB\n", ndn, nfn, (double)rtotal / 1048576.0);
+    LOG("RomFS: %d folders, %d files, %.1f MB\n", fsp.ndn, fsp.nfn, (double)fsp.rtotal / 1048576.0);
 }
 
 void romfs_init(void) {
-    pm_init(&g_romlock);
+    pm_init(&fsp.romlock);
     char p[1200];
     snprintf(p, sizeof p, "%sromfs.bin", g_datadir);
-    rraw = fopen(p, "rb");
-    if (rraw) {
-        rtotal = plat_file_size(p);
-        LOG("RomFS: image %s (%.1f MB)\n", p, (double)rtotal / 1048576.0);
+    fsp.rraw = fopen(p, "rb");
+    if (fsp.rraw) {
+        fsp.rtotal = plat_file_size(p);
+        LOG("RomFS: image %s (%.1f MB)\n", p, (double)fsp.rtotal / 1048576.0);
         return;
     }
     snprintf(p, sizeof p, "%sromfs", g_datadir);
@@ -282,54 +295,46 @@ void romfs_init(void) {
     }
 }
 
-/* cache of open host files */
-#define NOPEN 48
-static struct {
-    const char* path;
-    FILE* f;
-    u64 last;
-} openf[NOPEN];
-static u64 openclk;
-static FILE* rf_open(const char* path) { /* g_romlock held */
+static FILE* rf_open(const char* path) { /* fsp.romlock held */
     int lru = 0;
     for (int i = 0; i < NOPEN; i++) {
-        if (openf[i].path == path) {
-            openf[i].last = ++openclk;
-            return openf[i].f;
+        if (fsp.openf[i].path == path) {
+            fsp.openf[i].last = ++fsp.openclk;
+            return fsp.openf[i].f;
         }
-        if (openf[i].last < openf[lru].last) lru = i;
+        if (fsp.openf[i].last < fsp.openf[lru].last) lru = i;
     }
-    if (openf[lru].f) fclose(openf[lru].f);
-    openf[lru].f = fopen(path, "rb");
+    if (fsp.openf[lru].f) fclose(fsp.openf[lru].f);
+    fsp.openf[lru].f = fopen(path, "rb");
     /* a file that didn't open isn't cached: the next read tries again */
-    openf[lru].path = openf[lru].f ? path : NULL;
-    openf[lru].last = openf[lru].f ? ++openclk : 0;
-    return openf[lru].f;
+    fsp.openf[lru].path = fsp.openf[lru].f ? path : NULL;
+    fsp.openf[lru].last = fsp.openf[lru].f ? ++fsp.openclk : 0;
+    return fsp.openf[lru].f;
 }
 /* -1 when a host file couldn't be read (that part is zeros) */
 static int romfs_read(u64 off, void* dst, u64 size) {
     u8* d = dst;
-    if (rraw) {
-        pm_lock(&g_romlock);
-        i64 r = plat_pread(rraw, d, size, off);
-        pm_unlock(&g_romlock);
+    if (fsp.rraw) {
+        pm_lock(&fsp.romlock);
+        i64 r = plat_pread(fsp.rraw, d, size, off);
+        pm_unlock(&fsp.romlock);
         return r < 0 || (u64)r < size ? -1 : 0;
     }
-    if (off < rmeta_size) {
-        u64 n = rmeta_size - off;
+    if (off < fsp.rmeta_size) {
+        u64 n = fsp.rmeta_size - off;
         if (n > size) n = size;
-        memcpy(d, rmeta + off, n);
+        memcpy(d, fsp.rmeta + off, n);
         d += n;
         off += n;
         size -= n;
     }
     int rc = 0;
-    pm_lock(&g_romlock);
+    pm_lock(&fsp.romlock);
     while (size) {
-        int lo = 0, hi = nrfiles - 1, k = -1;
+        int lo = 0, hi = fsp.nrfiles - 1, k = -1;
         while (lo <= hi) {
             int m = (lo + hi) / 2;
-            if (rfiles[m].off <= off) {
+            if (fsp.rfiles[m].off <= off) {
                 k = m;
                 lo = m + 1;
             } else
@@ -339,9 +344,9 @@ static int romfs_read(u64 off, void* dst, u64 size) {
             memset(d, 0, size);
             break;
         }
-        RFile* f = &rfiles[k];
+        RFile* f = &fsp.rfiles[k];
         if (off >= f->off + f->size) { /* inter-file padding */
-            u64 nx = k + 1 < nrfiles ? rfiles[k + 1].off : rtotal;
+            u64 nx = k + 1 < fsp.nrfiles ? fsp.rfiles[k + 1].off : fsp.rtotal;
             u64 n = nx > off ? nx - off : size;
             if (n > size) n = size;
             if (!n) n = size;
@@ -355,7 +360,7 @@ static int romfs_read(u64 off, void* dst, u64 size) {
         if (n > size) n = size;
         if (!f->logged) {
             f->logged = 1;
-            LOG("romfs: %s (%.1f KB)\n", f->path + g_romdir_len, (double)f->size / 1024.0);
+            LOG("romfs: %s (%.1f KB)\n", f->path + fsp.romdir_len, (double)f->size / 1024.0);
         }
         FILE* fp = rf_open(f->path);
         i64 got = fp ? plat_pread(fp, d, n, off - f->off) : -1;
@@ -372,7 +377,7 @@ static int romfs_read(u64 off, void* dst, u64 size) {
         off += n;
         size -= n;
     }
-    pm_unlock(&g_romlock);
+    pm_unlock(&fsp.romlock);
     return rc;
 }
 /* QueryRange (OperateRange): an all-zero QueryRangeInfo */
@@ -390,11 +395,11 @@ static int romstorage(SvcObj* o, IpcCtx* c) {
             u64 off = in64(c, 0), sz = in64(c, 8), a, bs;
             buf_out(c, 0, &a, &bs);
             if (sz > bs) sz = bs;
-            if (off > rtotal) return RC(2, 6001);
-            if (off + sz > rtotal) sz = rtotal - off;
+            if (off > fsp.rtotal) return RC(2, 6001);
+            if (off + sz > fsp.rtotal) sz = fsp.rtotal - off;
             return romfs_read(off, GP(a), sz) ? FS_OUT_OF_RANGE : 0;
         }
-        case 4: out64(c, rtotal); return 0;
+        case 4: out64(c, fsp.rtotal); return 0;
         case 1:
         case 2:
         case 3: return RC(2, 6300);
@@ -775,9 +780,8 @@ static int savereader(SvcObj* o, IpcCtx* c) {
     return stub_ok(o, c);
 }
 /* system archives (NgWord, fonts...) aren't available, hand out an empty but valid RomFS */
-static u8 g_emptyrom[0x200];
 static void emptyrom_init(void) {
-    u8* b = g_emptyrom;
+    u8* b = fsp.emptyrom;
     u64 H[10] = {0x50, 0x50, 4, 0x54, 0x18, 0x6C, 4, 0x70, 0, 0x200};
     memcpy(b, H, 0x50);
     u32 dh = 0;
@@ -795,17 +799,16 @@ static int emptystorage(SvcObj* o, IpcCtx* c) {
             buf_out(c, 0, &a, &bs);
             if (sz > bs) sz = bs;
             u8* d = GP(a);
-            for (u64 i = 0; i < sz; i++) d[i] = off + i < sizeof g_emptyrom ? g_emptyrom[off + i] : 0;
+            for (u64 i = 0; i < sz; i++) d[i] = off + i < sizeof fsp.emptyrom ? fsp.emptyrom[off + i] : 0;
             return 0;
         }
-        case 4: out64(c, sizeof g_emptyrom); return 0;
+        case 4: out64(c, sizeof fsp.emptyrom); return 0;
         case 5: return query_range(c);
     }
     return RC(2, 6300);
 }
 /* save data folders, by SaveDataType */
 static const char* const g_save_kinds[] = {"system", "user", "bcat", "device", "temp", "cache", "sysbcat"};
-static PMutex g_savelock;
 /* Earlier versions read the save type from the wrong byte, which is always 0, so every save went to save/system.
    An Account save (save/user) that doesn't exist yet takes over that folder, once */
 static void save_migrate(const char* dst) {
@@ -840,10 +843,10 @@ static int fsp_disp(SvcObj* o, IpcCtx* c) {
             u8 type = in8(c, 8 + 0x20);
             const char* kind = type < sizeof g_save_kinds / sizeof g_save_kinds[0] ? g_save_kinds[type] : "system";
             snprintf(p, sizeof p, "%ssave/%s", g_datadir, kind);
-            pm_lock(&g_savelock);
+            pm_lock(&fsp.savelock);
             if (type == 1) save_migrate(p);
             SvcObj* fs = hostfs_new(p);
-            pm_unlock(&g_savelock);
+            pm_unlock(&fsp.savelock);
             out_obj(c, fs);
             return 0;
         }
@@ -863,7 +866,7 @@ static int fsp_disp(SvcObj* o, IpcCtx* c) {
         case 61:
         case 62: out_obj(c, svcobj_new("ISaveDataInfoReader", savereader, 0)); return 0;
         case 200: {
-            if (!rtotal) {
+            if (!fsp.rtotal) {
                 WARN("fs: the game requests the RomFS but there is none (put the romfs folder in %s)\n", g_datadir);
             }
             out_obj(c, svcobj_new("IStorage(romfs)", romstorage, 0));
@@ -913,7 +916,7 @@ static int fsppr_disp(SvcObj* o, IpcCtx* c) { return stub_ok(o, c); }
 static SvcObj* new_fsppr(void) { return svcobj_new("fsp-pr", fsppr_disp, 0); }
 
 void svc_fs_init(void) {
-    pm_init(&g_savelock);
+    pm_init(&fsp.savelock);
     emptyrom_init();
     svc_register("fsp-srv", new_fsp);
     svc_register("fsp-pr", new_fsppr);

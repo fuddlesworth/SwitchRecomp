@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the HLE kernel: objects and handles, events (kernel.c), threads (thread.c), shared memory and GetInfo (svc_mem.c),
@@ -37,7 +37,6 @@ typedef struct KObj {
 typedef struct KEvent {
     KObj o;
     int signaled;
-    int autoclear;
 } KEvent;
 
 struct KThread {
@@ -50,9 +49,13 @@ struct KThread {
     u64 entry, arg, stack_top;
     int state; /* 0 created, 1 running, 2 exited */
     PCond cv;
-    int woken, cancel, suspended;
+    int woken, cancel;
+    /* svcSetThreadActivity (svc.c): suspended = it is paused, in_svc = it runs no game code because it is inside an
+       SVC (both atomic: every SVC reads them without the lock), pause_at = where it waits while paused (0 nowhere or
+       blocked inside the SVC, 1 before the SVC, 2 after it) */
+    int suspended, in_svc, pause_at;
     /* what it's blocked on */
-    int wait_kind; /* 0 none 1 objects 2 mutex 3 condvar 4 address */
+    int wait_kind; /* 0 none 1 objects 2 mutex 3 condvar 4 address 5 a thread being paused (svc.c) */
     u64 wait_addr, wait_key;
     u32 wait_tag;
     int wait_result;
@@ -80,7 +83,8 @@ void kernel_init(void);
 u32 h_new(KObj* o); /* new handle, takes a ref */
 void kobj_ref(KObj* o);
 void kobj_unref(KObj* o);
-KEvent* kevent_new(const char* name, int autoclear);
+KObj* h_get_ref(u32 h, int t); /* takes a ref the caller drops with kobj_unref. t 0 = any type */
+KEvent* kevent_new(const char* name);
 void kevent_signal(KEvent* e);
 void kevent_clear(KEvent* e);
 KThread* kthread_cur(void);

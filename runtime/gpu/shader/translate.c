@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* translating each instruction to GLSL, with the attribute and texture helpers */
@@ -69,8 +69,14 @@ static void attr_write(Ctx* c, u32 addr, const char* val) {
         case 0x68: emitl(c, "/* viewport index */"); return;
     }
     if (addr >= 0x2C0 && addr < 0x2E0) {
-        emitl(c, "gl_ClipDistance[%u] = uintBitsToFloat(%s);", (addr - 0x2C0) >> 2, val);
-        c->si->uses_clip_mask |= 1 << ((addr - 0x2C0) >> 2);
+        /* a distance the 3D engine doesn't enable doesn't clip, and Vulkan clips with every one written */
+        u32 i = (addr - 0x2C0) >> 2;
+        if (!((c->si->clip_enable >> i) & 1)) {
+            emitl(c, "/* clip distance %u not enabled */", i);
+            return;
+        }
+        emitl(c, "gl_ClipDistance[%u] = uintBitsToFloat(%s);", i, val);
+        c->si->uses_clip_mask |= 1 << i;
         return;
     }
     emitl(c, "/* write to attribute %x ignored */", addr);

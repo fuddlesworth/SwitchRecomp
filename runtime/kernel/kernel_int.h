@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* what the kernel's files share: result codes, the thread table, waiting and waking, and the SVCs svc.c dispatches to */
@@ -20,6 +20,7 @@
 #define R_CANCELLED   0xEC01
 #define R_BADHANDLE   0xE401
 #define R_BADSTATE    0xFA01
+#define R_BUSY        0xF401
 #define R_BADADDR     0xCC01
 #define R_OUTOFMEM    0xD001
 #define R_BADENUM     0xF001
@@ -48,7 +49,6 @@ extern u32 g_svc_ring_n;
 KObj* h_get_nl(u32 h);
 KObj* h_get(u32 h); /* no ref taken: only for threads, which are never freed */
 KObj* h_get_type(u32 h, int t);
-KObj* h_get_ref(u32 h, int t); /* takes a ref the caller drops with kobj_unref. t 0 = any type */
 int h_close(u32 h);
 void waiter_add(KObj* o, KThread* t);
 void waiter_del(KObj* o, KThread* t);

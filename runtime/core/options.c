@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the settings in <Game>.ini: loading, applying, and writing back what changes */
@@ -10,30 +10,29 @@
 #include "kernel/mem.h"
 #include "platform/backend.h"
 #include "platform/log.h"
+#include "platform/plat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
 int g_opt_diag = 0;
-int g_opt_docked = 0, g_opt_lang = 1, g_opt_fps = 1, g_opt_drs = 0;
+int g_opt_docked = 0, g_opt_lang = 1, g_opt_fps = 1;
 float g_opt_resf = 1.0f;
 int g_opt_shadows = 1;
 int g_opt_prof = 0;
 /* legacy (spanish) key names -> current ones */
-static const char* const INI_ALIAS[][2] = {{"modo_tv", "docked"},
-                                           {"idioma", "language"},
-                                           {"resolucion", "resolution"},
-                                           {"resolucion_dinamica_del_juego", "game_dynamic_resolution"},
-                                           {"sombras", "shadows"},
-                                           {"perfil", "profile"},
-                                           {NULL, NULL}};
+static const char* const INI_ALIAS[][2] = {{"modo_tv", "docked"},  {"idioma", "language"}, {"resolucion", "resolution"},
+                                           {"sombras", "shadows"}, {"perfil", "profile"},  {NULL, NULL}};
 /* options that went with the OpenGL renderer (renderer choice, its dynamic resolution, LSFG, the F7 recorder) and
-   older ones: dropped on load, so the rewritten .ini loses them */
+   older ones: dropped on load, so the rewritten .ini loses them. game_dynamic_resolution worked through GPU timings
+   the OpenGL renderer's thread measured */
 static const char* const INI_REMOVED[] = {"vsync",
                                           "renderer",
                                           "dynamic_resolution",
                                           "dynamic_resolution_min",
+                                          "game_dynamic_resolution",
+                                          "resolucion_dinamica_del_juego",
                                           "resolucion_dinamica",
                                           "resolucion_minima",
                                           "low_priority_shader_compiler",
@@ -142,8 +141,6 @@ static void ini_apply(const char* k, const char* v) {
         g_opt_shadows = atoi(v);
     else if (!strcmp(k, "profile"))
         g_opt_prof = atoi(v);
-    else if (!strcmp(k, "game_dynamic_resolution"))
-        g_opt_drs = atoi(v); /* 1 = let the game's own DRS work */
     else if (!strcmp(k, "memory_gb")) {
         g_opt_mem_gb = atoi(v);
     } else if (!strcmp(k, "heap_max_mb")) { /* 0 or less: no cap but the heap region's */
@@ -170,8 +167,6 @@ static const IniOpt INI_DISPLAY[] = {
     {NULL, NULL, NULL}};
 static const IniOpt INI_GRAPHICS[] = {
     {"resolution", "1", "Internal 3D resolution: 1 = native, 2 = double, 0.75 / 0.5 = faster (applies at start)"},
-    {"game_dynamic_resolution", "0",
-     "1 = let the game lower its own resolution like on the console (0 = always full resolution)"},
     {"shadows", "1", "0 = disable shadow maps (more FPS)"},
     {NULL, NULL, NULL}};
 static const IniOpt INI_PERF[] = {
@@ -265,12 +260,12 @@ static void ini_write(void) {
             }
             fprintf(f, "%s=%s\n", g_ini_k[i], g_ini_v[i]);
         }
-    fclose(f);
-    remove(g_ini_path);
-    if (rename(tmp, g_ini_path)) {
+    /* the old file stays until the new one replaces it: a failure or a kill in between keeps the player's settings */
+    if (fclose(f)) { /* not all of it was written (disk full) */
         remove(tmp);
         return;
     }
+    if (plat_replace_file(tmp, g_ini_path)) return;
     file_changed(g_ini_path, 1);
 }
 /* in-game toggles (F4) get persisted. Kept until written, so a reload of a file edited meanwhile doesn't lose them */

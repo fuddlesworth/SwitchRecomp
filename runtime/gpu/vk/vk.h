@@ -58,11 +58,6 @@ typedef struct {
 } VkState;
 extern VkState g_vk;
 
-/* the window backend's side (platform/backend/sdl3.c) */
-void* backend_vk_loader(void); /* vkGetInstanceProcAddr */
-const char* const* backend_vk_extensions(u32* n);
-int backend_vk_surface(VkInstance instance, VkSurfaceKHR* surface);
-
 /* device.c */
 int vk_init(void);
 /* (re)creates the swapchain at the window's size, in an sRGB format when srgb is set and the surface has one. 0 while
@@ -216,6 +211,7 @@ void vk_buf_frame(void);
    can't tell (no host pointer, or not available): then check the contents */
 int vk_written_since(const u8* host, u64 len, u32 since);
 u32 vk_ww_now(void);
+void vk_mem_changed(u64 cpu, u64 len); /* gpu.c's g_gpu_mem_changed: the range counts as written */
 
 /* pipeline.c */
 /* the constant buffer words a translation read (the translator resolves BRX jump tables through them): what it made
@@ -230,10 +226,11 @@ typedef struct {
 typedef int (*VkCbReader)(u32 idx, u32 off, u32* out);
 /* shader_to_glsl, reading constant buffers through read and recording what it read into reads */
 char* vk_translate(const u8* code, u32 max_bytes, int stage, ShaderInfo* si, VkCbReader read, VkCbReads* reads);
+u64 vk_shader_hash(const u8* code, u32 max_bytes, u32* out_len, VkCbReader read); /* BRX tables through read */
 int vk_cb_reads_hold(const VkCbReads* reads, VkCbReader read);
 typedef struct VkSh {
     u64 hash;
-    u32 mask[4]; /* the key: vk_shader_get's integer masks */
+    u32 mask[5]; /* the key: vk_shader_get's masks */
     int stage;
     VkCbReads cbr;
     ShaderInfo si;
@@ -248,8 +245,9 @@ extern VkDescriptorSetLayout g_vk_dslayout[3]; /* by set: shader_vk_set(stage) *
 void vk_pipeline_init(void);
 extern char g_vk_spirv_dir[1100]; /* shader_cache/spirv next to the games, set by vk_pipeline_init */
 /* the shader at gva (after a VertexA program at gva_a, or 0). The masks key integer inputs: attributes for the
-   vertex stage, textures and render target outputs for the fragment stage */
-VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, u32 rt_int, u32 rt_sint);
+   vertex stage, textures and render target outputs for the fragment stage. clip: the clip distances the 3D engine
+   enables (vertex stage) */
+VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, u32 rt_int, u32 rt_sint, u32 clip);
 /* the bound constant buffers per stage, which the translator also reads to resolve indirect branches */
 extern u64 g_vk_cb[5][18];
 extern u32 g_vk_cbsize[5][18];

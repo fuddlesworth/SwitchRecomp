@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* what a window backend (platform/backend/) provides: the window, input and presenting */
@@ -17,5 +17,13 @@ void frontend_frame(void);
 void backend_window_size(int* w, int* h);
 /* fatal's error box, on every platform despite the name (a no-op where the backend has none), from any thread */
 void win_fatal_box(const char* msg);
+
+/* the Vulkan renderer's window side, the SDL3 backend only. The handles as vulkan_core.h defines them on 64-bit
+   hosts (C allows the same typedef twice), so including this needs no Vulkan header */
+typedef struct VkInstance_T* VkInstance;
+typedef struct VkSurfaceKHR_T* VkSurfaceKHR;
+void* backend_vk_loader(void); /* vkGetInstanceProcAddr */
+const char* const* backend_vk_extensions(u32* n);
+int backend_vk_surface(VkInstance instance, VkSurfaceKHR* surface);
 
 #endif

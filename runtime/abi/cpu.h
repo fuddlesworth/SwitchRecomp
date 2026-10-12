@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* A57 CPU state + helpers shared by the runtime and the generated C.
@@ -414,6 +414,7 @@ f32 fp_sqrt32(f32 x);
 f64 fp_sqrt64(f64 x);
 f32 fp_fma32(f32 a, f32 b, f32 c);
 f64 fp_fma64(f64 a, f64 b, f64 c);
+f32 fp_fmanan32(f32 d, f32 a, f32 b);
 
 /* ---- saturation ---- */
 SWR_INLINE i64 sat_s(i64 v, int bits) {
@@ -602,16 +603,34 @@ SWR_INLINE f64 fnmul64(f64 a, f64 b) {
    otherwise hoist out of a loop that makes no call */
 #define YIELD() CBAR()
 /* fused multiply-add (also fp_fma32/fp_fma64, which must give the same results). The product of two floats is exact in
-   double, so for f32 one double add and the narrowing give the fused result, apart from rare double-rounding cases.
-   f64 has no wider type: __builtin_fma is one instruction with -mfma and a libm call without it */
+   double, but the double sum is rounded twice (to double, then to f32), which goes wrong when the double sum lands on an
+   f32 halfway point without being exact. Only a double whose low 28 bits are zero can be one: then the sum is rounded to
+   odd instead (truncated, last bit set when inexact, with the add's error from TwoSum), which the narrowing rounds
+   correctly since double has at least 24 + 2 bits. Without -mfma this costs less than __builtin_fmaf, a libm call per
+   lane. f64 has no wider type: __builtin_fma is one instruction with -mfma and a libm call without it */
+SWR_INLINE f32 fmla32_(f32 d, f32 a, f32 b) {
+    f64 p = (f64)a * (f64)b, s = p + (f64)d;
+    u64 u;
+    memcpy(&u, &s, 8);
+    if (UNLIKELY(!(u & 0x0FFFFFFFu))) {
+        /* every NaN lands here too: ARM picks which one (the host's choice depends on the operand order Clang gives
+           the add and multiply) */
+        if (s != s) return fp_fmanan32(d, a, b);
+        f64 t = s - p, e = (p - (s - t)) + ((f64)d - t); /* s + e == p + d exactly */
+        u64 x = (u64)((e < 0) | (e > 0));                /* inexact (s infinite gives e NaN: left alone) */
+        u = (u - (x & (u64)((e < 0) ^ (s < 0)))) | x;    /* toward zero when s overshot, then the odd bit */
+        memcpy(&s, &u, 8);
+    }
+    return (f32)s;
+}
 #if defined(__TINYC__)
-#define FMLA32(d, a, b) ((f32)((f64)(a) * (f64)(b) + (f64)(d)))
+#define FMLA32(d, a, b) fmla32_((d), (a), (b))
 #define FMLA64(d, a, b) ((d) + (a) * (b))
 #elif defined(__FMA__)
 #define FMLA32(d, a, b) __builtin_fmaf((a), (b), (d))
 #define FMLA64(d, a, b) __builtin_fma((a), (b), (d))
 #else
-#define FMLA32(d, a, b) ((f32)((f64)(a) * (f64)(b) + (f64)(d)))
+#define FMLA32(d, a, b) fmla32_((d), (a), (b))
 #define FMLA64(d, a, b) __builtin_fma((a), (b), (d))
 #endif
 SWR_INLINE void fcmp_(CPU* c, f64 a, f64 b) {

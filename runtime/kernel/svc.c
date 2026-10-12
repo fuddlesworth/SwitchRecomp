@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the SVC dispatch: each supervisor call the game makes, by number */
@@ -15,9 +15,85 @@ static void wev_destroy(KObj* o) {
     free(o->waiters);
     free(o);
 }
+/* ============================================================ pausing threads (svcSetThreadActivity) */
+/* The console stops a paused thread wherever it is. Recompiled code only enters the kernel through SVCs, so a thread
+   stops on its way into one (before the SVC does anything) or out of it (before the game sees its results). A thread
+   blocked inside one stays blocked, and if its wait ends while it is paused it doesn't go back to the game until it is
+   resumed, as on the console. in_svc tells the pausing thread the target runs no game code: it is set before the
+   target reads suspended, and cleared before it reads it again on the way out, so with both sides sequentially
+   consistent either the target sees the pause or the pausing thread sees it inside the SVC */
+static void park_nl(KThread* t, int at) {
+    if (!t->suspended) return;
+    t->pause_at = at;
+    for (int i = 0; i < t->o.nwait; i++) /* the threads waiting for it to stop (wait_stopped_nl) */
+        if (t->o.waiters[i]->wait_kind == 5) wake(t->o.waiters[i], 0);
+    while (t->suspended) pc_wait(&t->cv, &g_klock, -1);
+    t->pause_at = 0;
+}
+static void svc_enter(KThread* t) {
+    __atomic_store_n(&t->in_svc, 1, __ATOMIC_SEQ_CST);
+    if (UNLIKELY(__atomic_load_n(&t->suspended, __ATOMIC_SEQ_CST))) {
+        pm_lock(&g_klock);
+        park_nl(t, 1);
+        pm_unlock(&g_klock);
+    }
+}
+static void svc_leave(KThread* t) {
+    for (;;) {
+        __atomic_store_n(&t->in_svc, 0, __ATOMIC_SEQ_CST);
+        if (LIKELY(!__atomic_load_n(&t->suspended, __ATOMIC_SEQ_CST))) return;
+        pm_lock(&g_klock);
+        __atomic_store_n(&t->in_svc, 1, __ATOMIC_SEQ_CST);
+        park_nl(t, 2);
+        pm_unlock(&g_klock);
+    }
+}
+/* SetThreadActivity returns once the thread no longer runs (the console waits until no core runs it), and
+   GetThreadContext3 doesn't read registers the thread is still changing: both wait here, in n's waiter list, until n is
+   inside an SVC, has exited, or was resumed meanwhile */
+static void wait_stopped_nl(KThread* self, KThread* n) {
+    while (n->suspended && n->state != 2 && !__atomic_load_n(&n->in_svc, __ATOMIC_SEQ_CST)) {
+        self->woken = 0;
+        self->wait_kind = 5;
+        self->wait_name = "a thread to pause";
+        self->wait_timeout = -1;
+        waiter_add(&n->o, self);
+        sleep_nl(self, -1);
+        waiter_del(&n->o, self);
+        self->wait_kind = 0;
+    }
+}
+/* svcGetThreadContext3's ThreadContext, as the console's GetUserContext fills it. A thread paused before or after an
+   SVC is in the game's code (at the svc instruction, or past it), so every register is its own. One blocked inside an
+   SVC shows what the kernel keeps of it: x19-x28 and v8-v15, with pc at the svc instruction */
+static void thread_context_nl(const KThread* n, u8* p) {
+    const CPU* c = &n->cpu;
+    int inside = n->pause_at == 0;
+    u64 pc = n->pause_at == 2 ? c->pc : c->pc - 4; /* the generated code sets pc past the svc before calling it */
+    u32 pstate = get_nzcv(c);
+    memset(p, 0, 0x320);
+    if (n->state == 2) return; /* an exited thread has no context: zeros, as on console */
+    if (inside)
+        memcpy(p + 19 * 8, &c->x[19], 10 * 8);
+    else
+        memcpy(p, c->x, 29 * 8);
+    memcpy(p + 0xE8, &c->x[29], 3 * 8); /* fp, lr, sp */
+    memcpy(p + 0x100, &pc, 8);
+    memcpy(p + 0x108, &pstate, 4);
+    if (inside)
+        memcpy(p + 0x110 + 8 * 16, &c->v[8], 8 * 16);
+    else
+        memcpy(p + 0x110, c->v, 32 * 16);
+    memcpy(p + 0x310, &c->fpcr, 4);
+    memcpy(p + 0x314, &c->fpsr, 4);
+    memcpy(p + 0x318, &c->tpidr, 8);
+}
+
 void swr_svc(CPU* c, u32 imm) {
     u64 a0 = c->x[0], a1 = c->x[1], a2 = c->x[2];
     u64 a3 = c->x[3];
+    KThread* t = kthread_cur();
+    svc_enter(t);
     swr_svc_(c, imm);
     if (imm != 0x1E && imm != 0x0B && imm != 0x10) {
         u32 i = __atomic_fetch_add(&g_svc_ring_n, 1, __ATOMIC_RELAXED) & 63;
@@ -37,6 +113,7 @@ void swr_svc(CPU* c, u32 imm) {
         (nbad++ < 20 || !(nbad & 0xFFFF)))
         WARN("SVC 0x%x with invalid handle (args %llx %llx %llx) pc=%llx\n", imm, (unsigned long long)a0,
              (unsigned long long)a1, (unsigned long long)a2, (unsigned long long)c->pc);
+    svc_leave(t);
 }
 static void swr_svc_(CPU* c, u32 imm) {
     KThread* t = kthread_cur();
@@ -335,28 +412,59 @@ static void swr_svc_(CPU* c, u32 imm) {
             x[1] = which == 0 ? used_memory() : which == 1 ? (u64)kthread_live_count() : 16;
             return;
         }
-        case 0x32: x[0] = 0; return;
-        case 0x33: {
+        case 0x32: { /* SetThreadActivity: 1 pauses another thread, 0 resumes it (the console's checks, in its order) */
+            u32 act = (u32)x[1];
+            if (act > 1) {
+                x[0] = R_BADENUM;
+                return;
+            }
+            KThread* n = (KThread*)h_get_type((u32)x[0], KO_THREAD);
+            if (!n) {
+                x[0] = R_BADHANDLE;
+                return;
+            }
+            if (n == t) {
+                x[0] = R_BUSY;
+                return;
+            }
+            pm_lock(&g_klock);
+            if (n->state != 1 || n->suspended == (int)act) /* not started or exited, or already paused/running */
+                x[0] = R_BADSTATE;
+            else {
+                __atomic_store_n(&n->suspended, (int)act, __ATOMIC_SEQ_CST);
+                if (act)
+                    wait_stopped_nl(t, n);
+                else
+                    pc_signal(&n->cv); /* out of park_nl. A thread blocked in a wait just checks it again */
+                x[0] = 0;
+            }
+            pm_unlock(&g_klock);
+            return;
+        }
+        case 0x33: { /* GetThreadContext3: only of a paused thread, whose registers hold still */
             KThread* n = (KThread*)h_get_type((u32)x[1], KO_THREAD);
             if (!n) {
                 x[0] = R_BADHANDLE;
                 return;
             }
-            u8* p = GP(x[0]);
-            memset(p, 0, 0x320);
-            memcpy(p, n->cpu.x, 29 * 8);
-            memcpy(p + 29 * 8, &n->cpu.x[29], 8);
-            memcpy(p + 30 * 8, &n->cpu.x[30], 8);
-            memcpy(p + 31 * 8, &n->cpu.x[31], 8);
-            memcpy(p + 32 * 8, &n->cpu.pc, 8);
-            memcpy(p + 0x110, n->cpu.v, 0x200);
-            x[0] = 0;
+            if (n == t) {
+                x[0] = R_BUSY;
+                return;
+            }
+            u8 ctx[0x320];
+            pm_lock(&g_klock);
+            if (n->suspended) wait_stopped_nl(t, n); /* paused by another thread whose SetThreadActivity still waits */
+            u32 r = n->suspended ? 0 : R_BADSTATE;
+            if (!r) thread_context_nl(n, ctx);
+            pm_unlock(&g_klock);
+            if (!r) memcpy(GP(x[0]), ctx, sizeof ctx);
+            x[0] = r;
             return;
         }
         case 0x34: x[0] = svc_wait_addr(t, x[0], (u32)x[1], (i32)(u32)x[2], (i64)x[3]); return;
         case 0x35: x[0] = svc_signal_addr(x[0], (u32)x[1], (i32)(u32)x[2], (i32)(u32)x[3]); return;
         case 0x45: {
-            KEvent* e = kevent_new("user event", 0);
+            KEvent* e = kevent_new("user event");
             KWEvent* we = calloc(1, sizeof *we);
             we->o.type = KO_WEVENT;
             we->o.destroy = wev_destroy;

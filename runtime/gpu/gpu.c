@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* GM20B front end: guest memory through the GPU page table, GPFIFO, the puller (semaphores, syncpoints), I2M and the
@@ -34,7 +34,10 @@ int gmem_read(u64 gva, void* dst, u64 size) {
     }
     return 0;
 }
-void (*g_ww_touch)(u64 cpu); /* GPU wrote guest memory, record it for write tracking */
+void (*g_gpu_mem_changed)(u64 cpu_addr, u64 len);
+void gpu_mem_changed(u64 cpu_addr, u64 len) {
+    if (g_gpu_mem_changed && len) g_gpu_mem_changed(cpu_addr, len);
+}
 /* the renderer lands work it is holding (compute results) before the stream goes on past it: before a write of
    memory those results overlap (size > 0), and before anything the game can observe, like a semaphore release or a
    syncpoint (gpu_signal_point, size 0) */
@@ -50,10 +53,7 @@ static void gmem_write_unlogged(u64 gva, const void* src, u64 size) {
         u64 cpu = gmmu_translate(gva);
         u64 n = 0x1000 - (gva & 0xFFF);
         if (n > size) n = size;
-        if (cpu) {
-            memcpy(GP(cpu), s, n);
-            if (g_ww_touch) g_ww_touch(cpu);
-        }
+        if (cpu) memcpy(GP(cpu), s, n);
         s += n;
         gva += n;
         size -= n;
@@ -161,11 +161,7 @@ static void puller_method(GpuChannel* ch, u32 m, u32 v) {
                     plat_yield();
                 }
             } else if (op == 8 || op == 16) { /* AcqAnd and Reduction aren't done: the stream goes on as if they were */
-                static int said;
-                if (said < 4) {
-                    said++;
-                    WARN("gpu: semaphore operation %x at %llx not done\n", op, (unsigned long long)addr);
-                }
+                WARN_LIMIT(4, "gpu: semaphore operation %x at %llx not done\n", op, (unsigned long long)addr);
             }
             break;
         }
@@ -304,12 +300,10 @@ static void run_pushbuffer(GpuChannel* ch, const u32* w, u32 n) {
                 call_method(ch, sub, mm, w[i++], ch->pb_k == ch->pb_cnt);
             }
             if (ch->pb_k < ch->pb_cnt) {
-                static int said;
-                if (said < 6) {
-                    said++;
-                    LOG("gpu: method batch continues in the next GPFIFO entry (sub %u method %x mode %u, %u of %u words done)\n",
-                        ch->pb_sub, ch->pb_m, ch->pb_mode, ch->pb_k, ch->pb_cnt);
-                }
+                LOG_LIMIT(
+                    6,
+                    "gpu: method batch continues in the next GPFIFO entry (sub %u method %x mode %u, %u of %u words done)\n",
+                    ch->pb_sub, ch->pb_m, ch->pb_mode, ch->pb_k, ch->pb_cnt);
                 return;
             } /* rest comes in the next entry */
         }

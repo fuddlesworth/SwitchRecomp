@@ -25,7 +25,7 @@ This repository (https://github.com/fuddlesworth/SwitchRecomp) is a derived work
 of SwitchRecomp by MZ Labs. The text above is MZ Labs' notice as released.
 
 MZ Labs' code stays under the Apache License 2.0, which is in LICENSE.apache
-(the source files' "LICENSE.txt"). This notice is NOTICE ("NOTICE.txt"). The
+(the release's "LICENSE.txt"). This notice is NOTICE ("NOTICE.txt"). The
 fork as a whole, with its changes to MZ Labs' files and the files it added, is
 licensed under the GNU General Public License, version 3 or (at your option) any
 later version, which is in LICENSE. The third-party components and their

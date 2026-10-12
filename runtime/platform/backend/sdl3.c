@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* SDL3 backend, the window backend on Linux and Windows: the window and its Vulkan surface, keyboard and gamepads. Runs
@@ -18,7 +18,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include "gpu/renderer.h"
-#include "gpu/vk/vk.h"
 #include <SDL3/SDL_vulkan.h>
 #include <SDL3/SDL.h>
 #include <time.h>
@@ -29,10 +28,17 @@ static SDL_Window* g_win;
 static _Atomic u64 g_wsize = 1280 | (720ull << 32);
 static u64 keys_held;
 static int g_fullscreen;
+static int g_fullscreen_ini; /* the .ini's fullscreen, applied once the window is open */
+static void set_fullscreen(int on);
 static int g_shot_req;
 static SDL_Gamepad* g_pads[4];
 
-void backend_ini(const char* k, const char* v) { unattended_ini(k, v); }
+void backend_ini(const char* k, const char* v) {
+    if (!strcmp(k, "fullscreen"))
+        g_fullscreen_ini = atoi(v);
+    else
+        unattended_ini(k, v);
+}
 
 static void wsize_set(int w, int h) {
     if (w > 0 && h > 0) g_wsize = (u64)(u32)w | (u64)(u32)h << 32;
@@ -57,6 +63,8 @@ void video_init(const char* title) {
     if (!g_renderer->start())
         fatal("Vulkan could not start (see the log). SwitchRecomp needs a GPU and driver with Vulkan 1.3.");
     LOG("renderer: Vulkan\n");
+    /* not for an unattended run: nobody is at the screen, and it would cover the desktop of whoever is */
+    if (g_fullscreen_ini && !unattended_active()) set_fullscreen(1);
 #ifdef _WIN32
     /* keep the display and the system awake while playing (it was set with the crash handler, headless runs too) */
     SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);

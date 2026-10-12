@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* acc: user accounts */
@@ -42,7 +42,7 @@ static void list_users(IpcCtx* c) {
 static int async_disp(SvcObj* o, IpcCtx* c) {
     switch (c->cmd) {
         case 0: { /* GetSystemEvent */
-            KEvent* e = kevent_new("acc async", 0);
+            KEvent* e = kevent_new("acc async");
             e->signaled = 1;
             out_copy_h(c, ev_handle(e));
             return 0;

@@ -12,10 +12,12 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
    network once. They build in the same tree as the runtime: hactool from our own CMake script (`cmake/hactool.cmake`, since
    its own is a Makefile), FFmpeg with its own configure and make run by `cmake/ffmpeg.cmake` (logs in
    `build/default/ffmpeg_build-prefix/src/ffmpeg_build-stamp/`), the others through their CMake.
-   Clang only: any other compiler stops the configure. On Windows, `scripts\bootstrap.ps1` downloads the toolchain
-   (llvm-mingw, CMake, Ninja, NASM, Python, and w64devkit for the sh and GNU make FFmpeg needs) into `deps\tools`
-   once, and `. scripts\env.ps1` puts it on PATH in a new PowerShell window. Windows' default execution policy runs
-   no scripts, so run `Set-ExecutionPolicy -Scope Process Bypass` in that window first.
+   Clang only: any other compiler stops the configure. With `SWR_H264` on (the default) the configure also stops when
+   the FFmpeg source path (the checkout, or `CPM_SOURCE_CACHE`) has a space in it, since FFmpeg's configure can't
+   build from one, and on x86-64 when NASM is missing (below). On Windows, `scripts\bootstrap.ps1` downloads the
+   toolchain (llvm-mingw, CMake, Ninja, NASM, Python, and w64devkit for the sh and GNU make FFmpeg needs) into
+   `deps\tools` once, and `. scripts\env.ps1` puts it on PATH in a new PowerShell window. Windows' default execution
+   policy runs no scripts, so run `Set-ExecutionPolicy -Scope Process Bypass` in that window first.
 2. `build/default/hactool` is what `scripts/extract.py` runs (it builds that target when it's missing).
 3. The build's last step copies the runtime to `games/<Game>` for every `games/<Game>_code.so`. That is the binary
    that runs. The build prints `Runtime deployed to ...` for each: no line means no game got the new runtime.
@@ -25,9 +27,9 @@ description: "Build the SwitchRecomp runtime and recompile games correctly, avoi
 | What happens | Why | What to do |
 | --- | --- | --- |
 | Movies stay black, the log says no H.264 decoder | A runtime built some other way than CMake (upstream's recompiler had its own build) drops the H.264 decoder without a word | Build the runtime with CMake (`scripts/recomp.py` does), which always builds FFmpeg in unless `-DSWR_H264=OFF`. |
-| Movies decode slowly, the configure warned about NASM | FFmpeg is built without its assembly when NASM is missing | Install `nasm` and configure a new build folder. |
+| The configure stops with "NASM was not found" | FFmpeg's x86-64 assembly needs NASM, and a build without it decodes movies several times slower, so it is never dropped silently | Install `nasm`. `-DSWR_FFMPEG_ASM=OFF` builds FFmpeg without its assembly on purpose (slower movies). |
 | A fix has no effect | The game ran an old runtime: the build didn't deploy (no `_code.so` in `games/` yet), or the game was already running | Check the deploy lines. On Linux a running game keeps its old copy (the deploy renames over it). On Windows a running `.exe` can't be replaced, so stop the game before building. |
-| Two build folders disagree on what is deployed | Every build folder with `SWR_DEPLOY` on deploys to the same `games/` | The last build wins. Configure extra folders with `-DSWR_DEPLOY=OFF`. |
+| Two build folders disagree on what is deployed | Every build folder with `SWR_DEPLOY` on deploys to the same `games/` | The last build wins. Configure extra folders with `-DSWR_DEPLOY=OFF`. The recompiler builds its runtime in `build/<preset>-recomp` with `SWR_DEPLOY=OFF` (`switchrecomp/toolchain.py`), so the preset's own folder keeps deploying. |
 | A test binary next to the game was overwritten | The deploy targets every `*_code.so` in `games/`, symlinks included | Keep A/B copies outside `games/`, or don't build while they exist. |
 | A new warning goes unnoticed | The runtime builds with Clang's default warnings only (the third-party packages and the generated game module build with `-w`), and a warning doesn't stop the build | Check a changed file with more warnings on: take the file's line from `build/default/compile_commands.json` and run it with `-Wall -Wextra -fsyntax-only`. Fix what comes from the change. |
 | Game crashes at startup with "recompiled code is from another SwitchRecomp version" | The game module was built against another `SWR_ABI` (`runtime/abi/cpu.h`) | Recompile the game. |
@@ -84,7 +86,9 @@ To run a Windows build, use Wine with a game module built for Windows, kept out 
 
 Only when the generated code or its contract changed: `switchrecomp/` (`codegen.py`, `a64.py`, `nxloader.py`,
 `module.py`, and the module's compile flags in `toolchain.py`), `runtime/abi/cpu.h`, `runtime/abi/cpu_helpers.c` and
-the files it includes from `runtime/abi/helpers/`. Everything else in `runtime/` is the runtime alone. A recompile of
+the files it includes from `runtime/abi/helpers/`. Everything else in `runtime/` is the runtime alone. The runtime
+only checks `SWR_ABI`: a module built before an ABI change that kept it still loads and runs the old code, and a
+bump makes the runtime refuse every module built before it. A recompile of
 Catherine takes several minutes. The objects in `games/<Game>_build/` are reused when their C didn't change (they are
 keyed on the compiler and flags, so changing either compiles everything again).
 
@@ -102,7 +106,7 @@ with a CMake too old for CMake 4, `EXCLUDE_FROM_ALL YES` for the rest (not `SYST
 found through an `-I` in CFLAGS would win over `-isystem` ones; SDL3 on Windows is the one exception, since there is
 no system copy to collide with), and `swr_quiet(target...)` on what it
 builds. `OPTIONS` are cache variables of the whole build, not just that package. Then the license in README.md's
-table, and the version in the commit message. CI caches `.cache/cpm` on the file's hash.
+table and in the install (below), and the version in the commit message. CI caches `.cache/cpm` on the file's hash.
 
 ## The AppImage
 
@@ -114,10 +118,16 @@ bundles the full Mesa, so the AppImage comes out several times bigger than CI's,
 packages. Inside an AppImage argv[0] points into its mount: anything that finds files next to the runtime goes
 through `g_exedir`, which `main.c` takes from `$APPIMAGE`.
 
+`cmake --install` puts the license files in `share/licenses/switchrecomp`: `LICENSE`, `LICENSE.apache` and `NOTICE`,
+then a folder per library built into the runtime or hactool. The AppImage copies that folder and adds the licenses of
+the Arch packages it bundles, with their list in `share/licenses/bundled-packages.txt`, and the CI artifacts are the
+install tree. A new package means a new `install(...)` line for its license in `CMakeLists.txt`.
+
 ## Formatting
 
-`scripts/format.sh` before committing, `--check` to see what is off. It needs clang-format 23 exactly (another
-version formats differently and would reformat every file) and fetches ruff through `uvx`.
+`scripts/format.sh` before committing, `--check` to see what is off. It covers the C and C++ under `runtime/` and
+`tools/`, the Python up to two folders deep and `.claude/hooks/`. It needs clang-format 23 exactly (another version
+formats differently and would reformat every file) and fetches ruff through `uvx`.
 
 ## Never delegate builds to subagents
 

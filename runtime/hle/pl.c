@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* pl: the shared fonts */
@@ -19,9 +19,11 @@
 static const char* g_font_names[6] = {
     "FontStandard", "FontChineseSimplified", "FontExtendedChineseSimplified", "FontChineseTraditional",
     "FontKorean",   "FontNintendoExtended"};
-static u32 g_font_off[6], g_font_size[6];
-static KShmem* g_font_shm;
-static PMutex g_font_lock; /* the first request fills the shared memory, the others wait for it */
+static struct {
+    u32 font_off[6], font_size[6];
+    KShmem* font_shm;
+    PMutex font_lock; /* the first request fills the shared memory, the others wait for it */
+} pl;
 static u8* read_file_all(const char* path, u64* size) {
     FILE* f = fopen(path, "rb");
     if (!f) return NULL;
@@ -94,8 +96,8 @@ static void fonts_fill(u8* shm, u64 cap) {
         }
         if (!d) { /* one fallback font for every slot */
             if (fb_size) {
-                g_font_off[i] = fb_off;
-                g_font_size[i] = fb_size;
+                pl.font_off[i] = fb_off;
+                pl.font_size[i] = fb_size;
                 continue;
             }
             if (!fb) fb = font_fallback(&fbs);
@@ -135,16 +137,16 @@ static void fonts_fill(u8* shm, u64 cap) {
                 w = bswap32_(w ^ k2);
                 memcpy(shm + off + 8 + k, &w, 4);
             }
-            g_font_off[i] = (u32)off + 8;
-            g_font_size[i] = tsz;
+            pl.font_off[i] = (u32)off + 8;
+            pl.font_size[i] = tsz;
         } else {
             memcpy(shm + off + 8, d, sz);
-            g_font_off[i] = (u32)off + 8;
-            g_font_size[i] = (u32)sz;
+            pl.font_off[i] = (u32)off + 8;
+            pl.font_size[i] = (u32)sz;
         }
         if (d == fb) {
-            fb_off = g_font_off[i];
-            fb_size = g_font_size[i];
+            fb_off = pl.font_off[i];
+            fb_size = pl.font_size[i];
         }
         off = (off + 8 + words * 4 + 0xF) & ~0xFull;
         if (d != fb) free(d);
@@ -152,23 +154,23 @@ static void fonts_fill(u8* shm, u64 cap) {
     if (fb) free(fb);
 }
 static int pl_disp(SvcObj* o, IpcCtx* c) {
-    pm_lock(&g_font_lock);
-    KShmem* shm = g_font_shm;
+    pm_lock(&pl.font_lock);
+    KShmem* shm = pl.font_shm;
     if (!shm) {
         /* the service keeps it for the whole run: its reference keeps it alive when the game closes its handle */
         shm = kshmem_new(0x1100000, "font");
         kobj_ref(&shm->o);
         fonts_fill(kshmem_ptr(shm), 0x1100000);
-        g_font_shm = shm;
+        pl.font_shm = shm;
     }
-    pm_unlock(&g_font_lock);
+    pm_unlock(&pl.font_lock);
     u32 id = in32(c, 0);
     if (id > 5) id = 0;
     switch (c->cmd) {
-        case 0: return 0;                            /* RequestLoad */
-        case 1: out32(c, 1); return 0;               /* GetLoadState: loaded */
-        case 2: out32(c, g_font_size[id]); return 0; /* GetSize */
-        case 3: out32(c, g_font_off[id]); return 0;  /* GetSharedMemoryAddressOffset */
+        case 0: return 0;                             /* RequestLoad */
+        case 1: out32(c, 1); return 0;                /* GetLoadState: loaded */
+        case 2: out32(c, pl.font_size[id]); return 0; /* GetSize */
+        case 3: out32(c, pl.font_off[id]); return 0;  /* GetSharedMemoryAddressOffset */
         case 4: out_copy_h(c, h_new(&shm->o)); return 0;
         case 5:
         case 6: { /* GetSharedFontInOrderOfPriority */
@@ -179,8 +181,8 @@ static int pl_disp(SvcObj* o, IpcCtx* c) {
             u32 n = 6;
             for (u32 i = 0; i < n; i++) {
                 if (a0 && (i + 1) * 4 <= s0) gw32(a0 + i * 4, i);
-                if (a1 && (i + 1) * 4 <= s1) gw32(a1 + i * 4, g_font_off[i]);
-                if (a2 && (i + 1) * 4 <= s2) gw32(a2 + i * 4, g_font_size[i]);
+                if (a1 && (i + 1) * 4 <= s1) gw32(a1 + i * 4, pl.font_off[i]);
+                if (a2 && (i + 1) * 4 <= s2) gw32(a2 + i * 4, pl.font_size[i]);
             }
             out8(c, 1);
             c->out_size = 4;
@@ -192,7 +194,7 @@ static int pl_disp(SvcObj* o, IpcCtx* c) {
 }
 static SvcObj* new_pl(void) { return svcobj_new("pl:u", pl_disp, 0); }
 void svc_pl_init(void) {
-    pm_init(&g_font_lock);
+    pm_init(&pl.font_lock);
     svc_register("pl:u", new_pl);
     svc_register("pl:s", new_pl);
 }

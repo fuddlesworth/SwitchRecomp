@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the unattended-run options both window backends take (unattended.c): seconds, frames, shot, shot_every, press,
@@ -19,7 +19,8 @@ const char* unattended_shot(void); /* the shot path, NULL when unset */
 /* shot_every: 1 when a numbered screenshot is due, with its path (no extension) in path */
 int unattended_periodic_shot(char* path, size_t n);
 int unattended_done(void); /* the frames or seconds are reached */
-/* the result line on stderr (w and h: the image's size, 0 when unknown), then the hints and the exit */
+/* the result line on stderr (w and h: the image's size, 0 when unknown), then the hints, the renderer's save (its
+   pipeline cache: the process ends without shutting the renderer down) and the exit */
 __attribute__((noreturn)) void unattended_exit(u64 hash, int w, int h);
 
 /* stick directions held as keys (bits 40..47: left stick left, up, right, down, then the right stick) as axes:

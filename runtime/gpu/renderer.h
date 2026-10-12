@@ -2,7 +2,8 @@
    Copyright 2026 the SwitchRecomp fork contributors */
 /* The renderer interface: what the GPU front end (gpu.c, engines.c, maxwell3d.c) and the window backends ask of a
    renderer. The Vulkan (gpu/vk/renderer.c) and null (gpu/null/null.c) renderers each fill in every operation, with a
-   no-op where they have nothing to do, so callers never check. */
+   no-op where they have nothing to do, so callers never check. save is the one exception (NULL when there is
+   nothing to save). */
 #ifndef SWR_RENDERER_H
 #define SWR_RENDERER_H
 #include "abi/cpu.h"
@@ -33,6 +34,9 @@ typedef struct Renderer {
     /* presenting a guest framebuffer */
     void (*present_buffer)(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt);
     u64 (*screenshot)(const char* path); /* the hash of the frame it saved */
+    /* writes what should outlive the process (the pipeline cache), before an exit that skips the normal shutdown.
+       Any thread, while the others still run. NULL when the renderer keeps nothing */
+    void (*save)(void);
 } Renderer;
 
 extern const Renderer vk_renderer, null_renderer;

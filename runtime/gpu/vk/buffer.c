@@ -44,11 +44,69 @@ static void ww_mark(u8* p, u64 n) {
     if (o >= AS_SIZE || !n) return;
     for (u64 pg = o >> 12, e = (o + n - 1) >> 12; pg <= e && pg < (AS_SIZE >> 12); pg++) {
         u64 l = pg >> (WW_LEAF_SHIFT - 12);
-        if (!g_wleaf[l] && !(g_wleaf[l] = calloc(1u << (WW_LEAF_SHIFT - 12), 4))) continue;
-        g_wleaf[l][pg & ((1u << (WW_LEAF_SHIFT - 12)) - 1)] = g_wclock;
+        if (!g_wleaf[l]) {
+            /* a leaf without a table stands for all its pages at its newest generation (ww_mark_range, or a table
+               that couldn't be allocated): a new table starts them there */
+            u32* t = calloc(1u << (WW_LEAF_SHIFT - 12), 4);
+            if (t && g_wleaf_max[l])
+                for (u32 i = 0; i < 1u << (WW_LEAF_SHIFT - 12); i++) t[i] = g_wleaf_max[l];
+            g_wleaf[l] = t;
+        }
+        if (g_wleaf[l]) g_wleaf[l][pg & ((1u << (WW_LEAF_SHIFT - 12)) - 1)] = g_wclock;
         g_wleaf_max[l] = g_wclock;
     }
 }
+/* the pages of guest memory [o, e) as written now. A leaf the range covers whole, and that has no table, only gets
+   its newest generation: kernel/mem.c can unmap gigabytes at once */
+static void ww_mark_range(u64 o, u64 e) {
+    const u64 lp = 1ull << (WW_LEAF_SHIFT - 12);
+    for (u64 pg = o >> 12, pe = (e + 4095) >> 12; pg < pe;) {
+        u64 l = pg >> (WW_LEAF_SHIFT - 12), lend = (l + 1) * lp, end = pe < lend ? pe : lend;
+        if (!g_wleaf[l] && pg == l * lp && end == lend)
+            g_wleaf_max[l] = g_wclock;
+        else
+            ww_mark(g_mem + (pg << 12), (end - pg) << 12);
+        pg = end;
+    }
+}
+
+/* ranges of guest memory changed without a write the tracking sees (vk_mem_changed: decommitted pages, which read
+   as zero now). Noted on the game's threads, outside vk_lock, and marked written by the next vk_written_since, as if
+   its scan had found them. When the list is full its last range grows to cover the new one, marking more than
+   changed: a cache over the rest only checks its contents once */
+typedef struct {
+    u64 a, e;
+} WwRange;
+#define WW_CHG_N 32
+static WwRange g_wchg[WW_CHG_N];
+static int g_wchg_n; /* atomic: read without the lock to skip it */
+static PMutex g_wchg_lock = PMUTEX_INIT;
+void vk_mem_changed(u64 cpu, u64 len) {
+    if (cpu >= AS_SIZE || !len) return;
+    u64 e = len > AS_SIZE - cpu ? AS_SIZE : cpu + len;
+    pm_lock(&g_wchg_lock);
+    int n = __atomic_load_n(&g_wchg_n, __ATOMIC_RELAXED);
+    if (n < WW_CHG_N) {
+        g_wchg[n] = (WwRange){cpu, e};
+        __atomic_store_n(&g_wchg_n, n + 1, __ATOMIC_RELEASE);
+    } else {
+        WwRange* r = &g_wchg[WW_CHG_N - 1];
+        if (cpu < r->a) r->a = cpu;
+        if (e > r->e) r->e = e;
+    }
+    pm_unlock(&g_wchg_lock);
+}
+static void ww_take_changed(void) {
+    if (!__atomic_load_n(&g_wchg_n, __ATOMIC_ACQUIRE)) return;
+    WwRange c[WW_CHG_N];
+    pm_lock(&g_wchg_lock);
+    int n = __atomic_load_n(&g_wchg_n, __ATOMIC_RELAXED);
+    memcpy(c, g_wchg, (size_t)n * sizeof *c);
+    __atomic_store_n(&g_wchg_n, 0, __ATOMIC_RELAXED);
+    pm_unlock(&g_wchg_lock);
+    for (int i = 0; i < n; i++) ww_mark_range(c[i].a, c[i].e);
+}
+
 int vk_written_since(const u8* host, u64 len, u32 since) {
     if (!g_ww || !host || !len) return -1;
     if (g_ww < 0) {
@@ -58,6 +116,7 @@ int vk_written_since(const u8* host, u64 len, u32 since) {
         if (!g_ww) return -1;
     }
     g_wclock++;
+    ww_take_changed();
     if (plat_ww_scan((u8*)host, len, ww_mark) < 0) {
         g_ww = 0;
         LOG("vulkan: write tracking failed, caches check contents\n");
@@ -66,9 +125,11 @@ int vk_written_since(const u8* host, u64 len, u32 since) {
     u64 o = (u64)(host - g_mem);
     for (u64 pg = o >> 12, e = (o + len - 1) >> 12; pg <= e;) {
         u64 l = pg >> (WW_LEAF_SHIFT - 12), lend = (l + 1) << (WW_LEAF_SHIFT - 12);
-        if (g_wleaf[l] && g_wleaf_max[l] > since)
+        if (g_wleaf_max[l] > since) {
+            if (!g_wleaf[l]) return 1; /* the whole leaf was marked */
             for (u64 q = pg; q <= e && q < lend; q++)
                 if (g_wleaf[l][q & ((1u << (WW_LEAF_SHIFT - 12)) - 1)] > since) return 1;
+        }
         pg = lend;
     }
     return 0;

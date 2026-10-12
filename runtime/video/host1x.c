@@ -1,10 +1,11 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* nvhost-nvdec / nvhost-vic (host1x channels).
    We parse the host1x stream, decode NVDEC H.264 jobs with FFmpeg (SPS/PPS get rebuilt from the
-   picture setup the game fills in) and VIC jobs convert the last decoded picture, unscaled, into the output surface.
+   picture setup the game fills in) into the surface each job names, and VIC jobs convert their input slot's
+   surface, unscaled, into the output surface.
    Struct layouts / method offsets come from NVIDIA's open-gpu-doc (nvdec_drv.h, clc5b0.h, VIC). */
 #include "video/host1x_int.h"
 
@@ -45,11 +46,7 @@ static u32 iova_map(u32 h) {
        iova_ptr hand out memory past the end of the buffer */
     u32 sz = nvmap_size(h);
     if (!sz) {
-        static int said;
-        if (said < 4) {
-            said++;
-            WARN("video: nvmap handle %u has no size, not mapped for NVDEC/VIC\n", h);
-        }
+        WARN_LIMIT(4, "video: nvmap handle %u has no size, not mapped for NVDEC/VIC\n", h);
         return 0;
     }
     u64 need = iova_span(sz), base = IOVA_BASE;
@@ -60,12 +57,9 @@ static u32 iova_map(u32 h) {
         if (e > base) base = e;
     }
     if (g_niom >= 1024 || base + need > IOVA_END) {
-        static int said;
-        if (said < 8) {
-            said++;
-            WARN("video: no room to map nvmap handle %u (%u bytes, %d mappings): NVDEC and VIC see unmapped memory\n",
-                 h, sz, g_niom);
-        }
+        WARN_LIMIT(8,
+                   "video: no room to map nvmap handle %u (%u bytes, %d mappings): NVDEC and VIC see unmapped memory\n",
+                   h, sz, g_niom);
         return 0;
     }
     memmove(&g_iom[at + 1], &g_iom[at], (size_t)(g_niom - at) * sizeof g_iom[0]);
@@ -95,11 +89,17 @@ u8* iova_ptr(u64 iova, u64 len) {
 }
 
 /* ------------------------------------------------------------ host1x command stream */
+/* A channel is one nvdrv fd, as on the console: the game opens two NVDEC and two VIC fds per movie and sends a
+   stream's jobs through one of them, so the registers and the decoder (its reference pictures and headers) stay with
+   their stream. The engines only meet in guest memory: NVDEC writes each picture into the surface its job names, and
+   VIC reads its input slot from there */
+#define H1_NSYNCPT 16 /* the syncpoint indexes GET_SYNCPOINT takes, nvhost's NVHOST_MODULE_MAX_SYNCPTS */
 typedef struct {
     int is_vic;
-    u32 syncpt;
+    u32 syncpt[H1_NSYNCPT]; /* 0 until GET_SYNCPOINT or a submit asks for it */
     u32 regs[0x1000 / 4];
     u32 method;
+    NvdecCtx* dec; /* NVDEC channels only */
 } H1Ch;
 static void dev_method(H1Ch* ch, u32 m, u32 v) {
     if (m >= 0x1000 / 4) return; /* past the register file: m << 2 would wrap onto a real register, even 0x300 */
@@ -109,7 +109,7 @@ static void dev_method(H1Ch* ch, u32 m, u32 v) {
         if (ch->is_vic)
             vic_execute(ch->regs);
         else
-            nvdec_execute(ch->regs);
+            nvdec_execute(ch->dec, ch->regs);
     }
 }
 static void reg_write(H1Ch* ch, u32 cls, u32 off, u32 v) {
@@ -155,11 +155,7 @@ static void run_words(H1Ch* ch, const u32* w, u32 n) {
             }
             case 4: reg_write(ch, cls, (x >> 16) & 0xFFF, x & 0xFFFF); break;
             default: {
-                static int said;
-                if (said < 6) {
-                    said++;
-                    LOG("video: host1x opcode %u not handled (word %08x)\n", op, x);
-                }
+                LOG_LIMIT(6, "video: host1x opcode %u not handled (word %08x)\n", op, x);
                 return;
             }
         }
@@ -167,15 +163,41 @@ static void run_words(H1Ch* ch, const u32* w, u32 n) {
 }
 
 /* ------------------------------------------------------------ channel ioctls */
-/* syncpoints come from nvdrv's allocator: NvRmStream indexes a 128-entry table by syncpoint id, and an id past it
-   (upstream used 200) writes beyond the table into the game's heap */
-static H1Ch g_ch[2];
-u32 host1x_ioctl(int is_vic, u32 cmd, u8* d, u32 n) {
+void* host1x_open(int is_vic) {
+    h_init();
+    H1Ch* ch = calloc(1, sizeof *ch);
+    if (!ch) return NULL;
+    ch->is_vic = is_vic;
+    if (!is_vic && !(ch->dec = nvdec_new())) {
+        free(ch);
+        return NULL;
+    }
+    return ch;
+}
+void host1x_close(void* p) {
+    H1Ch* ch = p;
+    if (!ch) return;
     h_init();
     pm_lock(&g_hlk);
-    H1Ch* ch = &g_ch[is_vic ? 1 : 0];
-    ch->is_vic = is_vic;
-    if (!ch->syncpt) ch->syncpt = syncpt_alloc();
+    for (int i = 0; i < H1_NSYNCPT; i++)
+        if (ch->syncpt[i]) syncpt_free(ch->syncpt[i]);
+    nvdec_free(ch->dec);
+    pm_unlock(&g_hlk);
+    free(ch);
+}
+/* syncpoints come from nvdrv's allocator: NvRmStream indexes a 128-entry table by syncpoint id, and an id past it
+   (upstream used 200) writes beyond the table into the game's heap. A channel's go back when its fd closes: four
+   channels per movie would otherwise use up the ids after a few dozen movies */
+static u32 ch_syncpt(H1Ch* ch, u32 i) {
+    if (!ch->syncpt[i]) ch->syncpt[i] = syncpt_alloc();
+    return ch->syncpt[i];
+}
+u32 host1x_ioctl(void* p, u32 cmd, u8* d, u32 n) {
+    H1Ch* ch = p;
+    if (!ch) return 4; /* BadParameter */
+    int is_vic = ch->is_vic;
+    h_init();
+    pm_lock(&g_hlk);
     u32 r = 0, grp = (cmd >> 8) & 0xFF, nr = cmd & 0xFF;
     if (grp == 0x48) { /* SET_NVMAP_FD etc */
     } else if (grp == 0)
@@ -188,12 +210,9 @@ u32 host1x_ioctl(int is_vic, u32 cmd, u8* d, u32 n) {
                     r = 4; /* BadParameter */
                     break;
                 }
-                if (nrel) {
-                    static int said;
-                    if (!said++)
-                        LOG("video: %s submit has %u relocations, which aren't applied\n", is_vic ? "vic" : "nvdec",
-                            nrel);
-                }
+                if (nrel)
+                    LOG_LIMIT(1, "video: %s submit has %u relocations, which aren't applied\n",
+                              is_vic ? "vic" : "nvdec", nrel);
                 for (u32 i = 0; i < ncb; i++) {
                     u32 cb = (u32)(cbo + (u64)i * 12);
                     u32 mem = rd32(d, cb), off = rd32(d, cb + 4), wc = rd32(d, cb + 8);
@@ -202,12 +221,9 @@ u32 host1x_ioctl(int is_vic, u32 cmd, u8* d, u32 n) {
                     if (!a || !wc || wc > 0x100000 || (u64)off + (u64)wc * 4 > nvmap_size(mem)) {
                         /* the job is lost, but its syncpoint increments below still happen so the game doesn't wait
                            forever on them */
-                        static int said;
-                        if (said < 4) {
-                            said++;
-                            LOG("video: %s command buffer skipped (nvmap %u, offset %x, %u words, buffer %u bytes)\n",
-                                is_vic ? "vic" : "nvdec", mem, off, wc, nvmap_size(mem));
-                        }
+                        LOG_LIMIT(4,
+                                  "video: %s command buffer skipped (nvmap %u, offset %x, %u words, buffer %u bytes)\n",
+                                  is_vic ? "vic" : "nvdec", mem, off, wc, nvmap_size(mem));
                         continue;
                     }
                     run_words(ch, (const u32*)GP(a + off), wc);
@@ -215,28 +231,29 @@ u32 host1x_ioctl(int is_vic, u32 cmd, u8* d, u32 n) {
                 for (u32 i = 0; i < nsp; i++) {
                     u32 sp = (u32)(spo + (u64)i * 20);
                     u32 id = rd32(d, sp), inc = rd32(d, sp + 4);
-                    if (!id) id = ch->syncpt;
+                    if (!id) id = ch_syncpt(ch, 0);
                     for (u32 k = 0; k < inc && k < 64; k++) syncpt_incr(id);
                     if (i < nfe && feo + (u64)i * 4 + 4 <= n) {
                         u32 v = syncpt_read(id);
                         memcpy(d + feo + (u64)i * 4, &v, 4);
                     }
                 }
-                {
-                    static int said;
-                    if (said < 3) {
-                        said++;
-                        LOG("video: %s submit: %u command buffers, %u relocs, %u syncpoint increments, %u fences (%u bytes)\n",
-                            is_vic ? "vic" : "nvdec", ncb, nrel, nsp, nfe, n);
-                    }
-                }
+                LOG_LIMIT(
+                    3,
+                    "video: %s submit: %u command buffers, %u relocs, %u syncpoint increments, %u fences (%u bytes)\n",
+                    is_vic ? "vic" : "nvdec", ncb, nrel, nsp, nfe, n);
                 break;
             }
-            case 0x02: {
-                u32 v = ch->syncpt;
+            case 0x02: { /* GET_SYNCPOINT: {u32 index, u32 id} */
+                u32 i = rd32(d, 0);
+                if (i >= H1_NSYNCPT) {
+                    r = 4; /* BadParameter */
+                    break;
+                }
+                u32 v = ch_syncpt(ch, i);
                 memcpy(d + 4, &v, 4);
                 break;
-            } /* GET_SYNCPOINT */
+            }
             case 0x03: {
                 u32 v = 0;
                 memcpy(d + 4, &v, 4);
@@ -256,21 +273,11 @@ u32 host1x_ioctl(int is_vic, u32 cmd, u8* d, u32 n) {
                the same handles and unmap them after every job, so dropping it here would take it from the other */
             case 0x0A: break;
             default: {
-                static int said;
-                if (said < 8) {
-                    said++;
-                    LOG("video: %s ioctl %08x not handled\n", is_vic ? "vic" : "nvdec", cmd);
-                }
+                LOG_LIMIT(8, "video: %s ioctl %08x not handled\n", is_vic ? "vic" : "nvdec", cmd);
                 break;
             }
         }
-    else {
-        static int said;
-        if (said < 8) {
-            said++;
-            LOG("video: %s ioctl %08x not handled\n", is_vic ? "vic" : "nvdec", cmd);
-        }
-    }
+    else { LOG_LIMIT(8, "video: %s ioctl %08x not handled\n", is_vic ? "vic" : "nvdec", cmd); }
     pm_unlock(&g_hlk);
     return r;
 }

@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Part of cpu_helpers.c, which includes it: floating point with exact ARM semantics: rounding, conversion to integers, min and max, NaNs, square root. Not compiled on its own. */
@@ -58,6 +58,21 @@ static f64 pnan64(f64 a, f64 b) {
     if (snan64(a)) return quiet64(a);
     if (snan64(b)) return quiet64(b);
     return isnan64(a) ? a : b;
+}
+/* FPMulAdd's NaN result, for when d + a*b came out a NaN (FMLA32's rare path in cpu.h): FPProcessNaNs3 over the
+   addend, op1 and op2 (the first signalling NaN quieted, else the first quiet NaN), except that a quiet NaN addend
+   with inf*0 gives the default NaN, as does an invalid operation on numbers (inf*0, inf-inf) */
+f32 fp_fmanan32(f32 d, f32 a, f32 b) {
+    u32 n = 0x7FC00000u;
+    f32 r;
+    if (snan32(d)) return quiet32(d);
+    if (snan32(a)) return quiet32(a);
+    if (snan32(b)) return quiet32(b);
+    if (isnan32(d) && !((isinf32(a) && b == 0) || (a == 0 && isinf32(b)))) return d;
+    if (isnan32(a)) return a;
+    if (isnan32(b)) return b;
+    memcpy(&r, &n, 4);
+    return r;
 }
 static f64 trunc_(f64 x) {
     if (!(fabs_(x) < 4503599627370496.0)) return x;

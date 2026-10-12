@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright 2026 the SwitchRecomp fork contributors
 #
-# FFmpeg's libavcodec and libavutil as static libraries (targets FFmpeg::avcodec and FFmpeg::avutil), built from the
-# release source in cmake/dependencies.cmake with FFmpeg's own configure and make, which it has instead of a CMake
-# build. Only the decoders NVDEC handles are in (H.264, VP8, VP9): no programs, formats, filters, devices, network or
-# autodetected system libraries, so the result needs nothing but libc and builds the same everywhere. It needs a POSIX
-# shell and make (gmake on the BSDs), and NASM for the x86-64 assembly.
+# FFmpeg's libavcodec, libswresample and libavutil as static libraries (targets FFmpeg::avcodec, FFmpeg::swresample
+# and FFmpeg::avutil), built from the release source in cmake/dependencies.cmake with FFmpeg's own configure and make,
+# which it has instead of a CMake build. Only the decoders NVDEC handles are in (H.264, VP8, VP9), and Opus for hwopus
+# (FFmpeg's Opus decoder resamples its SILK layer with libswresample, which is why that library is in): no programs,
+# formats, filters, devices, network or autodetected system libraries, so the result needs nothing but libc and builds
+# the same everywhere. All of it is LGPL (no --enable-gpl). It needs a POSIX shell and make (gmake on the BSDs), and
+# NASM for the x86-64 assembly.
 # This file is included into the top-level scope: its variables carry the swr_ffmpeg_ prefix.
 set(swr_ffmpeg_src "${FFmpeg_SOURCE_DIR}")
 set(swr_ffmpeg_prefix "${CMAKE_BINARY_DIR}/ffmpeg")
@@ -37,9 +39,8 @@ set(swr_ffmpeg_args
     --disable-avformat
     --disable-avfilter
     --disable-swscale
-    --disable-swresample
     --disable-iconv
-    --enable-decoder=h264,vp8,vp9
+    --enable-decoder=h264,vp8,vp9,opus
     --cc=${CMAKE_C_COMPILER}
     --cxx=${CMAKE_CXX_COMPILER}
     --ar=${CMAKE_AR}
@@ -98,7 +99,8 @@ ExternalProject_Add(ffmpeg_build
     CONFIGURE_COMMAND "${SWR_FFMPEG_SH}" "${swr_ffmpeg_src}/configure" ${swr_ffmpeg_args}
     BUILD_COMMAND "${SWR_FFMPEG_MAKE}" -j${swr_ffmpeg_jobs}
     INSTALL_COMMAND "${SWR_FFMPEG_MAKE}" install
-    BUILD_BYPRODUCTS "${swr_ffmpeg_prefix}/lib/libavcodec.a" "${swr_ffmpeg_prefix}/lib/libavutil.a"
+    BUILD_BYPRODUCTS "${swr_ffmpeg_prefix}/lib/libavcodec.a" "${swr_ffmpeg_prefix}/lib/libswresample.a"
+                     "${swr_ffmpeg_prefix}/lib/libavutil.a"
     # configure and make print a lot: keep it in log files, shown when a step fails
     LOG_CONFIGURE ON
     LOG_BUILD ON
@@ -120,7 +122,13 @@ if(WIN32)
 else()
     target_link_libraries(FFmpeg::avutil INTERFACE Threads::Threads m)
 endif()
+add_library(FFmpeg::swresample STATIC IMPORTED GLOBAL)
+set_target_properties(FFmpeg::swresample PROPERTIES IMPORTED_LOCATION "${swr_ffmpeg_prefix}/lib/libswresample.a"
+                                                    SYSTEM OFF)
+target_link_libraries(FFmpeg::swresample INTERFACE FFmpeg::avutil)
+add_dependencies(FFmpeg::swresample ffmpeg_build)
 add_library(FFmpeg::avcodec STATIC IMPORTED GLOBAL)
 set_target_properties(FFmpeg::avcodec PROPERTIES IMPORTED_LOCATION "${swr_ffmpeg_prefix}/lib/libavcodec.a" SYSTEM OFF)
-target_link_libraries(FFmpeg::avcodec INTERFACE FFmpeg::avutil)
+# the Opus decoder in libavcodec calls libswresample
+target_link_libraries(FFmpeg::avcodec INTERFACE FFmpeg::swresample FFmpeg::avutil)
 add_dependencies(FFmpeg::avcodec ffmpeg_build)

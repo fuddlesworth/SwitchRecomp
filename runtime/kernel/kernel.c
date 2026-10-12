@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* HLE kernel objects: handles, references, waiting and waking, events. Threads are in thread.c, synchronization in
@@ -126,13 +126,12 @@ static void ev_destroy(KObj* o) {
     free(o->waiters);
     free(o);
 }
-KEvent* kevent_new(const char* name, int autoclear) {
+KEvent* kevent_new(const char* name) {
     KEvent* e = calloc(1, sizeof *e);
     e->o.type = KO_EVENT;
     e->o.is_signaled = ev_sig;
     e->o.destroy = ev_destroy;
     e->o.name = name;
-    e->autoclear = autoclear;
     return e;
 }
 void kevent_signal(KEvent* e) {

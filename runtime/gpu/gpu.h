@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* GPU state shared between the engines and the backends */
@@ -70,7 +70,10 @@ void gpu_init(void);
 void gpu_submit(u64* entries, u32 n, u32 channel, u32 incs);
 void gpu_channel_close(u32 channel); /* nvdrv closed the channel: a new one with the same id starts from reset */
 extern volatile u64 g_gpu_submits;
-extern void (*g_ww_touch)(u64 cpu); /* GPU wrote guest memory, record it for write tracking */
+/* guest memory [cpu_addr, cpu_addr + len) changed without a write the host's write tracking sees: decommitted pages,
+   which now read as zero (kernel/mem.c). Caches over that memory check it again. Any thread */
+void gpu_mem_changed(u64 cpu_addr, u64 len);
+extern void (*g_gpu_mem_changed)(u64 cpu_addr, u64 len); /* the renderer's side of it, set when it starts */
 /* the renderer lands work it is holding (compute results) before the stream goes on past it: before a write of
    memory those results overlap (size > 0), and before anything the game can observe (gpu_signal_point, size 0) */
 extern void (*g_gpu_before_write)(u64 gva, u64 size);

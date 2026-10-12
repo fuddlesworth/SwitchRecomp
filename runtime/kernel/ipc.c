@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* HIPC/CMIF (+domains). Requests are served on the calling thread, no server threads and
@@ -101,8 +101,7 @@ int stub_ok(SvcObj* o, IpcCtx* c) {
     return 0;
 }
 void ipc_out_overflow(IpcCtx* c) {
-    static int said;
-    if (!said++) WARN("IPC: the reply to cmd %u is larger than the message buffer, cut short\n", c->cmd);
+    WARN_LIMIT(1, "IPC: the reply to cmd %u is larger than the message buffer, cut short\n", c->cmd);
 }
 
 /* ============================================================ registry */

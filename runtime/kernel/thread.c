@@ -1,9 +1,10 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* threads: creating, starting, the thread a host thread runs, exiting */
 #include "kernel/kernel_int.h"
+#include "gpu/renderer.h"
 /* ============================================================ threads */
 KThread* g_threads[256];
 int g_nthreads;
@@ -41,10 +42,8 @@ KThread* kthread_create(u64 entry, u64 arg, u64 stack_top, int prio, int core) {
         while (i < 256 && g_threads[i]->state != 2) i++;
         if (i < 256)
             g_threads[i] = t;
-        else {
-            static int said;
-            if (!said++) WARN("kernel: more than 256 live threads, the dumps leave the newest out\n");
-        }
+        else
+            WARN_LIMIT(1, "kernel: more than 256 live threads, the dumps leave the newest out\n");
     }
     pm_unlock(&g_klock);
     CPU* c = &t->cpu;
@@ -116,10 +115,11 @@ void kernel_run_main(u64 entry, u64 stack_size, int prio, int core) {
 }
 
 /* svcExitProcess. exit() would run the atexit handlers and tear the runtime down while the other guest threads still
-   run in it, so the process ends at once, the way main.c ends it when the window closes */
+   run in it, so the process ends at once, the way main.c ends it when the window closes (with the hints and the
+   renderer's pipeline cache saved first, as there) */
 void process_exit(int code) {
     save_hints();
+    if (g_renderer && g_renderer->save) g_renderer->save();
     LOG("The game exited (code %d)\n", code);
-    fflush(NULL);
-    _Exit(code);
+    plat_exit_now(code);
 }

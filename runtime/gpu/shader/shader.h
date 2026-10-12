@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Maxwell (GM20B) shader -> GLSL 4.50 translator, for Vulkan (gpu/vk/spirv.c compiles the result to SPIR-V) */
@@ -28,6 +28,7 @@ typedef struct {
     u32 in_mask;       /* generic attribs 0..31 read */
     u32 attr_int_mask; /* key: integer VS attribs */
     u32 attr_sint_mask;
+    u32 clip_enable; /* key: the clip distances the 3D engine enables (SetUserClipEnable), others aren't written */
     int uses_position_in, uses_clip_mask, writes_layer, writes_point_size;
     u32 gbuf_cbuf_off[16];
     int ngbuf;       /* global buffers found (their cbuf0 offset) */

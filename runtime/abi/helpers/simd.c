@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Part of cpu_helpers.c, which includes it: AdvSIMD arithmetic: lanes, saturation, per-lane floating point, and the instruction groups (three-same, three-different, two-register, across lanes, copy, modified and shift immediates, by-element, permute, TBL). Not compiled on its own. */
@@ -247,6 +247,14 @@ static int simd_3same(CPU* c, u32 w, int scalar) {
                          : sel == 5 ? fp_min32(p, q)
                          : sel == 6 ? fp_maxnm32(p, q)
                                     : fp_minnm32(p, q);
+                continue;
+            }
+            if (!sz && (acc || sel == 10 || sel == 11)) { /* FMLA FMLS FRECPS FRSQRTS: the same, for their NaN choice */
+                f32 p = va->f[ka], q = vb->f[kb];
+                r.f[i] = acc == 1    ? fp_fma32(p, q, d.f[i])
+                         : acc == 2  ? fp_fma32(-p, q, d.f[i])
+                         : sel == 10 ? fp_recps32(p, q)
+                                     : fp_rsqrts32(p, q);
                 continue;
             }
             if (cmp >= 0) {
@@ -1178,6 +1186,17 @@ static int simd_elem(CPU* c, u32 w, int scalar) {
         int n = scalar ? 1 : (sz ? 2 : (Q ? 4 : 2));
         for (int i = 0; i < n; i++) {
             f64 x = rdf(&a, sz, i), v;
+            if (!sz) { /* f32 straight from the lanes: via double, a signalling NaN would arrive quiet and lose its
+                          priority over a quiet NaN in the other operand (FPProcessNaNs) */
+                f32 p = a.f[i], e = VR(m)->f[idx];
+                if (op == 1 || op == 5)
+                    r.f[i] = fp_fma32(op == 1 ? p : -p, e, d.f[i]);
+                else if (!U)
+                    r.f[i] = isnan32(p) || isnan32(e) ? pnan32(p, e) : p * e;
+                else
+                    r.f[i] = fp_mulx32(p, e);
+                continue;
+            }
             if (op == 1)
                 v = fmla_(rdf(&d, sz, i), x, b, sz);
             else if (op == 5)

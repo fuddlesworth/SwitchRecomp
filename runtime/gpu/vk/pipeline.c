@@ -15,9 +15,12 @@
 #include "platform/plat.h"
 #include "gpu/vk/vk.h"
 #include "gpu/vk/spirv.h"
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 /* The caches live in shader_cache/ next to the games, shared by all of them, wherever the runtime was started from */
-static char g_cache_dir[1100], g_pcache_path[1200], g_pcache_tmp[1210];
+static char g_cache_dir[1100], g_pcache_path[1200], g_pcache_tmp[1230];
 char g_vk_spirv_dir[1100];
 static int g_pcache_dirty; /* pipelines made since the cache was last written (atomic: it is saved outside vk_lock) */
 
@@ -59,6 +62,15 @@ char* vk_translate(const u8* code, u32 max_bytes, int stage, ShaderInfo* si, VkC
     char* src = shader_to_glsl(code, max_bytes, stage, si);
     g_shader_cb_read = old;
     return src;
+}
+/* shader_hash with the jump tables of BRX read through read, as the translation reads them: without a reader the
+   length stops at the first EXIT and leaves out code only a jump table reaches */
+u64 vk_shader_hash(const u8* code, u32 max_bytes, u32* out_len, VkCbReader read) {
+    int (*old)(u32, u32, u32*) = g_shader_cb_read;
+    g_shader_cb_read = read;
+    u64 h = shader_hash(code, max_bytes, out_len);
+    g_shader_cb_read = old;
+    return h;
 }
 int vk_cb_reads_hold(const VkCbReads* reads, VkCbReader read) {
     for (u32 i = 0; i < reads->n; i++) {
@@ -136,21 +148,19 @@ void vk_pipeline_init(void) {
     snprintf(g_vk_spirv_dir, sizeof g_vk_spirv_dir, "%s/spirv", g_cache_dir);
     plat_mkdir(g_vk_spirv_dir);
     snprintf(g_pcache_path, sizeof g_pcache_path, "%s/vk_pipelines.bin", g_cache_dir);
-    snprintf(g_pcache_tmp, sizeof g_pcache_tmp, "%s.tmp", g_pcache_path);
+    /* the temporary name is the process's own: two games running at once would otherwise write the same file */
+#if defined(_WIN32)
+    unsigned pid = (unsigned)GetCurrentProcessId();
+#else
+    unsigned pid = (unsigned)getpid();
+#endif
+    snprintf(g_pcache_tmp, sizeof g_pcache_tmp, "%s.%u.tmp", g_pcache_path, pid);
     /* the driver's compiled pipelines from earlier runs; it ignores data from another device or driver version */
     VkPipelineCacheCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-    void* data = NULL;
-    FILE* f = fopen(g_pcache_path, "rb");
-    if (f) {
-        fseek(f, 0, SEEK_END);
-        long n = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        data = n > 0 ? malloc((size_t)n) : NULL;
-        if (data && fread(data, 1, (size_t)n, f) == (size_t)n) {
-            ci.initialDataSize = (size_t)n;
-            ci.pInitialData = data;
-        }
-        fclose(f);
+    PFileMap data;
+    if (!plat_file_map(&data, g_pcache_path) && data.data) {
+        ci.initialDataSize = (size_t)data.size;
+        ci.pInitialData = data.data;
     }
     if (!VK_OK(vkCreatePipelineCache(g_vk.dev, &ci, NULL, &g_pcache)) && ci.initialDataSize) {
         ci.initialDataSize = 0;
@@ -158,7 +168,7 @@ void vk_pipeline_init(void) {
         VK_OK(vkCreatePipelineCache(g_vk.dev, &ci, NULL, &g_pcache));
     }
     if (ci.initialDataSize) LOG("vulkan: pipeline cache loaded (%zu KB)\n", ci.initialDataSize >> 10);
-    free(data);
+    plat_file_unmap(&data); /* the cache copied it, and a mapped file can't be replaced on Windows */
 }
 
 /* ------------------------------------------------------------ shaders */
@@ -168,7 +178,7 @@ static VkSh* g_shh[1024];
    by write tracking since then, or else by the hash of its code */
 typedef struct {
     u64 gva, gva_a, gw;
-    u32 mask[4], epoch, wseen;
+    u32 mask[5], epoch, wseen;
     int stage;
     VkSh* s;
 } ShA;
@@ -188,10 +198,11 @@ static int code_same(const ShA* ca, u64 gva, u32 len, u64 qh) {
     return code_hash(gva, len) == qh;
 }
 
-VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, u32 rt_int, u32 rt_sint) {
+VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, u32 rt_int, u32 rt_sint, u32 clip) {
     g_sh_bind = stage == ST_VS ? 0 : 4;
-    u32 mask[4] = {int_mask, sint_mask, rt_int, rt_sint};
-    u32 mix = int_mask * 0x9E3779B1u ^ sint_mask * 0x85EBCA6Bu ^ rt_int * 0x27D4EB2Fu ^ rt_sint * 0x165667B1u;
+    u32 mask[5] = {int_mask, sint_mask, rt_int, rt_sint, clip};
+    u32 mix = int_mask * 0x9E3779B1u ^ sint_mask * 0x85EBCA6Bu ^ rt_int * 0x27D4EB2Fu ^ rt_sint * 0x165667B1u ^
+              clip * 0x61C88647u;
     ShA* set = &g_sha[(u32)((gva >> 6) ^ (gva >> 18) ^ (gva_a >> 4) ^ mix ^ ((u32)stage << 11)) & 4094];
     ShA* ca = NULL;
     for (int w = 0; w < 2 && !ca; w++)
@@ -216,30 +227,31 @@ VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, 
     gmem_read(gva, code, 0x10000);
     u32 len, len_a = 0;
     u64 qh, qh_a = 0;
-    shader_hash(code, 0x10000, &len);
+    vk_shader_hash(code, 0x10000, &len, sh_cb_read);
     qh = vk_hash(code, len);
     if (gva_a) { /* VertexA + VertexB: one merged program */
         u8* a = malloc(0x10000);
         gmem_read(gva_a, a, 0x10000);
-        shader_hash(a, 0x10000, &len_a);
+        vk_shader_hash(a, 0x10000, &len_a, sh_cb_read);
         qh_a = vk_hash(a, len_a);
         u8* m = malloc(0x10000);
-        if (shader_merge_dual(a, code, m, 0x10000)) {
+        /* the merge sizes A and B with shader_hash too */
+        int (*old)(u32, u32, u32*) = g_shader_cb_read;
+        g_shader_cb_read = sh_cb_read;
+        int merged = shader_merge_dual(a, code, m, 0x10000);
+        g_shader_cb_read = old;
+        if (merged) {
             free(code);
             code = m;
         } else {
             free(m);
-            static int said;
-            if (said < 8) {
-                said++;
-                WARN("vulkan: VertexA %llx and VertexB %llx couldn't be merged: VertexB runs alone\n",
-                     (unsigned long long)gva_a, (unsigned long long)gva);
-            }
+            WARN_LIMIT(8, "vulkan: VertexA %llx and VertexB %llx couldn't be merged: VertexB runs alone\n",
+                       (unsigned long long)gva_a, (unsigned long long)gva);
         }
         free(a);
     }
     u32 mlen;
-    u64 h = shader_hash(code, 0x10000, &mlen);
+    u64 h = vk_shader_hash(code, 0x10000, &mlen, sh_cb_read);
     VkSh* s = NULL;
     for (VkSh* q = g_shh[h & 1023]; q && !s; q = q->next)
         if (q->hash == h && q->stage == stage && !memcmp(q->mask, mask, sizeof mask) &&
@@ -262,6 +274,7 @@ VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, 
         } else {
             s->si.attr_int_mask = int_mask;
             s->si.attr_sint_mask = sint_mask;
+            s->si.clip_enable = clip;
         }
         {
             static const char* corpus = (const char*)-1;
@@ -416,11 +429,8 @@ static VkPipeline pipe_create(const PipeKey* k) {
             cba[i] = cba[0];
         }
     if (changed) {
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: blending that needs dual-source or independent blend, which this GPU lacks, is simplified\n");
-        }
+        LOG_LIMIT(
+            1, "vulkan: blending that needs dual-source or independent blend, which this GPU lacks, is simplified\n");
     }
     VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
                                               .attachmentCount = k->ncolor,
@@ -494,24 +504,30 @@ VkPipelineCache vk_pipeline_cache(void) {
     __atomic_store_n(&g_pcache_dirty, 1, __ATOMIC_RELAXED);
     return g_pcache;
 }
-/* writes the pipeline cache when pipelines were made since the last write (called every few seconds, outside
-   vk_lock: the driver synchronizes the cache itself) */
+/* writes the pipeline cache when pipelines were made since the last write. Called every few seconds and at exit
+   (the renderer's save), outside vk_lock: the driver synchronizes the cache itself. Saves one at a time, so the one
+   at exit waits for a periodic one in progress to finish its file before the process ends */
+static PMutex g_psave = PMUTEX_INIT;
 void vk_pipeline_save(void) {
-    if (!g_pcache || !__atomic_exchange_n(&g_pcache_dirty, 0, __ATOMIC_RELAXED)) return;
+    pm_lock(&g_psave);
+    if (!g_pcache || !__atomic_exchange_n(&g_pcache_dirty, 0, __ATOMIC_RELAXED)) {
+        pm_unlock(&g_psave);
+        return;
+    }
     size_t n = 0;
-    if (vkGetPipelineCacheData(g_vk.dev, g_pcache, &n, NULL) != VK_SUCCESS || !n) return;
-    void* d = malloc(n);
+    void* d = NULL;
+    if (vkGetPipelineCacheData(g_vk.dev, g_pcache, &n, NULL) == VK_SUCCESS && n) d = malloc(n);
     if (d && vkGetPipelineCacheData(g_vk.dev, g_pcache, &n, d) == VK_SUCCESS) {
         FILE* f = fopen(g_pcache_tmp, "wb");
         if (f) {
             int ok = fwrite(d, 1, n, f) == n;
-            fclose(f);
-            if (ok) {
-                remove(g_pcache_path); /* rename doesn't replace on Windows */
-                rename(g_pcache_tmp, g_pcache_path);
-            } else
+            if (fclose(f)) ok = 0;
+            if (ok)
+                plat_replace_file(g_pcache_tmp, g_pcache_path); /* the old cache stays whole until this */
+            else
                 remove(g_pcache_tmp);
         }
     }
     free(d);
+    pm_unlock(&g_psave);
 }

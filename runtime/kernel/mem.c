@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Guest address space. One big host reservation, guest address == offset into it.
@@ -154,12 +154,8 @@ int mem_unmap(u64 a, u64 s) {
             i++;
     }
     plat_vm_decommit(GP(a), s);
-    {
-        if (g_ww_touch && s) {
-            for (u64 o = 0; o < s; o += 0x10000) g_ww_touch(a + o);
-            g_ww_touch(a + s - 1);
-        }
-    } /* fresh pages read as zero */
+    /* the pages read as zero now, and no write the GPU caches' write tracking sees zeroed them */
+    gpu_mem_changed(a, s);
     memunlock();
     return 0;
 }

@@ -352,11 +352,7 @@ int vk_swapchain_create(int srgb) {
         }
     free(fs);
     if (srgb && fmt.format != VK_FORMAT_B8G8R8A8_SRGB && fmt.format != VK_FORMAT_R8G8B8A8_SRGB) {
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: the window has no sRGB format: frames in sRGB show darker\n");
-        }
+        LOG_LIMIT(1, "vulkan: the window has no sRGB format: frames in sRGB show darker\n");
     }
 
     /* no vsync: the runtime paces frames itself (fps_limit) */

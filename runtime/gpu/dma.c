@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the copy engine: DMA between linear and block-linear surfaces in guest memory */
@@ -18,24 +18,10 @@ static u8* bl_span_ptr(u64 base, u32 wbytes, u32 h, u32 bh, u32 z, u32 bd, u64* 
     if (p) *span = sz;
     return p;
 }
-static void bl_span_done(u64 base, u64 span) {
-    if (g_ww_touch) {
-        u8* p = gmem_ptr(base, span);
-        if (p)
-            for (u64 o = 0; o < span; o += 0x10000) g_ww_touch((u64)(p - g_mem) + o);
-    }
-    gpu_mem_written(base, span);
-}
 /* a line's buffer; NULL (said once) when there is no memory, and the copy is left out */
 static u8* dma_buf(u32 len) {
     u8* b = malloc(len ? len : 1);
-    if (!b) {
-        static int said;
-        if (!said) {
-            said = 1;
-            WARN("dma: no memory for a line of %u bytes, copy left out\n", len);
-        }
-    }
+    if (!b) WARN_LIMIT(1, "dma: no memory for a line of %u bytes, copy left out\n", len);
     return b;
 }
 void dma_method(GpuChannel* ch, u32 m, u32 v) {
@@ -89,31 +75,20 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
         }
     }
     if (!multi && (!src_linear || !dst_linear)) { /* Ryujinx copies line_len bytes flat without MULTI_LINE_ENABLE */
-        static int said;
-        if (said < 4) {
-            said++;
-            LOG("dma: single-line copy with a block linear %s (launch %x), copied through the layout\n",
-                src_linear ? "destination" : "source", v);
-        }
+        LOG_LIMIT(4, "dma: single-line copy with a block linear %s (launch %x), copied through the layout\n",
+                  src_linear ? "destination" : "source", v);
     }
     if (remap && (r[0x1C2] & 0x7777) == 0x4444) { /* every destination component is CONST_A: a fill, not a copy */
-        static int said;
-        if (said < 4) {
-            said++;
-            LOG("dma: remap writes constant A (%x) to every component (remap %x), copied from the source instead\n",
-                r[0x1C0], r[0x1C2]);
-        }
+        LOG_LIMIT(4,
+                  "dma: remap writes constant A (%x) to every component (remap %x), copied from the source instead\n",
+                  r[0x1C0], r[0x1C2]);
     }
-    {
-        static int said;
-        if (said < 6) {
-            said++;
-            LOG("dma: %s->%s src=%llx dst=%llx pitch %u/%u len=%u lines=%u multi=%d remap=%d(%x) dst[bh=%u w=%u h=%u d=%u l=%u o=%x] src[bh=%u w=%u h=%u o=%x] launch=%x\n",
-                src_linear ? "lin" : "bl", dst_linear ? "lin" : "bl", (unsigned long long)src, (unsigned long long)dst,
-                pitch_in, pitch_out, line_len, lines, multi, remap, r[0x1C2], dbh, dw, dh, r[0x1C6], r[0x1C7], r[0x1C8],
-                sbh, sw, sh, r[0x1CF], v);
-        }
-    }
+    LOG_LIMIT(
+        6,
+        "dma: %s->%s src=%llx dst=%llx pitch %u/%u len=%u lines=%u multi=%d remap=%d(%x) dst[bh=%u w=%u h=%u d=%u l=%u o=%x] src[bh=%u w=%u h=%u o=%x] launch=%x\n",
+        src_linear ? "lin" : "bl", dst_linear ? "lin" : "bl", (unsigned long long)src, (unsigned long long)dst,
+        pitch_in, pitch_out, line_len, lines, multi, remap, r[0x1C2], dbh, dw, dh, r[0x1C6], r[0x1C7], r[0x1C8], sbh,
+        sw, sh, r[0x1CF], v);
     if (g_renderer_up) {
         g_renderer->rt_flush(src);
         g_renderer->rt_flush(dst);
@@ -155,7 +130,7 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
             }
         }
         free(buf);
-        bl_span_done(dst, dspan);
+        gpu_mem_written(dst, dspan);
     } else if (src_linear && !dst_linear) {
         u32 wb = dw * (remap ? bpp : 1);
         u8* buf = dma_buf(line_len);
@@ -207,7 +182,7 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
                 }
                 x += n;
             }
-        bl_span_done(dst, dspan);
+        gpu_mem_written(dst, dspan);
     } else {
         u32 swb = sw * (remap ? bpp : 1), dwb = dw * (remap ? bpp : 1);
         for (u32 y = 0; y < lines; y++)

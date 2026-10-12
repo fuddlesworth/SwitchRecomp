@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the audio renderer's RequestUpdate, answered in the real format with no sound produced */
@@ -65,12 +65,8 @@ int audren_update(SvcObj* o, IpcCtx* c) {
     u32 behav = ih[1], mp = ih[2], vo = ih[3], vr = ih[4], ef = ih[5];
     /* the sections read below have to be in the input buffer: their sizes come from the game */
     if (0x40 + (u64)behav + mp + vr + vo + ef > is) {
-        static int said;
-        if (said < 4) {
-            said++;
-            WARN("audren: update sections (%u %u %u %u %u bytes) don't fit in the %llu byte input\n", behav, mp, vr, vo,
-                 ef, (unsigned long long)is);
-        }
+        WARN_LIMIT(4, "audren: update sections (%u %u %u %u %u bytes) don't fit in the %llu byte input\n", behav, mp,
+                   vr, vo, ef, (unsigned long long)is);
         return RC(153, 41);
     }
     u32 npools = mp / 0x20, nvoices = vo / 0x170, neff = ef / 0xC0, nsinks = ih[7] / 0x140;
@@ -86,11 +82,8 @@ int audren_update(SvcObj* o, IpcCtx* c) {
         o_pf = 0x10, o_bh = 0xB0, o_ri = revn >= 5 ? 0x10 : 0;
     u64 total = 0x40 + (u64)o_mp + o_vo + o_ef + o_sk + o_pf + o_bh + o_ri;
     if (total > os) {
-        static int said;
-        if (said < 4) {
-            said++;
-            WARN("audren: output buffer too small (%llu > %llu)\n", (unsigned long long)total, (unsigned long long)os);
-        }
+        WARN_LIMIT(4, "audren: output buffer too small (%llu > %llu)\n", (unsigned long long)total,
+                   (unsigned long long)os);
         return RC(153, 4);
     }
     ARState* s = ar_state(o);
@@ -112,11 +105,7 @@ int audren_update(SvcObj* o, IpcCtx* c) {
     oh[9] = 0;
     oh[10] = o_ri;
     oh[15] = (u32)total;
-    static int said;
-    if (!said) {
-        said = 1;
-        LOG("audren: REV%d, %u pools, %u voices, %u effects, %u sinks\n", revn, npools, nvoices, neff, nsinks);
-    }
+    LOG_LIMIT(1, "audren: REV%d, %u pools, %u voices, %u effects, %u sinks\n", revn, npools, nvoices, neff, nsinks);
     memset(out, 0, total);
     memcpy(out, oh, 64);
     u8* q = out + 0x40;

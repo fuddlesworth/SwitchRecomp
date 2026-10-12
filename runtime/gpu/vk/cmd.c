@@ -256,11 +256,7 @@ VkDescriptorSet vk_desc_alloc(VkDescriptorSetLayout layout) {
     for (int tries = 0; tries < 2; tries++) {
         if (!f->npool || tries) {
             if (f->npool == (int)(sizeof f->pool_d / sizeof f->pool_d[0])) {
-                static int said;
-                if (!said) {
-                    said = 1;
-                    LOG("vulkan: a frame used all its descriptor pools (draws skipped)\n");
-                }
+                LOG_LIMIT(1, "vulkan: a frame used all its descriptor pools (draws skipped)\n");
                 return VK_NULL_HANDLE;
             }
             VkDescriptorPool p = desc_pool_new();

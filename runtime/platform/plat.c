@@ -1,11 +1,12 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 #define _GNU_SOURCE
 /* what every platform shares: the guest thread pointer, logging and fatal errors. The rest of the platform layer is
    plat_posix.c or plat_win32.c (with profiler_win32.c) */
 #include "platform/plat.h"
+#include "core/loader.h"
 #include "core/main.h"
 #include "platform/backend.h"
 #include "platform/log.h"
@@ -20,6 +21,20 @@ __thread void* tls_thread;
 int g_verbose = 1;
 static FILE* g_logf;
 static int g_logf_failed; /* the log couldn't be created: said once on stderr instead of retried every line */
+/* the lines logged before the log is created, written at its top when it is. Only the first ones when they don't all
+   fit: a gap in the middle would mislead more than a short start */
+static char g_logpend[4096];
+static size_t g_logpend_n;
+static int g_logpend_cut;
+static void logpend(const char* s) {
+    size_t L = strlen(s);
+    if (g_logpend_cut || L > sizeof g_logpend - g_logpend_n) {
+        g_logpend_cut = 1;
+        return;
+    }
+    memcpy(g_logpend + g_logpend_n, s, L);
+    g_logpend_n += L;
+}
 /* initialized statically: logf_ runs on several threads from the start, and a lazy pm_init could race */
 static PMutex g_logm = PMUTEX_INIT;
 static volatile int g_log_crash; /* log_crash_mode */
@@ -69,24 +84,30 @@ void logf_(int lvl, const char* fmt, ...) {
     char tb[24];
     snprintf(tb, sizeof tb, "[%7.2f] ", (double)(now - t0) / 1e9);
     pm_lock(&g_logm);
-    /* until main knows the game's name (a fatal error about the command line) only stderr: the log would be created
-       in the current folder */
-    if (!g_logf && !g_logf_failed && g_exename[0]) {
+    /* the log is created once the game's code has loaded (g_mod): a mistyped --game, or a dump named instead of a
+       game, leaves no stray <name>.log. Until then the lines go to stderr, and are kept for the log's top */
+    if (!g_logf && !g_logf_failed && g_mod) {
         char p[1200];
         snprintf(p, sizeof p, "%s%s.log", g_exedir, g_exename);
         g_logf = fopen(p, "w");
         if (!g_logf) {
             g_logf_failed = 1;
             fprintf(stderr, "Could not create the log %s, so it only goes to the console.\n", p);
-        }
+        } else if (g_logpend_n)
+            fwrite(g_logpend, 1, g_logpend_n, g_logf);
     }
-    if (g_logf) {
+    {
         static int bol = 1;
-        if (bol) fputs(tb, g_logf);
-        fputs(buf, g_logf);
+        if (g_logf) {
+            if (bol) fputs(tb, g_logf);
+            fputs(buf, g_logf);
+            fflush(g_logf);
+        } else if (!g_logf_failed) {
+            if (bol) logpend(tb);
+            logpend(buf);
+        }
         size_t L = strlen(buf);
         bol = L && buf[L - 1] == '\n';
-        fflush(g_logf);
     }
     if (lvl <= 1 || g_verbose >= 2) { fputs(buf, stderr); }
     pm_unlock(&g_logm);

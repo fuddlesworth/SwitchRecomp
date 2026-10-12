@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* time: clocks and the time zone */
@@ -10,14 +10,16 @@
    g_clock_id as its source id. The system clocks are a SystemClockContext {i64 offset; SteadyClockTimePoint
    {i64 time; u8 source_id[16]}} on it: the time is offset + the steady time, and offset is set once at startup
    from the host's clock, so the IPC answers and the shared memory agree */
-static KShmem* g_time_shm;
-static i64 g_tz_off;  /* local - UTC, seconds: the guest's wall clock is the host's local time */
-static i64 g_sys_off; /* the system clocks' offset */
+static struct {
+    KShmem* shm;
+    i64 tz_off;  /* local - UTC, seconds: the guest's wall clock is the host's local time */
+    i64 sys_off; /* the system clocks' offset */
+} timesvc;
 static u8 g_clock_id[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
 static i64 steady_s(void) { return (i64)(guest_ns() / 1000000000ull); }
 static void sysclock_ctx(u8 out[0x20]) {
     i64 tp = steady_s();
-    memcpy(out, &g_sys_off, 8);
+    memcpy(out, &timesvc.sys_off, 8);
     memcpy(out + 8, &tp, 8);
     memcpy(out + 16, g_clock_id, 16);
 }
@@ -34,7 +36,7 @@ static int ctx_time(const u8* ctx, i64* t) {
 }
 static int sysclock_disp(SvcObj* o, IpcCtx* c) {
     switch (c->cmd) {
-        case 0: out64(c, (u64)(g_sys_off + steady_s())); return 0; /* GetCurrentTime */
+        case 0: out64(c, (u64)(timesvc.sys_off + steady_s())); return 0; /* GetCurrentTime */
         case 1: return 0;
         case 2: { /* GetSystemClockContext */
             u8 ctx[0x20];
@@ -43,7 +45,7 @@ static int sysclock_disp(SvcObj* o, IpcCtx* c) {
             return 0;
         }
         case 3: return 0;
-        case 4: out_copy_h(c, ev_handle(kevent_new("clock op", 0))); return 0; /* GetOperationEventReadableHandle */
+        case 4: out_copy_h(c, ev_handle(kevent_new("clock op"))); return 0; /* GetOperationEventReadableHandle */
     }
     return stub_ok(o, c);
 }
@@ -106,7 +108,7 @@ static void to_calendar(i64 t, u8 out[0x20]) {
     memcpy(out + 8, &wday, 4);
     memcpy(out + 12, &yday, 4);
     memcpy(out + 16, "UTC", 4);
-    i32 off = (i32)g_tz_off;
+    i32 off = (i32)timesvc.tz_off;
     memcpy(out + 28, &off, 4);
 }
 static int tz_disp(SvcObj* o, IpcCtx* c) {
@@ -146,7 +148,7 @@ static int tz_disp(SvcObj* o, IpcCtx* c) {
         case 100:
         case 101: {
             u8 cal[0x20];
-            to_calendar((i64)in64(c, 0) + g_tz_off, cal);
+            to_calendar((i64)in64(c, 0) + timesvc.tz_off, cal);
             outbytes(c, cal, 0x20);
             return 0;
         }
@@ -157,7 +159,7 @@ static int tz_disp(SvcObj* o, IpcCtx* c) {
             u16 y = (u16)(in8(c, 0) | in8(c, 1) << 8);
             u8 mo = in8(c, 2), d = in8(c, 3), h = in8(c, 4), mi = in8(c, 5), se = in8(c, 6);
             i64 t = days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + se;
-            t -= g_tz_off;
+            t -= timesvc.tz_off;
             if (a && s >= 8) gw64(a, (u64)t);
             out32(c, 1);
             return 0;
@@ -166,7 +168,7 @@ static int tz_disp(SvcObj* o, IpcCtx* c) {
     return stub_ok(o, c);
 }
 static void time_shm_update(void) {
-    u8* p = kshmem_ptr(g_time_shm);
+    u8* p = kshmem_ptr(timesvc.shm);
     /* steady clock {i64 base_time_ns; u8 id[16]} x2 @0x08/0x20; system clocks {i64 offset; i64 time_point; u8 id[16]} x2 */
     u32 cnt = 0;
     memcpy(p, &cnt, 4);
@@ -181,7 +183,7 @@ static void time_shm_update(void) {
         for (int k = 0; k < 2; k++) {
             u8* e = q + 8 + k * 0x20;
             i64 tp = 0;
-            memcpy(e, &g_sys_off, 8);
+            memcpy(e, &timesvc.sys_off, 8);
             memcpy(e + 8, &tp, 8);
             memcpy(e + 16, g_clock_id, 16);
         }
@@ -215,10 +217,10 @@ static int clock_snapshot(IpcCtx* c, const u8* user, const u8* net, u8 type) {
     ctx_time(net, &nt);
     memcpy(b + 0x40, &ut, 8);
     memcpy(b + 0x48, &nt, 8);
-    to_calendar(ut + g_tz_off, cal);
+    to_calendar(ut + timesvc.tz_off, cal);
     memcpy(b + 0x50, cal, 8);
     memcpy(b + 0x60, cal + 8, 0x18);
-    to_calendar(nt + g_tz_off, cal);
+    to_calendar(nt + timesvc.tz_off, cal);
     memcpy(b + 0x58, cal, 8);
     memcpy(b + 0x78, cal + 8, 0x18);
     i64 tp = steady_s();
@@ -248,10 +250,10 @@ static int time_disp(SvcObj* o, IpcCtx* c) {
         case 2: out_obj(c, svcobj_new("ISteadyClock", steady_disp, 0)); return 0;
         case 3: out_obj(c, svcobj_new("ITimeZoneService", tz_disp, 0)); return 0;
         case 5: out_obj(c, svcobj_new("IEphemeralNetworkSystemClock", sysclock_disp, 0)); return 0;
-        case 20: out_copy_h(c, h_new(&g_time_shm->o)); return 0;
+        case 20: out_copy_h(c, h_new(&timesvc.shm->o)); return 0;
         case 30: /* GetStandardNetworkClockOperationEventReadableHandle */
         case 31: /* GetEphemeralNetworkClockOperationEventReadableHandle */
-            out_copy_h(c, ev_handle(kevent_new("clock op", 0)));
+            out_copy_h(c, ev_handle(kevent_new("clock op")));
             return 0;
         case 100: out8(c, 1); return 0; /* IsStandardUserSystemClockAutomaticCorrectionEnabled */
         case 101: return 0;
@@ -308,10 +310,10 @@ SvcObj* new_time(void) { return svcobj_new("time", time_disp, 0); }
 /* at startup, before any session: the clocks' offsets and the shared memory, which the service keeps for the whole
    run (its reference keeps it alive when the game closes its handle) */
 void time_init(void) {
-    g_tz_off = plat_tz_offset();
-    LOG("time: PC time zone UTC%+.1f\n", g_tz_off / 3600.0);
-    g_sys_off = plat_unix_time() - steady_s();
-    g_time_shm = kshmem_new(0x1000, "time");
-    kobj_ref(&g_time_shm->o);
+    timesvc.tz_off = plat_tz_offset();
+    LOG("time: PC time zone UTC%+.1f\n", timesvc.tz_off / 3600.0);
+    timesvc.sys_off = plat_unix_time() - steady_s();
+    timesvc.shm = kshmem_new(0x1000, "time");
+    kobj_ref(&timesvc.shm->o);
     time_shm_update();
 }

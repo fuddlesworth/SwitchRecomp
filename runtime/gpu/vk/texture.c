@@ -52,7 +52,9 @@ static u64 bl_layer_size(u32 w, u32 h, u32 d, const VkFmt* f, u32 bh, u32 bd, u3
 static void level_convert(const VkFmt* f, const u8* lin, u32 lw, u32 lh, u32 ld, u32 rowb, u8* out) {
     u32 th = (lh + f->bh - 1) / f->bh;
     switch (f->conv) {
-        case VKC_ASTC: astc_decode_image(lin, lw, lh, f->bw, f->bh, out); break;
+        case VKC_ASTC: /* decoded to sRGB storage when the texture header says sRGB (format.c's TA) */
+            astc_decode_image(lin, lw, lh, f->bw, f->bh, out, f->vk == VK_FORMAT_R8G8B8A8_SRGB);
+            break;
         case VKC_RGBA4:
         case VKC_RGB5A1:
         case VKC_A5B5G5R1:
@@ -106,12 +108,9 @@ static void tex_upload(Surf* t) {
     vk_surf_use(cb, t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
                 VK_ACCESS_2_TRANSFER_WRITE_BIT);
     if (f->depth) {
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: depth textures from memory aren't loaded yet, they read as 1.0 (only depth render targets "
-                "are sampled)\n");
-        }
+        LOG_LIMIT(1,
+                  "vulkan: depth textures from memory aren't loaded yet, they read as 1.0 (only depth render targets "
+                  "are sampled)\n");
         /* defined contents rather than whatever the image's memory held: far, so shadow tests pass */
         VkClearDepthStencilValue far = {1.0f, 0};
         VkImageSubresourceRange all = {vk_aspect(f), 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
@@ -323,12 +322,8 @@ static Surf* rt_crop(Surf* rt, u32 w, u32 h) {
         c->crop_gen = ~0u;
         c->next = rt->crop;
         rt->crop = c;
-        static int said;
-        if (said < 10) {
-            said++;
-            LOG("vulkan: %ux%u texture reads the %ux%u render target at %llx: only that region is used\n", w, h, rt->w,
-                rt->h, (unsigned long long)rt->gva);
-        }
+        LOG_LIMIT(10, "vulkan: %ux%u texture reads the %ux%u render target at %llx: only that region is used\n", w, h,
+                  rt->w, rt->h, (unsigned long long)rt->gva);
     }
     c->last_used = g_vk_present;
     if (c->crop_gen != rt->wgen) {
@@ -360,13 +355,6 @@ static VkImageViewType tic_view_type(u32 type, u32 d) {
     return VK_IMAGE_VIEW_TYPE_2D; /* 1D textures are 2D images one texel high */
 }
 
-/* 1 the first time it is asked with this flag: for what is said once */
-static int once(int* said) {
-    if (*said) return 0;
-    *said = 1;
-    return 1;
-}
-
 static u32 g_bud_frame;
 static i64 g_bud;
 Surf* vk_tex_from_tic(const u32* tic) {
@@ -380,12 +368,10 @@ Surf* vk_tex_from_tic(const u32* tic) {
     u32 bh = (tic[3] >> 3) & 7, bd = (tic[3] >> 6) & 7, pitch = bl ? 0 : ((tic[3] & 0xFFFF) << 5);
     if (!gva) return NULL;
     if (hv == 0 || type == 6) { /* a buffer texture: its width spans words 3 and 4, it has no pitch or blocks */
-        static int said;
-        if (once(&said)) LOG("vulkan: buffer textures aren't supported (not drawn)\n");
+        LOG_LIMIT(1, "vulkan: buffer textures aren't supported (not drawn)\n");
         return NULL;
     }
-    static int said_ms;
-    if ((tic[7] >> 8) & 0xF && once(&said_ms)) LOG("vulkan: multisampled textures are read as single-sampled\n");
+    if ((tic[7] >> 8) & 0xF) LOG_LIMIT(1, "vulkan: multisampled textures are read as single-sampled\n");
     if (type == 0 || type == 4) h = 1;
     if (type == 3)
         d = 6;
@@ -395,9 +381,7 @@ Surf* vk_tex_from_tic(const u32* tic) {
     if (!f.bpp || w > 16384 || h > 16384 || d > 2048) return NULL;
     if ((u64)w * h * d * (f.bw > 1 ? 1 : f.bpp) > (512ull << 20)) return NULL;
     if (!bl && pitch < (w + f.bw - 1) / f.bw * f.bpp) {
-        static int said;
-        if (once(&said))
-            LOG("vulkan: a pitch-linear texture's pitch (%u bytes) is shorter than its rows (not drawn)\n", pitch);
+        LOG_LIMIT(1, "vulkan: a pitch-linear texture's pitch (%u bytes) is shorter than its rows (not drawn)\n", pitch);
         return NULL;
     }
     VkImageViewType vt = tic_view_type(type, d);
@@ -435,11 +419,10 @@ Surf* vk_tex_from_tic(const u32* tic) {
             vk_rt_note_read(rt);
             return rt->w == w && rt->h == h ? rt : rt_crop(rt, w, h);
         }
-        static int said;
-        if (once(&said))
-            LOG("vulkan: a texture with %u-byte texels reads the render target at %llx, which has %u-byte pixels: it "
-                "is loaded from memory\n",
-                f.bpp, (unsigned long long)gva, rt->f.bpp);
+        LOG_LIMIT(1,
+                  "vulkan: a texture with %u-byte texels reads the render target at %llx, which has %u-byte pixels: it "
+                  "is loaded from memory\n",
+                  f.bpp, (unsigned long long)gva, rt->f.bpp);
     }
     /* what the device can make */
     const VkPhysicalDeviceLimits* lim = &g_vk.props.limits;
@@ -448,9 +431,7 @@ Surf* vk_tex_from_tic(const u32* tic) {
             ? w > lim->maxImageDimension3D || h > lim->maxImageDimension3D || d3 > lim->maxImageDimension3D
             : w > lim->maxImageDimension2D || h > lim->maxImageDimension2D || layers > lim->maxImageArrayLayers ||
                   (cube && w > lim->maxImageDimensionCube)) {
-        static int said;
-        if (once(&said))
-            LOG("vulkan: a %ux%ux%u texture is bigger than the GPU's images can be (not drawn)\n", w, h, d);
+        LOG_LIMIT(1, "vulkan: a %ux%ux%u texture is bigger than the GPU's images can be (not drawn)\n", w, h, d);
         return NULL;
     }
     u32 ilevels = f.conv == VKC_ASTC ? 1 : levels; /* ASTC is decoded on the CPU: the base level only */
@@ -674,8 +655,7 @@ VkSampler vk_sampler(const u32* tsc) {
     for (u32 probe = 0; probe < TAB && tab[j].s; probe++, j = (j + 1) & (TAB - 1))
         if (!memcmp(tab[j].tsc, tsc, 32)) return tab[j].s;
     if (n >= MAX || tab[j].s) {
-        static int said;
-        if (once(&said)) LOG("vulkan: more than %d sampler states: the others use the first one\n", MAX);
+        LOG_LIMIT(1, "vulkan: more than %d sampler states: the others use the first one\n", MAX);
         return first;
     }
     u32 mag = tsc[1] & 3, min = (tsc[1] >> 4) & 3, mip = (tsc[1] >> 6) & 3;
@@ -687,11 +667,10 @@ VkSampler vk_sampler(const u32* tsc) {
     if (lb < -lbmax) lb = -lbmax;
     static const float aniso_lut[8] = {1, 2, 4, 6, 8, 10, 12, 16}; /* Ryujinx's SamplerDescriptor */
     u32 aniso = (tsc[0] >> 20) & 7;
-    static int said_red, said_srgb;
-    if ((tsc[1] >> 10) & 3 && once(&said_red))
-        LOG("vulkan: min/max sampler reduction isn't supported (filtered as an average)\n");
-    if ((tsc[0] >> 13) & 1 && once(&said_srgb))
-        LOG("vulkan: a sampler's sRGB conversion flag (TSC word 0 bit 13) isn't applied\n");
+    if ((tsc[1] >> 10) & 3)
+        LOG_LIMIT(1, "vulkan: min/max sampler reduction isn't supported (filtered as an average)\n");
+    if ((tsc[0] >> 13) & 1)
+        LOG_LIMIT(1, "vulkan: a sampler's sRGB conversion flag (TSC word 0 bit 13) isn't applied\n");
     VkSamplerCreateInfo si = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
                               .magFilter = mag == 2 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST,
                               .minFilter = min == 2 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST,

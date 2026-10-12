@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* NSO/NRO loading. The code segment has to match what we recompiled byte for byte. */
@@ -7,8 +7,8 @@
 #include "core/main.h"
 #include "kernel/mem.h"
 #include "platform/log.h"
+#include "platform/plat.h"
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 u64 g_code_lo, g_code_hi;
@@ -54,48 +54,31 @@ static int lz4_dec(const u8* src, u32 slen, u8* dst, u32 dlen) {
     return (int)o;
 }
 
-static u8* read_all(const char* path, u64* size) {
-    FILE* f = fopen(path, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (n < 0) {
-        fclose(f);
-        return NULL;
-    }
-    u8* b = malloc(n > 0 ? n : 1);
-    if (fread(b, 1, n, f) != (size_t)n) {
-        fclose(f);
-        free(b);
-        return NULL;
-    }
-    fclose(f);
-    *size = (u64)n;
-    return b;
-}
-
 static int load_one(const SwrModInfo* mi) {
     char p[1200];
-    u64 fsz = 0;
-    u8* f = NULL;
+    /* mapped, not read: the NSOs are tens of MB and only copied out once. The mapping ends at the file's end, so every
+       read below is checked against fsz */
+    PFileMap fm;
+    int found = 0;
     const char* dirs[] = {"exefs/", ""};
-    for (int k = 0; k < 2 && !f; k++) {
+    for (int k = 0; k < 2 && !found; k++) {
         snprintf(p, sizeof p, "%s%s%s", g_datadir, dirs[k], mi->name);
-        f = read_all(p, &fsz);
-        if (!f && mi->is_nro) {
+        found = !plat_file_map(&fm, p);
+        if (!found && mi->is_nro) {
             snprintf(p, sizeof p, "%s%s%s.nro", g_datadir, dirs[k], mi->name);
-            f = read_all(p, &fsz);
+            found = !plat_file_map(&fm, p);
         }
     }
-    if (!f) {
+    if (!found) {
         WARN("Cannot find module %s in %sexefs/\n", mi->name, g_datadir);
         return -1;
     }
+    const u8* f = fm.data;
+    u64 fsz = fm.size;
     u64 size = mi->size;
     if (mem_map(mi->base, size, MS_CODE, PERM_RW)) {
         WARN("could not map %s at %llx\n", mi->name, (unsigned long long)mi->base);
-        free(f);
+        plat_file_unmap(&fm);
         return -1;
     }
     u8* dst = GP(mi->base);
@@ -108,20 +91,20 @@ static int load_one(const SwrModInfo* mi) {
         memcpy(fs, f + 0x60, 12);
         if (memcmp(f + 0x40, mi->build_id, 32)) {
             WARN("WARNING: module %s is not the one that was recompiled (different build id).\n", mi->name);
-            free(f);
+            plat_file_unmap(&fm);
             return -2;
         }
         for (int i = 0; i < 3; i++) { /* each segment inside the file, and inside the module's mapping */
             u32 stored = (flags & (1u << i)) ? fs[i] : seg[i][2];
             if (seg[i][0] > fsz || stored > fsz - seg[i][0] || seg[i][1] > size || seg[i][2] > size - seg[i][1]) {
                 WARN("%s: segment %d lies outside the file or the module\n", mi->name, i);
-                free(f);
+                plat_file_unmap(&fm);
                 return -1;
             }
             if (flags & (1u << i)) {
                 if (lz4_dec(f + seg[i][0], fs[i], dst + seg[i][1], seg[i][2]) != (int)seg[i][2]) {
                     WARN("LZ4 failed in %s\n", mi->name);
-                    free(f);
+                    plat_file_unmap(&fm);
                     return -1;
                 }
             } else
@@ -134,10 +117,10 @@ static int load_one(const SwrModInfo* mi) {
         memcpy(dst, f, n < size ? n : size);
     } else {
         WARN("%s: unknown format\n", p);
-        free(f);
+        plat_file_unmap(&fm);
         return -1;
     }
-    free(f);
+    plat_file_unmap(&fm);
     /* .text RX, .rodata R, .data/.bss RW */
     u64 t0 = mi->base + mi->text_off, r0 = mi->base + mi->ro_off, d0 = mi->base + mi->data_off;
     mem_set_state(t0, ((mi->text_size + 0xFFF) & ~0xFFFu), MS_CODE, PERM_RX);

@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* what the game module calls through RtAPI: undefined instructions, BRK, hints, ticks, FPCR */
@@ -102,15 +102,14 @@ static u64 rt_ticks(void) { return guest_ticks(); }
 /* what the host can't do the guest's way: said once each. The generated code is compiled for round-to-nearest, so a
    directed rounding mode only reaches the operations the compiler didn't fold (switchrecomp/toolchain.py) */
 static void fpcr_warn(u32 fpcr) {
-    static int said[3];
-    if (((fpcr >> 22) & 3) && !__atomic_exchange_n(&said[0], 1, __ATOMIC_RELAXED))
-        WARN("FPU: the game sets a directed rounding mode (FPCR %x), which the recompiled code only partly follows\n",
-             fpcr);
+    if ((fpcr >> 22) & 3)
+        WARN_LIMIT(
+            1, "FPU: the game sets a directed rounding mode (FPCR %x), which the recompiled code only partly follows\n",
+            fpcr);
 #if !defined(__aarch64__)
-    if ((fpcr & (1u << 25)) && !__atomic_exchange_n(&said[1], 1, __ATOMIC_RELAXED))
-        WARN("FPU: the game sets default NaN mode (FPCR %x), which isn't emulated\n", fpcr);
-    if ((fpcr & (1u << 26)) && !__atomic_exchange_n(&said[2], 1, __ATOMIC_RELAXED))
-        WARN("FPU: the game sets alternative half precision (FPCR %x), which isn't emulated\n", fpcr);
+    if (fpcr & (1u << 25)) WARN_LIMIT(1, "FPU: the game sets default NaN mode (FPCR %x), which isn't emulated\n", fpcr);
+    if (fpcr & (1u << 26))
+        WARN_LIMIT(1, "FPU: the game sets alternative half precision (FPCR %x), which isn't emulated\n", fpcr);
 #endif
 }
 void swr_fpcr_apply(CPU* c) {

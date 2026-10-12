@@ -9,6 +9,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 static int g_glslang_ready;
 /* what the GLSL is compiled for: part of the cache key too */
@@ -105,17 +110,25 @@ u32* vk_spirv_cached(const char* glsl, int stage, const char* cache_dir, size_t*
     }
     u32* w = vk_glsl_to_spirv(glsl, stage, nwords, err, errn);
     if (w) {
-        /* written under a temporary name and renamed, so a reader never sees half a file */
-        char tmp[1300];
-        snprintf(tmp, sizeof tmp, "%s.tmp", path);
+        /* written under a temporary name of this process's own and renamed, so a reader never sees half a file.
+           Windows doesn't rename over a file: the one there (unreadable, or another process's copy of the same
+           contents, the name being their hash) is removed first, and a reader in between only compiles again. Plain
+           rename and remove, as this file uses nothing else of the runtime (swr-shaderc links it alone) */
+        char tmp[1320];
+#ifdef _WIN32
+        snprintf(tmp, sizeof tmp, "%s.%d.tmp", path, (int)_getpid());
+#else
+        snprintf(tmp, sizeof tmp, "%s.%d.tmp", path, (int)getpid());
+#endif
         f = fopen(tmp, "wb");
         if (f) {
             int ok = fwrite(w, 4, *nwords, f) == *nwords;
-            fclose(f);
-            if (ok)
-                rename(tmp, path);
-            else
-                remove(tmp);
+            if (fclose(f)) ok = 0;
+            if (ok && rename(tmp, path)) {
+                remove(path);
+                ok = !rename(tmp, path);
+            }
+            if (!ok) remove(tmp);
         }
     }
     return w;

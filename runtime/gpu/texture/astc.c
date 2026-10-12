@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* ASTC LDR 2D decoder, written from the Khronos spec.
@@ -636,7 +636,7 @@ static int decode_block_mode(u32 bm, int* gw, int* gh, int* dual, int* wq) {
     *dual = D;
     return 1;
 }
-static void decode_block(const u8* blk, int bw, int bh, u8* out) {
+static void decode_block(const u8* blk, int bw, int bh, u8* out, int srgb) {
     u32 bm = getbits(blk, 0, 11);
     if ((bm & 0x1FF) == 0x1FC) { /* void extent = solid color */
         /* bit 9 makes it HDR (FP16 colours), which an LDR decoder can't give, and bits 10-11 are reserved as 1s:
@@ -758,19 +758,20 @@ static void decode_block(const u8* blk, int bw, int bh, u8* out) {
             for (int c = 0; c < 4; c++) {
                 int w = (dual && c == plane2_comp) ? pw[1] : pw[0];
                 int e0 = ep[part][0][c], e1 = ep[part][1][c];
-                int C0 = e0 * 257, C1 = e1 * 257;
+                /* endpoints to 16 bits: for an sRGB texture the low byte is 0x80 (the ASTC spec's decode mode) */
+                int C0 = srgb ? (e0 << 8) | 0x80 : e0 * 257, C1 = srgb ? (e1 << 8) | 0x80 : e1 * 257;
                 int C = (C0 * (64 - w) + C1 * w + 32) >> 6;
                 o[c] = (u8)(C >> 8);
             }
         }
 }
 
-void astc_decode_image(const u8* src, u32 w, u32 h, u32 bw, u32 bh, u8* dst) {
+void astc_decode_image(const u8* src, u32 w, u32 h, u32 bw, u32 bh, u8* dst, int srgb) {
     u32 bx = (w + bw - 1) / bw, by = (h + bh - 1) / bh;
     u8 blk[12 * 12 * 4];
     for (u32 j = 0; j < by; j++)
         for (u32 i = 0; i < bx; i++) {
-            decode_block(src + ((u64)j * bx + i) * 16, (int)bw, (int)bh, blk);
+            decode_block(src + ((u64)j * bx + i) * 16, (int)bw, (int)bh, blk, srgb);
             for (u32 y = 0; y < bh; y++) {
                 u32 py = j * bh + y;
                 if (py >= h) break;

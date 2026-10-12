@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* debugging output: guest symbols, backtraces, unresolved calls, register and thread dumps. These run from the crash
@@ -246,18 +246,19 @@ static void kernel_dump_code(u64 ra) {
 }
 /* threads.txt: per-thread state, used when the screen stops changing */
 void kernel_dump_threads(void) {
-    static const char* kinds[] = {"running/in svc", "objects", "mutex", "condvar", "address"};
+    static const char* kinds[] = {"running/in svc", "objects", "mutex", "condvar", "address", "pausing a thread"};
     static u64 slept[256]; /* sleep_n at the last dump, by g_threads slot */
     LOG("---- game thread state ----\n");
     for (int i = 0; i < g_nthreads; i++) {
         KThread* t = g_threads[i];
         if (!t || t->state == 2) continue;
         int k = t->wait_kind;
-        if (k < 0 || k > 4) k = 0;
+        if (k < 0 || k > 5) k = 0;
         LOG("thread %llu '%s' prio %d: %s", (unsigned long long)t->id, t->name, t->prio,
             t->state == 0 ? "not started" : kinds[k]);
+        if (t->suspended) LOG(" (paused by svcSetThreadActivity)");
         if (k == 1) LOG(" [%s%s]", t->wait_name ? t->wait_name : "?", t->wait_timeout < 0 ? "" : " with timeout");
-        if (k >= 2) {
+        if (k >= 2 && k <= 4) {
             u64 a = t->wait_addr;
             LOG(" [addr %llx value %x", (unsigned long long)a, mapped(a, 4) ? gr32(a) : 0u);
             if (k == 3)

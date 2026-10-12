@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the memory SVCs (heap, QueryMemory, MapMemory, physical, shared and transfer memory) and GetInfo */
@@ -71,10 +71,18 @@ u32 svc_unmap_memory(u64 dst, u64 src, u64 size) {
 /* svcSetHeapSize: 2 MB steps inside the heap region, and no further than the memory the resource limit gives the
    process. The SDK sizes its heap from GetInfo's total and used memory, so it gets what memory_gb sets */
 u32 svc_set_heap_size(u64 size) {
-    if (size & 0x1FFFFF) return R_BADSIZE;
-    if (size > HEAP_SIZE || (g_heap_max && size > g_heap_max)) return R_OUTOFMEM;
-    if (size > g_heap_size && size - g_heap_size + used_memory() > mem_total()) return R_LIMIT;
-    return mem_heap_set(size) ? 0 : R_OUTOFMEM;
+    u32 r = 0;
+    if (size & 0x1FFFFF)
+        r = R_BADSIZE;
+    else if (size > HEAP_SIZE || (g_heap_max && size > g_heap_max))
+        r = R_OUTOFMEM;
+    else if (size > g_heap_size && size - g_heap_size + used_memory() > mem_total())
+        r = R_LIMIT;
+    else if (!mem_heap_set(size))
+        r = R_OUTOFMEM;
+    /* the SDK sizes its heap from GetInfo and retries smaller on failure: the log shows which size it got */
+    LOG("heap: %llu MB requested%s\n", (unsigned long long)(size >> 20), r ? ", refused" : "");
+    return r;
 }
 /* svcMapPhysicalMemory: backs the holes of a range of the alias region with memory, which counts as used */
 u32 svc_map_physical(u64 a, u64 s) {
@@ -131,10 +139,8 @@ u32 svc_map_shm(u32 h, u64 addr, u64 size, u32 perm) {
     KShmem* s = (KShmem*)h_get_ref(h, KO_SHMEM);
     if (!s) return R_BADHANDLE;
     if (size != s->size) { /* the console answers InvalidSize: keep mapping at least the whole object, but say so */
-        static int said;
-        if (!said++)
-            WARN("MapSharedMemory(%s) with size %llx, the object has %llx\n", s->o.name, (unsigned long long)size,
-                 (unsigned long long)s->size);
+        WARN_LIMIT(1, "MapSharedMemory(%s) with size %llx, the object has %llx\n", s->o.name, (unsigned long long)size,
+                   (unsigned long long)s->size);
         if (size < s->size) size = s->size;
     }
     if (mem_map(addr, size, MS_SHARED, perm & 3))

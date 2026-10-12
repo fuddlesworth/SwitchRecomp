@@ -45,8 +45,8 @@ module.
 | `kernel/` | The Horizon kernel, emulated at a high level: handles and kernel objects, threads, synchronization and address arbitration, the SVC dispatch, the guest address space (`mem.c`) and IPC (`ipc.c`) |
 | `hle/` | The system services the game talks to over IPC, one file per family (am, set, time, acc, audio, hid, fs, vi...), and nvdrv, the GPU driver's device files |
 | `gpu/` | The GPU front end (GPFIFO, the 3D, compute, 2D, DMA and inline-to-memory engines), the shader translator (`shader/`), the renderer interface and the renderers (`vk/`, and `null/` for the headless build) |
-| `video/` | host1x: the video decoder (NVDEC, with FFmpeg's libavcodec) and the video image compositor (VIC) |
-| `platform/` | The operating system layer (`plat_posix.c`, `plat_win32.c`) and the window backend (`backend/sdl3.c`, or `headless.c` for tests) |
+| `video/` | host1x: the video decoder (NVDEC, with FFmpeg's libavcodec) and the video image compositor (VIC). Each nvdrv file descriptor of `/dev/nvhost-nvdec` or `/dev/nvhost-vic` gets a channel of its own (`host1x_open`), with its registers and syncpoints, and an NVDEC channel its own decoder. NVDEC writes each picture into the surface its job names, and VIC composes from those surfaces in guest memory into the game's output surface |
+| `platform/` | The operating system layer (`plat_posix.c`, `plat_win32.c`), the window backend (`backend/sdl3.c`, or `headless.c` for tests), and the unattended-run options both backends share (`unattended.c`: scripted input, timed exit, screenshots) |
 
 ### Threads and memory
 
@@ -71,10 +71,11 @@ the console would, since the game's SDK code checks the replies and asserts when
    memory, exactly as on the console.
 2. It submits them through nvdrv: an ioctl on `/dev/nvhost-gpu` reaches `hle/nvdrv.c`, which hands the GPFIFO entries
    to `gpu_submit` (`gpu/gpu.c`).
-3. `gpu_submit` runs the submission at once on the thread that submitted it (neither renderer takes it to a thread
-   of its own). `gpu.c` reads the command stream and sends each method to its engine: the 3D engine (`engines.c`,
-   `maxwell3d.c`), the macro engine (`mme.c`), compute (`compute.c`), the 2D blitter (`fermi2d.c`), DMA copies
-   (`dma.c`).
+3. `gpu_submit` runs the submission at once on the thread that submitted it, under one lock for every channel. It
+   asks the renderer first (`async_submit`), which could take the submission to a thread of its own, but neither
+   does: Vulkan only notes that guest memory may have changed since the last submission. `gpu.c` reads the command
+   stream and sends each method to its engine: the 3D engine (`engines.c`, `maxwell3d.c`), the macro engine
+   (`mme.c`), compute (`compute.c`), the 2D blitter (`fermi2d.c`), DMA copies (`dma.c`).
 4. When the 3D engine sees a draw, it calls the active renderer through `g_renderer` (`gpu/renderer.h`). The renderer
    reads the GPU's state registers, finds or translates the shaders (`gpu/shader/`, Maxwell SASS to GLSL, then
    SPIR-V with glslang), finds or uploads the textures and buffers from guest memory, and draws.
@@ -87,7 +88,16 @@ the console would, since the game's SDK code checks the replies and asserts when
 ### The renderers
 
 `Renderer` in `gpu/renderer.h` is the table of operations the front end calls: draws, clears, blits, compute
-dispatches, render target flushes and reloads, syncpoints, presenting. Each renderer fills in all of them.
+dispatches, render target flushes and reloads, syncpoints, presenting. Each renderer fills in all of them, with a
+no-op where it has nothing to do, except `save`: it writes what should outlive the process (Vulkan's pipeline
+cache), and is NULL when the renderer keeps nothing. The runtime never shuts the renderer down. Each normal exit (the
+window closing, the game calling `svcExitProcess`, the end of an unattended run) calls `save` and then ends the
+process with the guest threads still running.
+
+The caches over guest memory (textures, buffers) learn of the game's writes from the host's write tracking. Memory
+that changes without a write, like pages the game unmaps or gives back from its heap, which read as zero afterwards,
+is reported by `kernel/mem.c` (`mem_unmap`) through `gpu_mem_changed` (`gpu/gpu.h`). The renderer sets the hook
+behind it when it starts, and Vulkan treats those ranges as written the next time a cache checks them.
 
 - **Vulkan** (`gpu/vk/`): dynamic rendering, pipelines keyed by state, guest memory mirrored in buffers with write
   tracking, and compute on its own queue, with results landing in guest memory before anything the game can observe.

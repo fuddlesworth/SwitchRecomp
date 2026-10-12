@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the 2D engine (Fermi 2D): blits between surfaces, on the renderer or in guest memory */
@@ -70,20 +70,12 @@ void fermi2d_method(GpuChannel* ch, u32 m, u32 v) {
         /* in guest memory: a row of the source at a time, scaled into a row of the destination, clipped to it */
         u32 bpp = gpu_color_bpp(dst.format);
         if (gpu_color_bpp(src.format) != bpp || !src.width || !src.height) {
-            static int said;
-            if (said < 4) {
-                said++;
-                WARN("gpu: 2D blit from format %x (%ux%u) to %x not done: converting isn't done in memory\n",
-                     src.format, src.width, src.height, dst.format);
-            }
+            WARN_LIMIT(4, "gpu: 2D blit from format %x (%ux%u) to %x not done: converting isn't done in memory\n",
+                       src.format, src.width, src.height, dst.format);
             return;
         }
         if (src.format != dst.format) {
-            static int said;
-            if (said < 4) {
-                said++;
-                LOG("gpu: 2D blit from format %x to %x copies the bytes as they are\n", src.format, dst.format);
-            }
+            LOG_LIMIT(4, "gpu: 2D blit from format %x to %x copies the bytes as they are\n", src.format, dst.format);
         }
         i32 x0 = dx0<0 ? -dx0 : 0, x1 = (i64)dx0 + dw>(i64) dst.width ? (i32)((i64)dst.width - dx0) : dw;
         if (x1 <= x0 || dh <= 0) return;

@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 #include <string.h>
@@ -547,7 +547,7 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     c->stage = stage;
     c->si = si;
     /* the key's inputs (the caller's masks, compute's group size and shared memory) survive the reset */
-    u32 attr_int = si->attr_int_mask, attr_sint = si->attr_sint_mask;
+    u32 attr_int = si->attr_int_mask, attr_sint = si->attr_sint_mask, kclip = si->clip_enable;
     u32 ktm = si->tex_int_mask, kts = si->tex_sint_mask, krm = si->rt_int_mask, krs = si->rt_sint_mask;
     u32 kcl[3] = {si->cs_local[0], si->cs_local[1], si->cs_local[2]};
     int ksh = si->shared_size;
@@ -557,6 +557,7 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     si->shared_size = ksh;
     si->attr_int_mask = attr_int;
     si->attr_sint_mask = attr_sint;
+    si->clip_enable = kclip;
     si->tex_int_mask = ktm;
     si->tex_sint_mask = kts;
     si->rt_int_mask = krm;

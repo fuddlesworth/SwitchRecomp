@@ -32,6 +32,7 @@ static int vkr_start(void) {
     vk_cmd_init();
     vk_pipeline_init();
     g_gpu_before_write = vk_compute_before_write;
+    g_gpu_mem_changed = vk_mem_changed;
     VkSemaphoreCreateInfo sci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (int i = 0; i < VK_FRAMES; i++) VK_OK(vkCreateSemaphore(g_vk.dev, &sci, NULL, &g_acquired[i]));
     g_renderer_up = 1; /* a renderer is active */
@@ -66,11 +67,8 @@ static void vkr_cb_bind(GpuChannel* ch, int stage, u32 v) {
     /* the bindings are kept once, not per channel: a second channel drawing in 3D would take the first's. The first
        time two channels bind is logged */
     static GpuChannel* last;
-    static int said;
-    if (last && last != ch && !said) {
-        said = 1;
-        LOG("vulkan: constant buffers bound from a second GPU channel (bindings are shared)\n");
-    }
+    if (last && last != ch)
+        LOG_LIMIT(1, "vulkan: constant buffers bound from a second GPU channel (bindings are shared)\n");
     last = ch;
     g_vk_cb[stage][idx] = (v & 1) ? ((u64)r[0x8E1] << 32) | r[0x8E2] : 0;
     g_vk_cbsize[stage][idx] = (v & 1) ? r[0x8E0] : 0;
@@ -329,11 +327,7 @@ static u64 vkr_screenshot(const char* path) {
             }
             ok = fclose(f) == 0 && ok;
         }
-        static int said;
-        if (!ok && !said) {
-            said = 1;
-            WARN("vulkan: the screenshot %s couldn't be written\n", fn);
-        }
+        if (!ok) WARN_LIMIT(1, "vulkan: the screenshot %s couldn't be written\n", fn);
     }
 out:
     vk_unlock();
@@ -356,5 +350,6 @@ const Renderer vk_renderer = {
     .stream_incr = vkr_stream_incr,
     .present_buffer = vkr_present_buffer,
     .screenshot = vkr_screenshot,
+    .save = vk_pipeline_save,
 };
 const Renderer* g_renderer = &vk_renderer;

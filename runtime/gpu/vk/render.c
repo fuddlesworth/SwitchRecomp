@@ -223,11 +223,8 @@ void vk_render_clear(GpuChannel* ch, u32 v) {
         /* the slot is taken through RT_CONTROL's count and permutation, like draws do. Whether the hardware takes the
            target registers of that index directly isn't settled: the first clear where the two differ is logged */
         u32 ctl = r[0x487];
-        static int said;
-        if (!said && (slot >= (ctl & 15) || ((ctl >> (4 + slot * 3)) & 7) != slot)) {
-            said = 1;
-            LOG("vulkan: a clear of color slot %u under RT_CONTROL %08x\n", slot, ctl);
-        }
+        if (slot >= (ctl & 15) || ((ctl >> (4 + slot * 3)) & 7) != slot)
+            LOG_LIMIT(1, "vulkan: a clear of color slot %u under RT_CONTROL %08x\n", slot, ctl);
     }
     if (!render_begin(rt, zt, n, 0)) return;
     VkClearRect rect = {{{0, 0}, g_rp.ext}, 0, 1};
@@ -248,12 +245,8 @@ void vk_render_clear(GpuChannel* ch, u32 v) {
             if (g_rp.rt[slot]->f.is_int) {
                 /* the float register converted. Whether it holds the integers' raw bits instead isn't settled: the
                    first such clear is logged with both readings */
-                static int said;
-                if (!said) {
-                    said = 1;
-                    LOG("vulkan: integer clear: %08x %08x %08x %08x (as floats %g %g %g %g)\n", r[0x360], r[0x361],
-                        r[0x362], r[0x363], cc[0], cc[1], cc[2], cc[3]);
-                }
+                LOG_LIMIT(1, "vulkan: integer clear: %08x %08x %08x %08x (as floats %g %g %g %g)\n", r[0x360], r[0x361],
+                          r[0x362], r[0x363], cc[0], cc[1], cc[2], cc[3]);
                 for (int i = 0; i < 4; i++) at[na].clearValue.color.uint32[i] = clear_int(cc[i], g_rp.rt[slot]->f.sint);
             } else
                 memcpy(at[na].clearValue.color.float32, cc, 16);
@@ -377,11 +370,7 @@ static VkFormat attr_format(u32 size, u32 ty, int bgra) {
     (ty == 1 ? sn : ty == 2 ? un : ty == 3 ? si : ty == 4 ? ui : ty == 5 ? us : ty == 6 ? ss : fl)
     /* Vulkan has no 32-bit scaled formats, and an integer format would hand the float input the integers' bits */
     if ((ty == 5 || ty == 6) && (size == 0x01 || size == 0x02 || size == 0x04 || size == 0x12)) {
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: 32-bit scaled vertex attributes aren't done yet (read as 0,0,0,1)\n");
-        }
+        LOG_LIMIT(1, "vulkan: 32-bit scaled vertex attributes aren't done yet (read as 0,0,0,1)\n");
         return VK_FORMAT_UNDEFINED;
     }
     switch (size) {
@@ -494,11 +483,7 @@ static void tex_resolve(GpuChannel* ch, u32 handle, TexRes* x) {
     if (r[0x48D]) {
         /* samplers are taken by the handle's sampler index. Ryujinx reads this register as the sampler index mode,
            where one mode takes the texture's index instead: whether a game uses it isn't known yet */
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: sampler index mode %u\n", r[0x48D]);
-        }
+        LOG_LIMIT(1, "vulkan: sampler index mode %u\n", r[0x48D]);
     }
     u64 tic_base = ((u64)r[0x55D] << 32) | r[0x55E], tsc_base = ((u64)r[0x557] << 32) | r[0x558];
     gmem_read(tic_base + (handle & 0xFFFFF) * 32ull, x->tic, 32);
@@ -524,7 +509,7 @@ static VkSh* fs_get_keyed(GpuChannel* ch, u64 addr, TexRes* res) {
             if (f.sint) rs |= 1u << i;
         }
     }
-    VkSh* s0 = vk_shader_get(addr, 0, ST_FS, 0, 0, 0, 0);
+    VkSh* s0 = vk_shader_get(addr, 0, ST_FS, 0, 0, 0, 0, 0);
     if (!s0) return s0;
     u32 tm = 0, ts = 0;
     int nt = s0->si.ntex > SH_MAXTEX ? SH_MAXTEX : s0->si.ntex;
@@ -541,7 +526,7 @@ static VkSh* fs_get_keyed(GpuChannel* ch, u64 addr, TexRes* res) {
     }
     rm &= s0->si.sph[18] ? 0xFF : 0;
     if (!tm && !rm) return s0;
-    return vk_shader_get(addr, 0, ST_FS, tm, ts, rm, rs);
+    return vk_shader_get(addr, 0, ST_FS, tm, ts, rm, rs, 0);
 }
 
 VkImageViewType vk_tex_view_type(const ShTex* st) {
@@ -682,11 +667,7 @@ static VkDescriptorSet stage_set(GpuChannel* ch, int stage, VkSh* s, Surf** rt, 
         dw_buffer(&d, set, SWR_VKB_CB + i, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, b, o, sz);
     }
     if (s->si.gbuf_wmask) {
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: a draw's shader writes global memory, which stays on the GPU (not done yet)\n");
-        }
+        LOG_LIMIT(1, "vulkan: a draw's shader writes global memory, which stays on the GPU (not done yet)\n");
     }
     u64 cb0 = g_vk_cb[stage][0];
     for (int i = 0; i < s->si.ngbuf && i < 16; i++) {
@@ -734,11 +715,7 @@ static VkDescriptorSet stage_set(GpuChannel* ch, int stage, VkSh* s, Surf** rt, 
         int sten_w = zt && zt->f.stencil && r[0x4E0] && ((r[0x4E7] & 0xFF) || (r[0x565] && (r[0x3D6] & 0xFF)));
         int depth_ro = t && t == zt && !r[0x4BA] && !sten_w;
         if (t && is_target(t, rt, zt, n) && !depth_ro) {
-            static int said;
-            if (!said) {
-                said = 1;
-                LOG("vulkan: a draw samples a color target it renders to (read as empty)\n");
-            }
+            LOG_LIMIT(1, "vulkan: a draw samples a color target it renders to (read as empty)\n");
         } else
             view = vk_tex_bind_view(t, want, x->tic, num);
         if (view && depth_ro) {
@@ -783,17 +760,15 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
         }
     }
     if ((r[0x820] | r[0x830] | r[0x840]) & 1) {
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: draws with tessellation or geometry stages are drawn without them\n");
-        }
+        LOG_LIMIT(1, "vulkan: draws with tessellation or geometry stages are drawn without them\n");
     }
     if (topology == 14 || (topology >= 10 && topology <= 13)) {
         g_vk_skipped++;
         return; /* patches and adjacency need the stages above */
     }
-    VkSh* vs = vk_shader_get(code + r[0x811], (r[0x800] & 1) ? code + r[0x801] : 0, ST_VS, attr_int, attr_sint, 0, 0);
+    /* SetUserClipEnable (0x544): a clip distance the program writes clips only when its bit is set */
+    VkSh* vs = vk_shader_get(code + r[0x811], (r[0x800] & 1) ? code + r[0x801] : 0, ST_VS, attr_int, attr_sint, 0, 0,
+                             r[0x544] & 0xFF);
     TexRes fres[SH_MAXTEX];
     for (int i = 0; i < SH_MAXTEX; i++) fres[i].have = 0;
     VkSh* fs = (r[0x850] & 1) ? fs_get_keyed(ch, code + r[0x851], fres) : NULL;
@@ -866,11 +841,7 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
     u32 nloc = lim->maxVertexInputAttributes < 32 ? lim->maxVertexInputAttributes : 32;
     u32 maxbind = lim->maxVertexInputBindings < 33 ? lim->maxVertexInputBindings : 33;
     if (nloc < 32 && (vs->si.in_mask >> nloc)) {
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: a vertex shader reads attributes past the %u this GPU has (draw skipped)\n", nloc);
-        }
+        LOG_LIMIT(1, "vulkan: a vertex shader reads attributes past the %u this GPU has (draw skipped)\n", nloc);
         g_vk_skipped++;
         return;
     }
@@ -912,12 +883,9 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
         }
         u32 stride = va[0] & 0xFFF, asz = attr_bytes(size);
         if (stride > lim->maxVertexInputBindingStride || (stride && asz > stride)) {
-            static int said;
-            if (!said) {
-                said = 1;
-                LOG("vulkan: a vertex stream with stride %u (attribute of %u bytes) can't be read (draw skipped)\n",
-                    stride, asz);
-            }
+            LOG_LIMIT(1,
+                      "vulkan: a vertex stream with stride %u (attribute of %u bytes) can't be read (draw skipped)\n",
+                      stride, asz);
             g_vk_skipped++;
             return;
         }
@@ -949,11 +917,7 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
         k.nattr++;
     }
     if (over) {
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: a draw needs more vertex bindings than the %u this GPU has (draw skipped)\n", maxbind);
-        }
+        LOG_LIMIT(1, "vulkan: a draw needs more vertex bindings than the %u this GPU has (draw skipped)\n", maxbind);
         g_vk_skipped++;
         return;
     }
@@ -1009,21 +973,13 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
     u64 ia = ((u64)r[0x5F2] << 32) | r[0x5F3], iend = ((u64)r[0x5F4] << 32) | r[0x5F5];
     if (indexed && iend >= ia && (u64)first + count > (iend - ia + 1) / isz) {
         u64 avail = (iend - ia + 1) / isz;
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: a draw reads indices %u..%u of an index buffer of %llu (cut there)\n", first,
-                first + count - 1, (unsigned long long)avail);
-        }
+        LOG_LIMIT(1, "vulkan: a draw reads indices %u..%u of an index buffer of %llu (cut there)\n", first,
+                  first + count - 1, (unsigned long long)avail);
         if (first >= avail) return;
         count = (u32)(avail - first);
     }
     if ((topology == 7 || (indexed && ifmt == 0)) && count > (1u << 24)) {
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: a draw of %u vertices converted on the CPU (cut to %u)\n", count, 1u << 24);
-        }
+        LOG_LIMIT(1, "vulkan: a draw of %u vertices converted on the CPU (cut to %u)\n", count, 1u << 24);
         count = 1u << 24;
     }
     /* Vulkan restarts at all ones of the index type, in strips and fans; the guest's restart index is 0x592 */
@@ -1110,15 +1066,9 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
         /* the transform is taken as off when its scale is that small. 0x64B is the register that turns it off
            (Ryujinx), and 0x4EB (YControl) can negate y and flip facing. Neither is read yet: the first draw where
            they would matter is logged */
-        static int said_vt, said_y;
-        if (!said_vt && small != !(r[0x64B] & 1)) {
-            said_vt = 1;
-            LOG("vulkan: viewport scale %g x %g with transform enable %x\n", sx, sy, r[0x64B]);
-        }
-        if (!said_y && r[0x4EB]) {
-            said_y = 1;
-            LOG("vulkan: YControl %x\n", r[0x4EB]);
-        }
+        if (small != !(r[0x64B] & 1))
+            LOG_LIMIT(1, "vulkan: viewport scale %g x %g with transform enable %x\n", sx, sy, r[0x64B]);
+        if (r[0x4EB]) LOG_LIMIT(1, "vulkan: YControl %x\n", r[0x4EB]);
     }
     if (small) {
         u32 vx = r[0x300], vy = r[0x301];
@@ -1181,11 +1131,7 @@ void vk_render_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 co
     if (!(r[0x64F] & (1u << 11))) {
         /* the hardware clamps depth unless bit 11 of 0x64F (ViewVolumeClipControl) is set (Ryujinx), and pipelines
            are made without depth clamp. The first draw that asks for it is logged */
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: ViewVolumeClipControl %x asks for depth clamp (not done)\n", r[0x64F]);
-        }
+        LOG_LIMIT(1, "vulkan: ViewVolumeClipControl %x asks for depth clamp (not done)\n", r[0x64F]);
     }
     {
         float bc[4];

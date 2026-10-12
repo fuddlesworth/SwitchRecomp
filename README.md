@@ -22,8 +22,9 @@ Use only games and keys dumped from your own console. None are included, and non
 
 ### Requirements
 
-- Clang 23 (FreeBSD's own Clang works too), CMake 3.25 or newer, Ninja, GNU make (`gmake` on FreeBSD), NASM,
-  Python 3.12 or newer, Git
+- Clang 23 (FreeBSD's own Clang works too), CMake 3.25 or newer, Ninja, GNU make (`gmake` on FreeBSD), NASM (on
+  x86-64, unless you configure with `-DSWR_FFMPEG_ASM=OFF`, which builds FFmpeg without its assembly and decodes
+  movies more slowly), Python 3.12 or newer, Git
 - SDL3 development files, and a GPU and driver with Vulkan 1.3
 - `uv`, only to run the formatter
 
@@ -40,6 +41,10 @@ hactool) with [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake). Each is pinne
 `cmake/dependencies.cmake`, and kept in `.cache/cpm` for every build folder after that. They are built with the
 runtime. Only Clang is supported: a plain `cmake -B build` picks it too. `cmake --preset windows-cross` builds the
 Windows runtime with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw).
+
+FFmpeg's own build can't work from a path with a space in it, so the configure stops when the checkout (or
+`CPM_SOURCE_CACHE`, if you set it) has one. Move it, or configure with `-DSWR_H264=OFF` to build without FFmpeg, which
+leaves the game's videos black and its Opus audio undecoded.
 
 ### The nightly AppImage
 
@@ -97,9 +102,9 @@ cmake --preset default; cmake --build --preset default
 
 `scripts\bootstrap.ps1` downloads llvm-mingw (Clang), CMake, Ninja, NASM, Python and w64devkit (for the shell and
 make that FFmpeg's build uses) into `deps\tools` and checks each download against its pinned SHA-256. Nothing is
-installed on the system. The CMake build fetches and builds the libraries, as on Linux. In every new PowerShell
-window, run `Set-ExecutionPolicy -Scope Process Bypass` and then `. scripts\env.ps1` to put those tools on PATH.
-Windows runs no PowerShell scripts by default, and the first command allows them in that window only.
+installed on the system. The CMake build fetches and builds the libraries as on Linux, so the checkout's path can't
+have a space in it here either. In every new PowerShell window, run `Set-ExecutionPolicy -Scope Process Bypass` and
+then `. scripts\env.ps1` to put those tools on PATH. Windows runs no PowerShell scripts by default, and the first command allows them in that window only.
 
 ### Recompiling a game
 
@@ -118,7 +123,7 @@ Controls: any controller SDL knows works like a Switch controller, by position. 
 WASD for the left stick, IJKL for the right stick, X or Space for A, Z for B, C for X, V for Y, Q and E for L and R,
 1 and 3 for ZL and ZR, Enter for Plus and Backspace for Minus. F1 shows help, F3 takes a screenshot, F4 switches the
 FPS limit, F5 writes the state of every game thread to the log, F11 or Alt+Enter toggles fullscreen, and Escape
-quits.
+quits. The game starts in fullscreen unless its .ini says `fullscreen=0`.
 
 The window and input go through SDL3 on Windows too (the CMake build fetches SDL3 and links it statically), and the
 game draws with Vulkan as on Linux.
@@ -128,11 +133,14 @@ game draws with Vulkan as on Linux.
 An update is applied when extracting, with `--update update.nsp`. It must be for the same title as the base game.
 
 Game settings are in `games/<Game>.ini`, which the runtime rewrites with every option explained each time it
-starts. The ones you are most likely to change:
+starts. Most of them apply as soon as the file is saved, even while the game runs. `docked`, `language`,
+`fullscreen`, `resolution` and `memory_gb` apply the next time the game starts. The ones you are most likely to
+change:
 
 | Option | Effect |
 | --- | --- |
 | `docked=1` | TV mode (1080p) instead of handheld (720p) |
+| `fullscreen=0` | Start in a window rather than in fullscreen (1, the default) |
 | `resolution=1` | Internal resolution scale, 0.25 to 4 |
 | `fps_limit=1` | 1 caps at 60 FPS like the console, 0 is unlimited |
 | `shadows=1` | 0 skips shadow maps, which is faster on weak GPUs |
@@ -153,7 +161,7 @@ frame gets from the game to the screen.
 | Name game addresses from a crash report | `tools/symbols.py work/Game cf34380 ...` |
 | Disassemble game code | `tools/disasm.py work/Game NvRmStreamFlushSync` |
 | Run the game for a set time with scripted input and a screenshot | `./Game --seconds=60 --script=15000:400,16000:1 --shot=out` |
-| Run it unattended several times and sum up each run (exit, crash site, frames) | `tools/run_game.py Game --runs 5 --dump work/Game` |
+| Run it unattended several times and sum up each run (exit, crash site, frames and average FPS) | `tools/run_game.py Game --runs 5 --dump work/Game` |
 | Import a new MZ Labs release | `scripts/import-upstream.sh SwitchRecomp_v143.zip v143`, then port its changes by hand |
 | Record the shaders a run translates, then check them for Vulkan (needs `spirv-val`) | `SWR_SHADER_CORPUS=dir ./Game`, then `build/default/swr-shaderc dir --validate` |
 | Translate a game's own shader files into the SPIR-V cache ahead of time (`scripts/recomp.py` does it) | `build/default/swr-shaderc --nvn DIR --cache games/shader_cache/spirv` |
@@ -181,18 +189,20 @@ This fork is licensed under the GNU General Public License, version 3 or (at you
 ([LICENSE.apache](LICENSE.apache)). Apache-licensed code can be part of a GPLv3 work: MZ Labs' files keep their
 copyright headers and are distributed here as part of the GPLv3 whole, with a line saying the fork's changes are
 GPL-3.0-or-later. [NOTICE](NOTICE) keeps the credit to "SwitchRecomp by MZ Labs" that every copy and derived work
-carries. Those headers name the release's `LICENSE.txt` and `NOTICE.txt`, which are `LICENSE.apache` and `NOTICE`
-here. Files the fork wrote start with `SPDX-License-Identifier: GPL-3.0-or-later`.
+carries, and their headers point to `LICENSE.apache` and `NOTICE` (the release's `LICENSE.txt` and `NOTICE.txt`).
+Files the fork wrote start with `SPDX-License-Identifier: GPL-3.0-or-later`.
 
 The game modules the recompiler builds include the runtime's `runtime/abi/` code, which is under the GPL like the rest.
 Games, keys and firmware are not part of this project.
 
 Third-party components keep their own licenses, found in each package CPM.cmake downloads (`.cache/cpm/<name>/`,
-from the URLs in `cmake/dependencies.cmake`):
+from the URLs in `cmake/dependencies.cmake`). `cmake --install` puts this project's license files, and those of the
+libraries built into the runtime and hactool, in `share/licenses/switchrecomp`. The AppImage and the CI build
+artifacts carry that folder.
 
 | Component | Used for | License |
 | --- | --- | --- |
-| FFmpeg (libavcodec, libavutil) | Game videos (H.264, with VP8 and VP9 built in) | LGPL 2.1 or later |
+| FFmpeg (libavcodec, libswresample, libavutil) | Game videos (H.264, with VP8 and VP9 built in) and Opus audio (hwopus) | LGPL 2.1 or later |
 | hactool (SciresM), with the mbedtls 2, cJSON and ConvertUTF copies it bundles | Extracting dumps | ISC (mbedtls: Apache 2.0, cJSON: MIT, ConvertUTF: Unicode, Inc.'s license) |
 | glslang (Khronos) | Vulkan shaders to SPIR-V | BSD 3-Clause, MIT and Apache 2.0, and a parser under GPL 3 with the Bison exception |
 | Vulkan-Headers (Khronos) | Vulkan definitions | Apache 2.0 |

@@ -40,6 +40,8 @@ swr_component(hle hle/services.c hle/audren.c hle/pl.c hle/sm.c hle/am.c hle/set
 swr_component(video video/host1x.c video/nvdec.c video/vic.c)
 if(SWR_H264)
     target_link_libraries(swr_video PRIVATE FFmpeg::avcodec)
+    # hwopus (hle/audio.c) decodes Opus with FFmpeg too
+    target_link_libraries(swr_hle PRIVATE FFmpeg::avcodec)
 endif()
 swr_component(gpu gpu/gpu.c gpu/engines.c gpu/mme.c gpu/compute.c gpu/fermi2d.c gpu/dma.c gpu/maxwell3d.c gpu/renderer.c)
 

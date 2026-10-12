@@ -1,5 +1,5 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 #define _GNU_SOURCE
@@ -25,14 +25,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#if defined(_WIN32)
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
-#if !defined(_WIN32)
-#include <dlfcn.h>
-#endif
 
 const SwrModule* g_mod;
 GuestFn* g_disp;
@@ -70,10 +62,7 @@ static int load_code(void) {
     fclose(probe);
     void* h = plat_dl_open(p);
     if (!h) { /* it's there but doesn't load: a library it needs is missing, or it was built for another system */
-#if !defined(_WIN32)
-        WARN("dlopen: %s\n", dlerror());
-#endif
-        WARN("Cannot load the recompiled code: %s\n", p);
+        WARN("Cannot load the recompiled code: %s\n%s\n", p, plat_dl_error());
         return -1;
     }
     ModFn f = (ModFn)plat_dl_sym(h, "swr_module");
@@ -147,8 +136,6 @@ static void split_path(const char* argv0) {
     }
 }
 
-/* players point --game at the dump itself (--game=ARMS.xci), and the runtime then looks for ARMS.xci_code.so. It only
-   runs recompiled code, so name what is missing instead of the .so it would have looked for */
 /* main.npdm: the SystemResourceSize (newer SDKs only init their VM allocator when > 0), and the cores and
    priorities the kernel capabilities of its ACI0 give the process */
 static void read_npdm(void) {
@@ -188,6 +175,8 @@ static void read_npdm(void) {
         (unsigned long long)g_core_mask, (unsigned long long)g_prio_mask);
 }
 
+/* players point --game at the dump itself (--game=ARMS.xci), and the runtime then looks for ARMS.xci_code.so. It only
+   runs recompiled code, so name what is missing instead of the .so it would have looked for */
 static int is_dump(const char* path) {
     static const char* const ext[] = {".xci", ".xcz", ".nsp", ".nsz", ".nca", ".nro", ".nso"};
     const char* dot = strrchr(path, '.');
@@ -217,7 +206,8 @@ int swr_main(int argc, char** argv) {
         else if (argv[i][0] != '-' && is_dump(argv[i]))
             dump = argv[i];
     if (game && is_dump(game)) dump = game;
-    /* named after the runtime when it's a dump, so the log the fatal error writes lands next to the runtime */
+    /* a dump names no game: the runtime keeps its own name. The fatal error goes to stderr and the box only, since the
+       log is only created once a game's code has loaded */
     split_path(game && !dump ? game : in_appimage ? appimage : argv[0]);
     if (dump)
         fatal("%s is a game dump. SwitchRecomp does not run dumps: it runs a game recompiled from one. Extract and "
@@ -315,10 +305,9 @@ int swr_main(int argc, char** argv) {
             next = now;
     }
     save_hints();
+    /* the process ends without shutting the renderer down, so it saves what it keeps across runs (the pipeline cache)
+       here */
+    if (g_renderer && g_renderer->save) g_renderer->save();
     LOG("Exit.\n");
-    fflush(NULL);
-#if defined(_WIN32)
-    TerminateProcess(GetCurrentProcess(), 0); /* don't join the guest threads */
-#endif
-    _exit(0);
+    plat_exit_now(0); /* the guest threads are still running: they aren't joined */
 }

@@ -298,8 +298,8 @@ void vk_compute_mem_need(u64 a, u64 n) {
    buffer words its translation read */
 static CsPipe* cs_pipe(const u8* code, u32 lx, u32 ly, u32 lz, u32 shm) {
     u32 blen;
-    u64 key =
-        shader_hash(code, 0x10000 + 80, &blen) ^ ((u64)lx << 40) ^ ((u64)ly << 48) ^ ((u64)lz << 56) ^ ((u64)shm << 20);
+    u64 key = vk_shader_hash(code, 0x10000 + 80, &blen, cs_cb_read) ^ ((u64)lx << 40) ^ ((u64)ly << 48) ^
+              ((u64)lz << 56) ^ ((u64)shm << 20);
     CsPipe* p = g_csp[key & 255];
     while (p && (p->key != key || !vk_cb_reads_hold(&p->cbr, cs_cb_read))) p = p->next;
     if (p) return p;
@@ -347,12 +347,9 @@ static CsPipe* cs_pipe(const u8* code, u32 lx, u32 ly, u32 lz, u32 shm) {
                                       .layout = g_vk_playout};
     if (!VK_OK(vkCreateComputePipelines(g_vk.dev, vk_pipeline_cache(), 1, &ci, NULL, &p->p))) p->failed = 1;
     vkDestroyShaderModule(g_vk.dev, m, NULL);
-    static int said;
-    if (!p->failed && said < 12) {
-        said++;
-        LOG("vulkan: compute %016llx ready: block %ux%ux%u, %d global buffers, %d textures, %d images\n",
-            (unsigned long long)key, lx, ly, lz, p->si.ngbuf, p->si.ntex, p->si.nimg);
-    }
+    if (!p->failed)
+        LOG_LIMIT(12, "vulkan: compute %016llx ready: block %ux%ux%u, %d global buffers, %d textures, %d images\n",
+                  (unsigned long long)key, lx, ly, lz, p->si.ngbuf, p->si.ntex, p->si.nimg);
     return p;
 }
 
@@ -366,13 +363,10 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
         gz > lim->maxComputeWorkGroupCount[2] || lx > lim->maxComputeWorkGroupSize[0] ||
         ly > lim->maxComputeWorkGroupSize[1] || lz > lim->maxComputeWorkGroupSize[2] ||
         (u64)lx * ly * lz > lim->maxComputeWorkGroupInvocations || shm > lim->maxComputeSharedMemorySize) {
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: a dispatch of %ux%ux%u blocks of %ux%ux%u with %u bytes shared is past this GPU's limits "
-                "(skipped)\n",
-                gx, gy, gz, lx, ly, lz, shm);
-        }
+        LOG_LIMIT(1,
+                  "vulkan: a dispatch of %ux%ux%u blocks of %ux%ux%u with %u bytes shared is past this GPU's limits "
+                  "(skipped)\n",
+                  gx, gy, gz, lx, ly, lz, shm);
         g_vk_cs_skipped++;
         return;
     }
@@ -411,11 +405,7 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
         return;
     }
     if (p->si.nimg) {
-        static int said;
-        if (!said) {
-            said = 1;
-            LOG("vulkan: compute that writes images isn't done yet (skipped)\n");
-        }
+        LOG_LIMIT(1, "vulkan: compute that writes images isn't done yet (skipped)\n");
         g_vk_cs_skipped++;
         return;
     }
