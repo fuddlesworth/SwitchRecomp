@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
+# Copyright 2026 the ScarletNX contributors
 """Recompiles an extracted game (scripts/extract.py) into games/, for this machine (Linux or Windows):
 
     games/NAME[.exe]               the runtime, built by CMake (preset default)
@@ -11,7 +11,7 @@
     python3 scripts/recomp.py work/Game Game
     python3 scripts/recomp.py work/Game Game -- --native
 
-Options after `--` go to the recompiler (python3 -m switchrecomp). The first run of a big game takes several minutes; later runs only
+Options after `--` go to the recompiler (python3 -m scarletnx). The first run of a big game takes several minutes; later runs only
 recompile what changed.
 """
 
@@ -34,14 +34,14 @@ def main():
 
     subprocess.run(['cmake', '--preset', PRESET], cwd=REPO, check=True, stdout=subprocess.DEVNULL)
     subprocess.run(['cmake', '--build', '--preset', PRESET], cwd=REPO, check=True)
-    runtime = os.path.join(REPO, 'build', PRESET, 'swr-runtime' + ('.exe' if WINDOWS else ''))
+    runtime = os.path.join(REPO, 'build', PRESET, 'scarletnx' + ('.exe' if WINDOWS else ''))
     extra = list(a.extra)
-    if '--cc' not in extra:
+    if not any(e == '--cc' or e.startswith('--cc=') for e in extra):
         extra += ['--cc', 'clang']
     cmd = [
         sys.executable,
         '-m',
-        'switchrecomp',
+        'scarletnx',
         os.path.abspath(a.game),
         '-o',
         a.name,
@@ -64,7 +64,7 @@ NVN_SHADER_MAGIC = b'\x91\x68\x86\x19'
 def prebuild_shaders(romfs):
     """Fills the Vulkan renderer's SPIR-V cache from the NVN shader files a game ships in its romfs (Catherine has
     them in data/shaders_binary), so the first run compiles fewer shaders while playing."""
-    shaderc = os.path.join(REPO, 'build', PRESET, 'swr-shaderc' + ('.exe' if WINDOWS else ''))
+    shaderc = os.path.join(REPO, 'build', PRESET, 'snx-shaderc' + ('.exe' if WINDOWS else ''))
     if not os.path.isfile(shaderc) or not os.path.isdir(romfs):
         return
     cache = os.path.join(REPO, 'games', 'shader_cache', 'spirv')
@@ -77,7 +77,10 @@ def prebuild_shaders(romfs):
             continue
         os.makedirs(cache, exist_ok=True)
         print('Translating the shaders in %s' % os.path.relpath(root, romfs), flush=True)
-        subprocess.run([shaderc, '--nvn', root, '--cache', cache])
+        rc = subprocess.run([shaderc, '--nvn', root, '--cache', cache]).returncode
+        if rc:
+            # Not fatal: those shaders are compiled when the game first draws with them
+            print('snx-shaderc failed on some of them (exit %d): run it with --verbose to see which' % rc, flush=True)
 
 
 if __name__ == '__main__':

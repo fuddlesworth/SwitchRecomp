@@ -1,6 +1,6 @@
 ---
-name: swr-crash
-description: "Take a SwitchRecomp crash report, svcBreak or hang from the log to the mechanism that causes it, using the symbolizer and disassembler on the game's code. Use when the game crashes (signal 11 or 7), calls svcBreak or fatal, hangs, or when a log shows \"*** Crash\". Also for corrupted data showing up in game structures."
+name: snx-crash
+description: "Take a ScarletNX crash report, svcBreak or hang from the log to the mechanism that causes it, using the symbolizer and disassembler on the game's code. Use when the game crashes (signal 11 or 7), calls svcBreak or fatal, hangs, or when a log shows \"*** Crash\". Also for corrupted data showing up in game structures."
 ---
 
 # Crash to mechanism
@@ -27,7 +27,7 @@ that real hardware wouldn't. A fix without that is a guess.
 - **game address** is the guest address that faulted. Find which register (or register plus offset) it is: that is
   the bad pointer.
 - A crash in the runtime itself prints `in the runtime itself (exe offset +OFF)`. The presets build with symbols:
-  `addr2line -e build/default/swr-runtime -f -C -i 0xOFF` (the build that was deployed).
+  `addr2line -e build/default/scarletnx -f -C -i 0xOFF` (the build that was deployed).
 - `svcBreak` means the SDK's own assert failed. The interesting code is the caller's check, just before the
   `svc #0x26`.
 
@@ -60,5 +60,5 @@ when it takes many steps, and the `sdk-scout` agent to work out what an SDK func
 ## 4. Confirm before fixing
 
 Write down the chain from the runtime's behavior to the faulting instruction, with the addresses you read. Then fix
-the runtime's side so it behaves like the console. Verify with repeat runs (`swr-run`), with the crash rate before and
+the runtime's side so it behaves like the console. Verify with repeat runs (`snx-run`), with the crash rate before and
 after in the commit message. If the chain has a link you inferred rather than read, say so in the commit.

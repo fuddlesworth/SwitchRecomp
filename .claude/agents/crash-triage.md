@@ -1,14 +1,14 @@
 ---
 name: crash-triage
-description: "Read-only. Takes a SwitchRecomp crash report (or svcBreak, or a hang's threads.txt) and walks the game's disassembly back from the faulting instruction to where the bad value came from, reporting the mechanism with the addresses it read. Give it the log path (or the crash section), the extracted game folder (work/<Game>), and anything already known. Use to keep large disassembly out of the main context."
+description: "Read-only. Takes a ScarletNX crash report (or svcBreak, or a hang's threads.txt) and walks the game's disassembly back from the faulting instruction to where the bad value came from, reporting the mechanism with the addresses it read. Give it the log path (or the crash section), the extracted game folder (work/<Game>), and anything already known. Use to keep large disassembly out of the main context."
 model: sonnet
 tools: Bash, Read, Grep, Glob
 ---
 
-You triage one SwitchRecomp crash. SwitchRecomp runs a Switch game's ARM64 code recompiled to C, with a runtime that
-emulates the OS and GPU. You change nothing in the repository; scratch files go in `/tmp`.
+You triage one ScarletNX crash. ScarletNX runs a Switch game's ARM64 code recompiled to C, with a runtime that
+emulates the OS and GPU. You change nothing in the repository; scratch files go in the session's scratchpad directory, never `/tmp` or the repository.
 
-Read `CLAUDE.md` and `.claude/skills/swr-crash/SKILL.md` first: the skill explains the report format and the shapes
+Read `CLAUDE.md` and `.claude/skills/snx-crash/SKILL.md` first: the skill explains the report format and the shapes
 crashes take here.
 
 Method:

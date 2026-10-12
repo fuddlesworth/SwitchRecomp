@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
-"""Extracts a game dump into the exefs/ + romfs/ folder that switchrecomp.py reads, with the hactool that the CMake
-build makes (build/default/hactool, built here when it is missing).
+# Copyright 2026 the ScarletNX contributors
+"""Extracts a game dump into the exefs/ + romfs/ folder that the recompiler (python3 -m scarletnx) reads, with the
+hactool that the CMake build makes (build/default/hactool, built here when it is missing).
 
     scripts/extract.py "Game.xci"                                   # -> work/Game/{exefs,romfs}
     scripts/extract.py game.nsp --update update.nsp --name Game     # base and update combined
@@ -68,12 +68,29 @@ def clean_keys(src, dst):
     return dropped
 
 
+# Size of a ticket's signature and its padding, by signature type: the ticket's data follows them
+TICKET_SIGNATURES = {
+    0x10000: 0x200 + 0x3C,  # RSA-4096, SHA-1
+    0x10001: 0x100 + 0x3C,  # RSA-2048, SHA-1
+    0x10002: 0x3C + 0x40,  # ECDSA, SHA-1
+    0x10003: 0x200 + 0x3C,  # RSA-4096, SHA-256
+    0x10004: 0x100 + 0x3C,  # RSA-2048, SHA-256 (what eShop tickets have)
+    0x10005: 0x3C + 0x40,  # ECDSA, SHA-256
+    0x10006: 0x14 + 0x28,  # HMAC-SHA1
+}
+
+
 def ticket_title_key(path):
-    """(rights ID, title key) of a common ticket, or None for a personalized one."""
-    data = open(path, 'rb').read()
-    if len(data) < 0x2B0 or data[0x281] != 0:  # title key type: 0 common, 1 personalized
+    """(rights ID, title key) of a common ticket, or None for a personalized one or one this doesn't know."""
+    with open(path, 'rb') as f:
+        data = f.read()
+    sig = TICKET_SIGNATURES.get(int.from_bytes(data[:4], 'little'))
+    if sig is None:
         return None
-    return data[0x2A0:0x2B0].hex(), data[0x180:0x190].hex()
+    t = 4 + sig  # the ticket data: issuer at +0, title key at +0x40, key type at +0x141, rights ID at +0x160
+    if len(data) < t + 0x170 or data[t + 0x141] != 0:  # title key type: 0 common, 1 personalized
+        return None
+    return data[t + 0x160 : t + 0x170].hex(), data[t + 0x40 : t + 0x50].hex()
 
 
 class Hactool:
@@ -129,6 +146,10 @@ def main():
     ap.add_argument('--keys', help='prod.keys (default: the repository root, then ~/.switch)')
     ap.add_argument('--title-keys', help='title.keys (default: the repository root, then ~/.switch)')
     a = ap.parse_args()
+    for f in filter(None, (a.base, a.update)):
+        if not os.path.isfile(f):
+            raise SystemExit('%s does not exist' % f)
+    keys_given = a.keys
     a.keys, a.title_keys = find_keys(a.keys, 'prod.keys'), find_keys(a.title_keys, 'title.keys')
 
     if not os.path.isfile(HACTOOL):
@@ -140,6 +161,8 @@ def main():
             if subprocess.run(cmd, cwd=REPO, stdout=subprocess.DEVNULL).returncode:
                 raise SystemExit('hactool did not build: %s failed' % ' '.join(cmd))
     if not os.path.isfile(a.keys):
+        if keys_given:
+            raise SystemExit('%s does not exist' % a.keys)
         raise SystemExit('no prod.keys in %s or ~/.switch (use --keys)' % REPO)
     name = a.name or os.path.splitext(os.path.basename(a.base))[0]
     out = os.path.abspath(a.out or os.path.join(REPO, 'work', name))
@@ -149,9 +172,9 @@ def main():
     # hactool creates the last folder of a path only, and exits 0 when it can't write the files
     made_out = not os.path.exists(out)
     os.makedirs(out, exist_ok=True)
-    tmp = tempfile.mkdtemp(prefix='.extract-', dir=temp_parent(out, filter(None, (a.base, a.update))))
-    ok = False
+    tmp, ok = None, False
     try:
+        tmp = tempfile.mkdtemp(prefix='.extract-', dir=temp_parent(out, filter(None, (a.base, a.update))))
         home = os.path.join(tmp, 'home')
         os.makedirs(os.path.join(home, '.switch'))
         dropped = clean_keys(a.keys, os.path.join(home, '.switch', 'prod.keys'))
@@ -199,7 +222,8 @@ def main():
             raise SystemExit('the extracted exefs has no main: is the update for this base game?')
         ok = True
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
         if not ok and made_out:
             shutil.rmtree(out, ignore_errors=True)
     print('Done:', out)

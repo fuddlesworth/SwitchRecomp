@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the SwitchRecomp fork contributors
+# Copyright 2026 the ScarletNX contributors
 """Disassembles game code at its runtime addresses, with symbol names.
 
     tools/disasm.py work/Game cf34240 cf343c0     # an address range (hex, as crash reports print them)
@@ -17,7 +17,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, '..')]
-from switchrecomp import nxloader  # noqa: E402
+from scarletnx import nxloader  # noqa: E402
 
 from symbols import Symbols  # noqa: E402
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the ScarletNX contributors
 # Game dumps, keys and anything extracted from them. These belong to their owners and never go in git.
 *.xci
 *.nsp
@@ -5,23 +7,38 @@
 *.xcz
 *.nca
 *.nro
+*.nso
+*.npdm
 *.keys
 *.tik
 *.cert
+exefs/
+romfs/
 /work/
 /keys/
 /dumps/
 
+# Made from the game's files: shader corpora (SNX_SHADER_CORPUS), SPIR-V and GLSL dumps, screenshots
+*.snxs
+*.spv
+*.ppm
+vkshader_*.glsl
+
 # Recompiled games: runtime, game module, generated C, data, saves, settings and logs
 /games/
 
-# Build output
+# Build output, and the AppImage scripts/make-appimage.sh makes
 /build*/
 __pycache__/
 *.o
 *.so
+/AppDir/
+/dist/*.AppImage
+/dist/*.zsync
+/dist/appinfo
 
-# The Windows toolchains and prebuilt binaries bundled in the MZ Labs zip (see scripts/import-upstream.sh)
+# The Windows toolchains and prebuilt binaries bundled in the MZ Labs zip, in case one is unpacked over the checkout
+# (scripts/import-upstream.sh leaves them out of the upstream branch)
 /python/
 /tcc/
 /gcc/

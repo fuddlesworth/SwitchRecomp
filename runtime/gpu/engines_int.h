@@ -1,10 +1,10 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* what the GPU engines' files share */
-#ifndef SWR_ENGINES_INT_H
-#define SWR_ENGINES_INT_H
+#ifndef SNX_ENGINES_INT_H
+#define SNX_ENGINES_INT_H
 #include <string.h>
 #include "core/main.h"
 #include "core/options.h"
@@ -17,8 +17,7 @@
 #include "gpu/gpu.h"
 #include "core/clock.h"
 
-/* engines.c */
-u64 gpu_ticks(void);
+/* engines.c (gpu_ticks is in gpu.h) */
 void query_get(GpuChannel* ch, u32* r, int base, u32 v);
 
 /* mme.c */

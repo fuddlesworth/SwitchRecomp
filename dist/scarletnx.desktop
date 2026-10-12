@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=SwitchRecomp
+Name=ScarletNX
 Comment=Runs Switch games recompiled to native code
-Exec=swr-runtime
-Icon=switchrecomp
+Exec=scarletnx
+Icon=wimsy
 Categories=Game;Emulator;
 Keywords=Nintendo;Switch;recompiler;
 Terminal=false

@@ -1,5 +1,5 @@
 # SwitchRecomp - Copyright 2026 MZ Labs
-# Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+# Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
 # any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
 # This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE).
 """
@@ -80,6 +80,7 @@ class Module:
         self.imports = []
         self.relptrs = set()
         self.mod0 = None
+        self.eh_error = None  # why .eh_frame parsing stopped early, if it did
         self.parse()
 
     # ---------------------------------------------------------------- parsing
@@ -118,28 +119,21 @@ class Module:
 
     def parse_dynamic(self, off):
         d = {}
-        relas = []
-        tags = []
         while off + 16 <= len(self.image):
             tag, val = struct.unpack_from('<qQ', self.image, off)
             off += 16
             if tag == 0:
                 break
-            tags.append((tag, val))
             d.setdefault(tag, val)
-        self.dyn = d
         strtab = d.get(5)
         symtab = d.get(6)
-        strsz = d.get(10, 0)
         syment = d.get(11, 24)
         hashoff = d.get(4)
-        gnuhash = d.get(0x6FFFFEF5)
         nsyms = 0
         if hashoff is not None:
             nsyms = self.u32(hashoff + 4)
         elif strtab and symtab and strtab > symtab:
             nsyms = (strtab - symtab) // syment
-        self.symlist = []
         if symtab is not None and strtab is not None:
             for i in range(nsyms):
                 o = symtab + i * syment
@@ -148,27 +142,22 @@ class Module:
                 nm, info, oth, shn, val, size = struct.unpack_from('<IBBHQQ', self.image, o)
                 e = self.image.find(b'\0', strtab + nm)
                 name = self.image[strtab + nm : e].decode('latin1') if nm else ''
-                self.symlist.append((name, info, shn, val, size))
                 if shn and name and (info & 15) in (1, 2, 0) and val:
                     self.syms[val] = name
                     if (info & 15) == 2 and self.in_text(val):
                         self.funcs.add(val)
                 elif shn == 0 and name:
                     self.imports.append(name)
-        # relocs pointing into code (vtables, callbacks)
-        for rt, rs in ((7, 8), (0x17, 2)):  # DT_RELA/RELASZ, DT_JMPREL/PLTRELSZ
-            base = d.get(rt)
-            size = d.get(rs if rt == 7 else 2, 0)
-            if base is None:
-                continue
-            for o in range(base, base + size, 24):
+        # relocs pointing into code (vtables, callbacks): the R_AARCH64_RELATIVE ones in DT_RELA (DT_JMPREL only holds
+        # JUMP_SLOTs, whose targets are imports)
+        base = d.get(7)
+        if base is not None:
+            for o in range(base, base + d.get(8, 0), 24):
                 if o + 24 > len(self.image):
                     break
                 r_off, r_info, r_add = struct.unpack_from('<QQq', self.image, o)
-                typ = r_info & 0xFFFFFFFF
-                if typ == 1027 and self.in_text(r_add):  # R_AARCH64_RELATIVE
+                if r_info & 0xFFFFFFFF == 1027 and self.in_text(r_add):  # R_AARCH64_RELATIVE
                     self.relptrs.add(r_add)
-        # absolute pointers already in .data (rare for NSO, shows up in NRO)
 
     # ---------------------------------------------------------------- eh_frame
     def read_enc(self, o, enc, base_for_pcrel=None, datarel=0):
@@ -250,8 +239,8 @@ class Module:
                 r = self.parse_fde(fde, cies)
                 if r:
                     self.fde.append(r)
-        except (struct.error, IndexError, ValueError):
-            pass
+        except (struct.error, IndexError, ValueError) as e:
+            self.eh_error = 'stopped after %d functions (%s)' % (len(self.fde), str(e) or type(e).__name__)
         for s, n in self.fde:
             if self.in_text(s):
                 self.funcs.add(s)
@@ -309,9 +298,14 @@ def load_nso(path, name=None):
     size = segs[2][1] + segs[2][2]
     img = bytearray(size)
     for i, (foff, moff, sz) in enumerate(segs):
+        # a damaged header would otherwise slice short and shift the segments after it (bytearray slices resize)
+        if foff + fsz[i] > len(d) or moff + sz > size:
+            raise ValueError('%s: segment %d lies outside the file or the image (damaged file?)' % (path, i))
         raw = d[foff : foff + fsz[i]]
         if flags & (1 << i):
             raw = lz4_block(raw, sz)
+        if len(raw) < sz:
+            raise ValueError('%s: segment %d is %d bytes, the header says %d (damaged file?)' % (path, i, len(raw), sz))
         img[moff : moff + sz] = raw[:sz]
         if flags & (8 << i):
             h = hashlib.sha256(raw[:sz]).digest()

@@ -1,11 +1,10 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* the compute engine's launches, and inline-to-memory uploads */
 #include "gpu/engines_int.h"
 /* ============================================================ compute + I2M */
-volatile u64 g_compute_launches;
 void compute_method(GpuChannel* ch, u32 m, u32 v, int last) {
     (void)last;
     m &= 0xFFF;
@@ -14,7 +13,6 @@ void compute_method(GpuChannel* ch, u32 m, u32 v, int last) {
         case 0x6C: i2m_launch(ch, ch->rcomp, 0x60); break;
         case 0x6D: i2m_data(ch, v); break;
         case 0xAF: /* launch; the first few programs get dumped for debugging */ {
-            g_compute_launches++;
             u64 qmd = (u64)ch->rcomp[0xAD] << 8;
             u64 code = ((u64)ch->rcomp[0x582] << 32) | ch->rcomp[0x583];
             u32 q[64];
@@ -40,10 +38,10 @@ void compute_method(GpuChannel* ch, u32 m, u32 v, int last) {
                     fclose(f);
                 }
                 u8* b = malloc(0x10000);
-                gmem_read(prog, b, 0x10000);
                 snprintf(p, sizeof p, "%scaptures/compute/c%02d_cs.bin", g_exedir, ns);
-                f = fopen(p, "wb");
+                f = b ? fopen(p, "wb") : NULL;
                 if (f) {
+                    gmem_read(prog, b, 0x10000);
                     fwrite(b, 1, 0x10000, f);
                     fclose(f);
                 }
@@ -54,10 +52,10 @@ void compute_method(GpuChannel* ch, u32 m, u32 v, int last) {
                         u32 sz = (q[30 + 2 * i] >> 15) & 0x1FFFF;
                         if (!sz || sz > 0x10000) sz = 0x10000;
                         u8* cb = malloc(sz);
-                        gmem_read(a, cb, sz);
                         snprintf(p, sizeof p, "%scaptures/compute/c%02d_cb%d.bin", g_exedir, ns, i);
-                        f = fopen(p, "wb");
+                        f = cb ? fopen(p, "wb") : NULL;
                         if (f) {
+                            gmem_read(a, cb, sz);
                             fwrite(cb, 1, sz, f);
                             fclose(f);
                         }

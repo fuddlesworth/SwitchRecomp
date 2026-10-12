@@ -1,10 +1,10 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Part of cpu_helpers.c, which includes it: bitmask immediates, CRC32, compare-and-swap, fences, and the system registers (MRS, MSR). Not compiled on its own. */
 /* ================================================================ integer */
-u64 swr_decode_bitmask(u32 N, u32 imms, u32 immr, u32 ds) {
+u64 snx_decode_bitmask(u32 N, u32 imms, u32 immr, u32 ds) {
     u32 v = (N << 6) | (~imms & 0x3F);
     int len = -1;
     for (int i = 6; i >= 0; i--)
@@ -23,7 +23,7 @@ u64 swr_decode_bitmask(u32 N, u32 imms, u32 immr, u32 ds) {
     return ds == 32 ? (u32)r : r;
 }
 
-u32 swr_crc32(u32 acc, u64 val, int bytes, int castagnoli) {
+u32 snx_crc32(u32 acc, u64 val, int bytes, int castagnoli) {
     u32 poly = castagnoli ? 0x82F63B78u : 0xEDB88320u;
     for (int i = 0; i < bytes; i++) {
         acc ^= (u8)(val >> (i * 8));
@@ -36,28 +36,28 @@ u32 swr_crc32(u32 acc, u64 val, int bytes, int castagnoli) {
 /* tcc has no __atomic but does have inline asm. Exclusives need a real lock cmpxchg here since the
    kernel side touches the same words (mutex/condvar) with real atomics; a spinlock-emulated CAS isn't
    atomic against that. */
-u32 swr_cas64(u64* p, u64 o, u64 n) {
+u32 snx_cas64(u64* p, u64 o, u64 n) {
     u64 prev = o;
     __asm__ __volatile__("lock; cmpxchgq %2,%1" : "+a"(prev), "+m"(*p) : "r"(n) : "memory", "cc");
     return prev == o;
 }
-u32 swr_cas32(u32* p, u32 o, u32 n) {
+u32 snx_cas32(u32* p, u32 o, u32 n) {
     u32 prev = o;
     __asm__ __volatile__("lock; cmpxchgl %2,%1" : "+a"(prev), "+m"(*p) : "r"(n) : "memory", "cc");
     return prev == o;
 }
-u32 swr_cas16(u16* p, u16 o, u16 n) {
+u32 snx_cas16(u16* p, u16 o, u16 n) {
     u16 prev = o;
     __asm__ __volatile__("lock; cmpxchgw %2,%1" : "+a"(prev), "+m"(*p) : "r"(n) : "memory", "cc");
     return prev == o;
 }
-u32 swr_cas8(u8* p, u8 o, u8 n) {
+u32 snx_cas8(u8* p, u8 o, u8 n) {
     u8 prev = o;
     __asm__ __volatile__("lock; cmpxchgb %2,%1" : "+a"(prev), "+m"(*p) : "q"(n) : "memory", "cc");
     return prev == o;
 }
 /* cmpxchg16b clobbers rbx (and we use rdi); tcc won't save them so the asm does */
-u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
+u32 snx_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
     u64 a[5];
     u64 r;
     a[0] = (u64)p;
@@ -66,9 +66,9 @@ u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
     a[3] = n0;
     a[4] = n1;
     if (((u64)p) & 15) {
-        u32 ok = swr_cas64(p, o0, n0);
-        if (ok && !swr_cas64(p + 1, o1, n1)) {
-            swr_cas64(p, n0, o0);
+        u32 ok = snx_cas64(p, o0, n0);
+        if (ok && !snx_cas64(p + 1, o1, n1)) {
+            snx_cas64(p, n0, o0);
             ok = 0;
         }
         return ok;
@@ -93,19 +93,19 @@ u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
 #if defined(_WIN32)
 #include <windows.h>
 static volatile LONG g_fz;
-void swr_fence(void) { InterlockedExchange(&g_fz, 0); } /* xchg is a full barrier on x86 (no __faststorefence in tcc) */
+void snx_fence(void) { InterlockedExchange(&g_fz, 0); } /* xchg is a full barrier on x86 (no __faststorefence in tcc) */
 #else
-void swr_fence(void) { __asm__ __volatile__("mfence" : : : "memory"); }
+void snx_fence(void) { __asm__ __volatile__("mfence" : : : "memory"); }
 #endif
 #else
-u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
+u32 snx_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
 #if defined(__x86_64__) && defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16)
     unsigned __int128 o = ((unsigned __int128)o1 << 64) | o0, n = ((unsigned __int128)n1 << 64) | n0;
     return __sync_bool_compare_and_swap((unsigned __int128*)p, o, n);
 #else
     /* no cmpxchg16b: CAS the low half, compare the high half */
     if (__atomic_load_n(&p[1], __ATOMIC_SEQ_CST) != o1) return 0;
-    if (!swr_cas64(&p[0], o0, n0)) return 0;
+    if (!snx_cas64(&p[0], o0, n0)) return 0;
     __atomic_store_n(&p[1], n1, __ATOMIC_SEQ_CST);
     return 1;
 #endif
@@ -114,7 +114,7 @@ u32 swr_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1) {
 
 /* ================================================================ system */
 #define SYSREG(op0, op1, crn, crm, op2) ((((op0) & 1) << 14) | ((op1) << 11) | ((crn) << 7) | ((crm) << 3) | (op2))
-u64 swr_mrs(CPU* c, u32 r) {
+u64 snx_mrs(CPU* c, u32 r) {
     switch (r) {
         case SYSREG(3, 3, 13, 0, 2): return c->tpidr;
         case SYSREG(3, 3, 13, 0, 3): return c->tpidrro;
@@ -131,7 +131,7 @@ u64 swr_mrs(CPU* c, u32 r) {
         default: return 0;
     }
 }
-void swr_msr(CPU* c, u32 r, u64 v) {
+void snx_msr(CPU* c, u32 r, u64 v) {
     switch (r) {
         case SYSREG(3, 3, 13, 0, 2): c->tpidr = v; break;
         case SYSREG(3, 3, 4, 2, 0): set_nzcv(c, (u32)(v >> 28)); break;

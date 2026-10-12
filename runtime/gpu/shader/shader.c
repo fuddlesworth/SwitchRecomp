@@ -1,10 +1,10 @@
 /* SwitchRecomp - Copyright 2026 MZ Labs
-   Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
+   Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 #include <string.h>
 #include <ctype.h>
-/* GM20B SASS -> GLSL 4.30. Instruction by instruction, the driver compiles the result and we cache it. */
+/* GM20B SASS -> GLSL 4.50. Instruction by instruction, the driver compiles the result and we cache it. */
 #include "gpu/shader/shader.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,36 +20,58 @@ void sb_put(Sb* s, const char* t) {
     memcpy(s->p + s->n, t, l + 1);
     s->n += l;
 }
+/* formatted text at the end of s, however long (no fixed buffer to cut a long expression off) */
+static void sb_vf(Sb* s, const char* f, va_list ap) {
+    va_list aq;
+    va_copy(aq, ap);
+    int l = vsnprintf(NULL, 0, f, aq);
+    va_end(aq);
+    if (l < 0) return;
+    if (s->n + (size_t)l + 1 > s->cap) {
+        s->cap = (s->n + (size_t)l + 1) * 2;
+        s->p = realloc(s->p, s->cap);
+    }
+    vsnprintf(s->p + s->n, (size_t)l + 1, f, ap);
+    s->n += (size_t)l;
+}
 void sb_f(Sb* s, const char* f, ...) {
-    char tmp[2048];
     va_list ap;
     va_start(ap, f);
-    vsnprintf(tmp, sizeof tmp, f, ap);
+    sb_vf(s, f, ap);
     va_end(ap);
-    sb_put(s, tmp);
 }
-/* scratch string ring for building expressions */
-static __thread char ring[64][384];
+/* scratch string ring for building expressions; each slot grows to what it has to hold */
+static __thread char* ring[64];
+static __thread size_t ringcap[64];
 static __thread int ringi;
 char* T(const char* f, ...) {
-    char* r = ring[ringi++ & 63];
-    va_list ap;
+    int i = ringi++ & 63;
+    va_list ap, aq;
     va_start(ap, f);
-    vsnprintf(r, 384, f, ap);
+    va_copy(aq, ap);
+    int l = vsnprintf(NULL, 0, f, aq);
+    va_end(aq);
+    size_t need = l < 0 ? 1 : (size_t)l + 1;
+    if (need > ringcap[i]) {
+        ringcap[i] = need < 384 ? 384 : need;
+        ring[i] = realloc(ring[i], ringcap[i]);
+    }
+    vsnprintf(ring[i], ringcap[i], f, ap);
     va_end(ap);
-    return r;
+    return ring[i];
 }
 int shader_vk_set(int stage) { return stage == ST_FS ? 1 : (stage == ST_VS || stage == ST_CS) ? 0 : 2; }
 /* where a declaration binds: its stage's set, and its binding in it (shader.h) */
 static const char* bind_at(int stage, int binding) { return T("set=%d, binding=%d", shader_vk_set(stage), binding); }
 
+/* registers past R254 (a vector access starting near the end) read as RZ, the way RZ itself does */
 char* R(Ctx* c, u32 r) {
-    if (r == 255) return "0u";
+    if (r >= 255) return "0u";
     c->used_reg[r] = 1;
     return T("r%u", r);
 }
 char* RF(Ctx* c, u32 r) {
-    if (r == 255) return "0.0";
+    if (r >= 255) return "0.0";
     c->used_reg[r] = 1;
     return T("uintBitsToFloat(r%u)", r);
 }
@@ -74,17 +96,15 @@ char* CBF(Ctx* c, u32 idx, u32 off) {
     return T("cb%u.d[%u].%c", idx, off >> 4, "xyzw"[(off >> 2) & 3]);
 }
 void emitl(Ctx* c, const char* f, ...) {
-    char tmp[4096];
     va_list ap;
-    va_start(ap, f);
-    vsnprintf(tmp, sizeof tmp, f, ap);
-    va_end(ap);
     for (int i = 0; i < c->indent; i++) sb_put(&c->out, "  ");
-    sb_put(&c->out, tmp);
+    va_start(ap, f);
+    sb_vf(&c->out, f, ap);
+    va_end(ap);
     sb_put(&c->out, "\n");
 }
 void setr(Ctx* c, u32 r, const char* e) {
-    if (r == 255) return; /* RZ: discard */
+    if (r >= 255) return; /* RZ (and past it): discard */
     c->used_reg[r] = 1;
     emitl(c, "r%u = %s;", r, e);
 }
@@ -112,17 +132,18 @@ void setp2(Ctx* c, u32 pa, u32 pb, u32 bo, const char* t, const char* pc) {
 /* operand B per encoding */
 u32 cb_idx(u64 w) { return B(w, 34, 5); }
 u32 cb_off(u64 w) { return B(w, 20, 14) * 4; }
-/* is c0[0x110+16k] an NVN ssbo address? returns k+1 or 0 */
+/* is c0[off] the {address, size} of an NVN ssbo? returns its index in gbuf_cbuf_off + 1, or 0.
+   They are 16-byte aligned in c0[0x110..0x210] for the graphics stages and c0[0x110..0x410] for compute, up to the 16
+   the renderer binds (SNX_VKB_SSBO) */
 u8 gbuf_tag(Ctx* c, u64 w) {
-    /* gfx ssbos live at c0[0x110..0x210], compute {addr,size} pairs at c0[0x210..0x410] */
-    u32 lo = 0x110, hi = c->stage == ST_CS ? 0x410 : 0x210; /* (NVN compute uses 0x310.., deko3d 0x110..) */
+    u32 lo = 0x110, hi = c->stage == ST_CS ? 0x410 : 0x210;
     if (cb_idx(w) != 0) return 0;
     u32 off = cb_off(w);
     if (off < lo || off >= hi || (off & 15)) return 0;
     ShaderInfo* si = c->si;
     for (int i = 0; i < si->ngbuf; i++)
         if (si->gbuf_cbuf_off[i] == off) return (u8)(i + 1);
-    if (si->ngbuf >= (c->stage == ST_CS ? 16 : 8)) return 0;
+    if (si->ngbuf >= 16) return 0;
     si->gbuf_cbuf_off[si->ngbuf++] = off;
     return (u8)si->ngbuf;
 }
@@ -157,7 +178,6 @@ char* opBf(Ctx* c, u64 w, int kind) {
         default: return RF(c, B(w, 39, 8));
     }
 }
-static int kind_of(int id, int base) { return id - base; }
 
 char* fneg_abs(const char* e, int neg, int abs) {
     const char* x = e;
@@ -234,6 +254,7 @@ static void mark_tgt(Ctx* c, u32 i) {
 static int is_tgt(Ctx* c, u32 i) { return i < 65536 && (c->tgt[i >> 3] >> (i & 7)) & 1; }
 
 int (*g_shader_cb_read)(u32 idx, u32 off, u32* out);
+static int brx_targets(const u64* w, u32 i, u32 n, u32* out, int max);
 u64 shader_hash(const u8* code, u32 max_bytes, u32* out_len) {
     if (!ops_ready) ops_init();
     const u64* w = (const u64*)code;
@@ -250,9 +271,14 @@ u64 shader_hash(const u8* code, u32 max_bytes, u32* out_len) {
             u32 t = bra_target(w[i], i);
             if (t > maxt) maxt = t;
         }
-        if (op->id == O_EXIT && B(w[i], 16, 4) == 7 && i >= maxt) break;
-        if (op->id == O_BRA && B(w[i], 16, 4) == 7 && B(w[i], 0, 5) == 15 && i >= maxt && bra_target(w[i], i) <= i)
-            break;
+        if (op->id == O_BRX) { /* its jump table's targets count too */
+            u32 tg[64];
+            int nt = brx_targets(w, i, n, tg, 64);
+            for (int q = 0; q < nt; q++)
+                if (tg[q] > maxt) maxt = tg[q];
+        }
+        if (op->id == O_EXIT && flow_always(w[i]) && i >= maxt) break;
+        if (op->id == O_BRA && flow_always(w[i]) && i >= maxt && bra_target(w[i], i) <= i) break;
         if (i > 16384) break;
     }
     u32 len = (last + 1) * 8;
@@ -291,7 +317,7 @@ int shader_merge_dual(const u8* a, const u8* b, u8* out, u32 max_bytes) {
     return 1;
 }
 
-/* BRX targets from its jump table (LDC nearby -> cbuf). -1 if we can't tell */
+/* BRX targets from its jump table (LDC nearby -> cbuf). -1 if we can't tell, or a target is past the n words */
 static int brx_targets(const u64* w, u32 i, u32 n, u32* out, int max) {
     if (!g_shader_cb_read) return -1;
     u32 ra = B(w[i], 8, 8);
@@ -313,7 +339,7 @@ static int brx_targets(const u64* w, u32 i, u32 n, u32* out, int max) {
             if (t >= 10 && ((t - 10) & 3) == 0) t++;
             if (t < 11) break;
             seen++;
-            if (t >= n) continue;
+            if (t >= n) return -1;
             out[cnt++] = t;
         }
         return seen ? cnt : -1;
@@ -321,18 +347,17 @@ static int brx_targets(const u64* w, u32 i, u32 n, u32* out, int max) {
     return -1;
 }
 /* ---- static SSY/PBK/PCNT resolution ----
-   Walk the CFG carrying the 3 stacks. If every reachable block sees the same stacks on all incoming paths,
-   each SYNC/BRK/CONT has a fixed target and we can drop the stacks. Any conflict (or underflow, or depth > 16)
-   falls back to the dynamic version. */
+   The hardware has one CRS stack: SSY/PBK/PCNT push a token of their kind with the target, SYNC/BRK/CONT pop the
+   entries down to the nearest token of theirs (a BRK out of an SSY region drops the SSY entry). Walk the CFG carrying
+   it. If every reachable block sees the same stack on all incoming paths, each SYNC/BRK/CONT has a fixed target and
+   we can drop the stack. Any conflict (or no entry to pop, or depth > 16) falls back to the dynamic version. */
 typedef struct {
-    u8 n[3];
-    u32 s[3][16];
+    u8 n;
+    u8 kind[16]; /* CRS_KIND */
+    u32 s[16];
 } Stk;
 static int stk_eq(const Stk* a, const Stk* b) {
-    for (int k = 0; k < 3; k++) {
-        if (a->n[k] != b->n[k] || memcmp(a->s[k], b->s[k], a->n[k] * 4)) return 0;
-    }
-    return 1;
+    return a->n == b->n && !memcmp(a->kind, b->kind, a->n) && !memcmp(a->s, b->s, a->n * 4);
 }
 typedef struct {
     Ctx* c;
@@ -392,30 +417,33 @@ static int stk_resolve(Ctx* c, u32 n, int fwd, const u32* brx_all, int brx_n) {
             u64 w = c->w[i];
             int id = op->id;
             u32 pg = B(w, 16, 3), pn = B(w, 19, 1);
-            int always = pg == 7 && !pn;
-            int kk = id == O_SSY || id == O_SYNC ? 0 : id == O_PBK || id == O_BRK ? 1 : 2;
+            int always = flow_always(w);
+            int kk = CRS_KIND(id);
             if (id == O_SSY || id == O_PBK || id == O_PCNT) {
-                if (s.n[kk] >= 16) {
+                if (s.n >= 16) {
                     ok = 0;
                     break;
                 }
-                s.s[kk][s.n[kk]++] = bra_target(w, i);
+                s.kind[s.n] = (u8)kk;
+                s.s[s.n++] = bra_target(w, i);
                 continue;
             } /* unpredicated */
             if (pg == 7 && pn) continue; /* never runs */
             if (id == O_SYNC || id == O_BRK || id == O_CONT) {
-                if (!s.n[kk]) {
+                int j = s.n;
+                while (j > 0 && s.kind[j - 1] != kk) j--;
+                if (!j) {
                     ok = 0;
                     break;
                 }
-                u32 tg = s.s[kk][s.n[kk] - 1];
+                u32 tg = s.s[j - 1];
                 if (c->pop_tgt[i] && c->pop_tgt[i] != tg) {
                     ok = 0;
                     break;
                 }
                 c->pop_tgt[i] = tg;
                 Stk s2 = s;
-                s2.n[kk]--;
+                s2.n = (u8)(j - 1);
                 ok = stk_succ(&A, i, tg, &s2);
                 if (always) break;
                 continue;
@@ -461,10 +489,7 @@ static u32 st_jump(Ctx* c, u32 i, const Op* op) {
     while (nx < c->nwords && !IDX_OK(nx)) nx++;
     return t == nx ? 0 : t;
 } /* branch to i+1, no-op */
-static int st_uncond(Ctx* c, u32 i) {
-    u64 w = c->w[i];
-    return B(w, 16, 3) == 7 && !B(w, 19, 1);
-}
+static int st_uncond(Ctx* c, u32 i) { return flow_always(c->w[i]); }
 /* jt[i]: 0 normal, ~0u becomes 'else', otherwise the equivalent nearer target */
 static int st_check(Ctx* c, u32 n, u32* jt) {
     Iv S[ST_MAX];
@@ -521,7 +546,8 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     c->w = (const u64*)code;
     c->stage = stage;
     c->si = si;
-    u32 attr_int = si->attr_int_mask, flat = si->fs_flat_mask;
+    /* the key's inputs (the caller's masks, compute's group size and shared memory) survive the reset */
+    u32 attr_int = si->attr_int_mask, attr_sint = si->attr_sint_mask, kclip = si->clip_enable;
     u32 ktm = si->tex_int_mask, kts = si->tex_sint_mask, krm = si->rt_int_mask, krs = si->rt_sint_mask;
     u32 kcl[3] = {si->cs_local[0], si->cs_local[1], si->cs_local[2]};
     int ksh = si->shared_size;
@@ -530,7 +556,8 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     memcpy(si->cs_local, kcl, sizeof kcl);
     si->shared_size = ksh;
     si->attr_int_mask = attr_int;
-    si->fs_flat_mask = flat;
+    si->attr_sint_mask = attr_sint;
+    si->clip_enable = kclip;
     si->tex_int_mask = ktm;
     si->tex_sint_mask = kts;
     si->rt_int_mask = krm;
@@ -576,7 +603,7 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     c->has_flow = flow;
     /* all branches forward (no loops): skip the switch loop and emit blocks in order behind pc guards.
      compiles and runs a lot faster. a BRX with a forward-only table also works this way */
-    int fwd = flow && !getenv("SWR_SHADER_SWITCH");
+    int fwd = flow && !getenv("SNX_SHADER_SWITCH");
     for (u32 i = 11; i < n && fwd; i++) {
         if (!IDX_OK(i)) continue;
         const Op* op = decode(c->w[i]);
@@ -594,7 +621,7 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
             fwd = 0;
     }
     /* resolve the stacks; a BRX can reach any block so all of them count as successors */
-    if (flow && has_stk && !all_ldr && !getenv("SWR_SHADER_DYNSTACK")) {
+    if (flow && has_stk && !all_ldr && !getenv("SNX_SHADER_DYNSTACK")) {
         u32* bl = NULL;
         int nb = 0;
         if (has_brx) {
@@ -609,7 +636,7 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     int merge = fwd && !has_brx;
     u32* jt = NULL;
     int stru = 0;
-    if (fwd && !has_brx && (!has_stk || c->stk_static) && !getenv("SWR_SHADER_NOSTRUCT")) {
+    if (fwd && !has_brx && (!has_stk || c->stk_static) && !getenv("SNX_SHADER_NOSTRUCT")) {
         jt = calloc(n + 1, sizeof(u32));
         stru = st_check(c, n, jt);
     }
@@ -638,7 +665,7 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
             const Op* op = decode(c->w[i]);
             if (!op) {
                 c->si->unsupported++;
-                emitl(c, "/* desconocida %016llx */", (unsigned long long)c->w[i]);
+                emitl(c, "/* unknown %016llx */", (unsigned long long)c->w[i]);
                 continue;
             }
             u32 t = st_jump(c, i, op);
@@ -647,7 +674,10 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
                     u64 w = c->w[i];
                     u32 pg = B(w, 16, 3);
                     if (jt[i]) t = jt[i];
-                    emitl(c, "if(%s) {", pg == 7 ? "false" : B(w, 19, 1) ? P(c, pg) : T("(!%s)", P(c, pg)));
+                    if (B(w, 0, 5) != 15) /* taken on a condition code too */
+                        emitl(c, "if(!%s) {", flow_cond(c, w));
+                    else
+                        emitl(c, "if(%s) {", pg == 7 ? "false" : B(w, 19, 1) ? P(c, pg) : T("(!%s)", P(c, pg)));
                     S[sp].end = t;
                     S[sp].end2 = 0;
                     S[sp].els = 0;
@@ -675,11 +705,8 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     } /* no second return after the final EXIT */
     else if (fwd)
         sb_put(&c->out, "  uint pc = 11u;\n");
-    else if (flow) {
-        sb_put(
-            &c->out,
-            "  uint pc = 11u; uint guard_ = 0u;\n  while(true){\n    if(++guard_ > 16384u) return;\n    switch(pc){\n");
-    }
+    else if (flow) /* no iteration cap: a cut-off would return from a long loop past the outputs' writes */
+        sb_put(&c->out, "  uint pc = 11u;\n  while(true){\n    switch(pc){\n");
     /* dead code still goes through translation (keeps ShaderInfo/decls the same), the text is thrown away */
     int dead = 0;
     Sb live = {0};
@@ -711,14 +738,14 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
         const Op* op = decode(c->w[i]);
         if (!op) {
             c->si->unsupported++;
-            emitl(c, "/* desconocida %016llx */", (unsigned long long)c->w[i]);
+            emitl(c, "/* unknown %016llx */", (unsigned long long)c->w[i]);
             continue;
         }
         emit_tracked(c, i, c->w[i], op);
         int id = op->id;
         u64 w = c->w[i];
-        if (!flow && id == O_EXIT && B(w, 16, 3) == 7 && !B(w, 19, 1)) exit_end = c->out.n;
-        if (flow && !dead && B(w, 16, 3) == 7 && !B(w, 19, 1) &&
+        if (!flow && id == O_EXIT && flow_always(w)) exit_end = c->out.n;
+        if (flow && !dead && flow_always(w) &&
             (id == O_BRA || id == O_BRX || id == O_SYNC || id == O_BRK || id == O_CONT || id == O_EXIT)) {
             dead = 1;
             live = c->out;
@@ -745,7 +772,11 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
             c->indent = 3;
             emitl(c, "return;");
         }
-        sb_put(&c->out, "      default: return;\n    }\n  }\n");
+        /* a pc no block has (a BRX outside its table) ends the program like an EXIT */
+        sb_put(&c->out, "      default:\n");
+        c->indent = 4;
+        exit_epilogue(c);
+        sb_put(&c->out, "    }\n  }\n");
     } else if (exit_end != c->out.n) {
         c->indent = 1;
         exit_epilogue(c);
@@ -754,14 +785,14 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     Sb* D = &c->decl;
     sb_put(D, "#version 450\n");
     if (c->uses_draw_params) sb_put(D, "#extension GL_ARB_shader_draw_parameters : require\n");
+    if (c->uses_shadow_lod) sb_put(D, "#extension GL_EXT_texture_shadow_lod : require\n");
     /* gl_Layer from a stage before the fragment shader */
     if (stage != ST_FS && si->writes_layer)
-        sb_put(D, "#extension GL_ARB_shader_viewport_layer_array : require\n#define SWR_SET_LAYER(v) gl_Layer=(v)\n");
-    if (stage == ST_FS && (si->sph[0] >> 15 & 1)) {}
+        sb_put(D, "#extension GL_ARB_shader_viewport_layer_array : require\n#define SNX_SET_LAYER(v) gl_Layer=(v)\n");
     if (stage == ST_FS && si->uses_position_in)
-        sb_f(D, "layout(std140, %s) uniform SWR_RS { vec4 swr_rs; };\n", bind_at(stage, SWR_VKB_RS)); /* 1/res scale */
+        sb_f(D, "layout(std140, %s) uniform SNX_RS { vec4 snx_rs; };\n", bind_at(stage, SNX_VKB_RS)); /* 1/res scale */
     for (int i = 0; i < si->ngbuf; i++)
-        sb_f(D, "layout(std430, %s) %sbuffer S%d_G%d { uint d[]; } g%d;\n", bind_at(stage, SWR_VKB_SSBO + i),
+        sb_f(D, "layout(std430, %s) %sbuffer S%d_G%d { uint d[]; } g%d;\n", bind_at(stage, SNX_VKB_SSBO + i),
              ((si->gbuf_wmask >> i) & 1) ? "" : "readonly ", stage, i, i);
     if (stage == ST_CS)
         sb_f(D, "layout(local_size_x=%u, local_size_y=%u, local_size_z=%u) in;\n",
@@ -769,11 +800,11 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
              si->cs_local[2] ? si->cs_local[2] : 1);
     for (int i = 0; i < 18; i++)
         if (si->cbuf_mask & (1u << i))
-            sb_f(D, "layout(std140, %s) uniform S%d_CB%d { vec4 d[4096]; } cb%d;\n", bind_at(stage, SWR_VKB_CB + i),
+            sb_f(D, "layout(std140, %s) uniform S%d_CB%d { vec4 d[4096]; } cb%d;\n", bind_at(stage, SNX_VKB_CB + i),
                  stage, i, i);
     for (int i = 0; i < si->ntex; i++) {
         ShTex* t = &si->tex[i];
-        sb_f(D, "layout(%s) uniform %s S%d_tex%d;\n#define tex%d S%d_tex%d\n", bind_at(stage, SWR_VKB_TEX + i),
+        sb_f(D, "layout(%s) uniform %s S%d_tex%d;\n#define tex%d S%d_tex%d\n", bind_at(stage, SNX_VKB_TEX + i),
              T("%s%s",
                (!t->shadow && ((si->tex_int_mask >> i) & 1)) ? (((si->tex_sint_mask >> i) & 1) ? "i" : "u") : "",
                samp_type(t->type, t->array, t->shadow)),
@@ -788,26 +819,28 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
                      isint ? ((si->attr_sint_mask >> i) & 1 ? "ivec4" : "uvec4") : "vec4", i);
             }
         for (int i = 0; i < 32; i++)
-            if (c->out_used[i]) {
-                si->out_mask |= 1u << i;
-                sb_f(D, "layout(location=%d) out vec4 out_attr%d;\n", i, i);
-            }
+            if (c->out_used[i]) sb_f(D, "layout(location=%d) out vec4 out_attr%d;\n", i, i);
+        /* as many clip distances as the program writes: Vulkan clips with every one the array has, so an unwritten
+           one would clip by an undefined value */
+        int ncd = 0;
+        while (ncd < 8 && si->uses_clip_mask >> ncd) ncd++;
+        const char* cd = ncd ? T("float gl_ClipDistance[%d];", ncd) : "";
         /* invariant so depth matches across passes with different shaders */
-        if (si->writes_layer)
-            sb_put(
-                D,
-                "invariant gl_Position;\nout float gl_ClipDistance[8];\n"); /* Mesa drops gl_Layer when the block is redeclared */
+        if (si->writes_layer) /* Mesa drops gl_Layer when the block is redeclared */
+            sb_f(D, "invariant gl_Position;\n%s%s", ncd ? "out " : "", ncd ? T("%s\n", cd) : "");
         else
-            sb_put(D,
-                   "out gl_PerVertex { invariant vec4 gl_Position; float gl_PointSize; float gl_ClipDistance[8]; };\n");
+            sb_f(D, "out gl_PerVertex { invariant vec4 gl_Position; float gl_PointSize;%s%s };\n", ncd ? " " : "", cd);
     } else if (stage == ST_FS) {
         const u8* imap = (const u8*)si->sph + 0x18;
         for (int i = 0; i < 32; i++)
             if (c->in_used[i]) {
                 si->in_mask |= 1u << i;
+                /* the interpolation of the first component the header lists as used: 1 constant, 2 perspective,
+                   3 screen linear (Ryujinx ImapPixelType.GetFirstUsedType) */
                 u8 m = imap[i];
-                int f = (m & 3) == 1 || ((m >> 2) & 3) == 1 || (flat >> i) & 1;
-                int lin = (m & 3) == 3;
+                int k = 0;
+                while (k < 3 && !((m >> (k * 2)) & 3)) k++;
+                int mode = (m >> (k * 2)) & 3, f = mode == 1, lin = mode == 3;
                 sb_f(D, "layout(location=%d) %sin vec4 in_attr%d;\n", i, f ? "flat " : lin ? "noperspective " : "", i);
             }
         u32 target = si->sph[18];
@@ -816,29 +849,29 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
                 sb_f(D, "layout(location=%d) out %s frag_color%d;\n", rt,
                      ((si->rt_int_mask >> rt) & 1) ? (((si->rt_sint_mask >> rt) & 1) ? "ivec4" : "uvec4") : "vec4", rt);
     }
-    if (c->uses_local) sb_put(D, "uint lmem[1024];\n");
+    if (c->uses_local) sb_f(D, "uint lmem[%u];\n", lmem_words(c));
     if (c->uses_shared)
         sb_f(D, "shared uint smem[%d];\n", stage == ST_CS && si->shared_size > 0 ? (si->shared_size + 3) / 4 : 16384);
     if (stage == ST_CS) {
         static const char* it[6] = {"image1D", "imageBuffer", "image1DArray", "image2D", "image2DArray", "image3D"};
         for (int k = 0; k < si->nimg; k++)
-            sb_f(D, "layout(%s) writeonly uniform %s img%d;\n", bind_at(stage, SWR_VKB_IMG + k), it[si->img[k].type],
+            sb_f(D, "layout(%s) writeonly uniform %s img%d;\n", bind_at(stage, SNX_VKB_IMG + k), it[si->img[k].type],
                  k);
         if (c->uses_img_raw) {
             /* format class: 0 f32, 1 f16, 2 unorm8, 3 unorm16 */
             sb_put(
                 D,
-                T("layout(std140, %s) uniform SWR_FMT { int swr_ic[8]; int swr_tc[32]; int swr_ib[8]; int swr_tb[32]; };\n",
-                  bind_at(stage, SWR_VKB_FMT)));
+                T("layout(std140, %s) uniform SNX_FMT { int snx_ic[8]; int snx_tc[32]; int snx_ib[8]; int snx_tb[32]; };\n",
+                  bind_at(stage, SNX_VKB_FMT)));
             sb_put(
                 D,
-                "vec4 swr_r2v(uvec4 r, uint n, uint sz, int cls){\n"
+                "vec4 snx_r2v(uvec4 r, uint n, uint sz, int cls){\n"
                 "  if(sz<4u){ uint v = sz<2u? (r.x&0xFFu) : (r.x&0xFFFFu); if(cls==1) return vec4(unpackHalf2x16(v).x,0.0,0.0,1.0); if(cls==2) return vec4(float(v&0xFFu)/255.0,0.0,0.0,1.0); if(cls==3) return vec4(float(v)/65535.0,0.0,0.0,1.0); return vec4(uintBitsToFloat(v),0.0,0.0,1.0); }\n"
                 "  if(cls==1) return n>=2u? vec4(unpackHalf2x16(r.x),unpackHalf2x16(r.y)) : vec4(unpackHalf2x16(r.x),0.0,1.0);\n"
                 "  if(cls==2) return unpackUnorm4x8(r.x);\n"
                 "  if(cls==3) return n>=2u? vec4(unpackUnorm2x16(r.x),unpackUnorm2x16(r.y)) : vec4(unpackUnorm2x16(r.x),0.0,1.0);\n"
                 "  return vec4(uintBitsToFloat(r.x), n>=2u? uintBitsToFloat(r.y) : 0.0, n>=4u? uintBitsToFloat(r.z) : 0.0, n>=4u? uintBitsToFloat(r.w) : 1.0); }\n"
-                "uvec4 swr_v2r(vec4 v, uint sz, int cls){\n"
+                "uvec4 snx_v2r(vec4 v, uint sz, int cls){\n"
                 "  uvec4 o;\n"
                 "  if(cls==1) o=uvec4(packHalf2x16(v.xy),packHalf2x16(v.zw),0u,0u); else if(cls==2) o=uvec4(packUnorm4x8(v),0u,0u,0u);\n"
                 "  else if(cls==3) o=uvec4(packUnorm2x16(v.xy),packUnorm2x16(v.zw),0u,0u); else o=floatBitsToUint(v);\n"
@@ -859,21 +892,23 @@ char* shader_to_glsl(const u8* code, u32 max_bytes, int stage, ShaderInfo* si) {
     }
     sb_put(D, "void main(){\n");
     if (c->stage == ST_VS && !c->si->writes_point_size) sb_put(D, "  gl_PointSize = 1.0;\n");
+    /* a clip distance below the last written one that the program leaves alone doesn't clip */
+    for (int i = 0; c->stage == ST_VS && i < 8 && c->si->uses_clip_mask >> i; i++)
+        if (!((c->si->uses_clip_mask >> i) & 1)) sb_f(D, "  gl_ClipDistance[%d] = 0.0;\n", i);
     /* VS regs are precise. depth prepass and color pass use different shaders with the same position math;
      if the driver fuses an fma in only one of them, depths differ by an ulp and the EQUAL test fails */
     {
         static int nop = -1;
-        if (nop < 0) nop = getenv("SWR_NO_PRECISE_VS") != NULL;
+        if (nop < 0) nop = getenv("SNX_NO_PRECISE_VS") != NULL;
         const char* rq = (c->stage == ST_VS && !nop) ? "precise uint" : "uint";
         for (int i = 0; i < 255; i++)
             if (c->used_reg[i]) sb_f(D, "  %s r%d = 0u;\n", rq, i);
     }
     for (int i = 0; i < 7; i++)
         if (c->used_pred[i]) sb_f(D, "  bool p%d = false;\n", i);
-    if (c->uses_cc) sb_put(D, "  bool cc_z=false, cc_s=false, cc_c=false;\n");
-    if (c->uses_stk[0]) sb_put(D, "  uint ssy[16]; int ssy_sp=0;\n");
-    if (c->uses_stk[1]) sb_put(D, "  uint pbk[16]; int pbk_sp=0;\n");
-    if (c->uses_stk[2]) sb_put(D, "  uint pcnt[16]; int pcnt_sp=0;\n");
+    if (c->uses_cc) sb_put(D, "  bool cc_z=false, cc_s=false, cc_c=false, cc_o=false;\n");
+    /* the CRS stack: target | token << 16 (CRS_KIND) */
+    if (c->uses_crs) sb_put(D, "  uint crs[32]; int crs_sp=0;\n");
     if (stage == ST_FS) {
         u32 target = si->sph[18];
         for (int rt = 0; rt < 8; rt++)
