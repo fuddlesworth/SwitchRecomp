@@ -8,10 +8,5 @@
 #include "abi/cpu.h"
 
 void romfs_init(void);
-/* Android: the romfs comes from the APK (chunks of a file) or a folder */
-int romfs_add_chunk(int fd, u64 base, u64 len);
-extern char g_romfs_dir_override[1024];
-u64 romfs_size(void);
-int romfs_read(u64 off, void* dst, u64 size);
 
 #endif

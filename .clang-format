@@ -1,6 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
 # Format with clang-format 23 (scripts/format.sh checks the version). Upstream releases get the same formatting when
-# they are imported (scripts/import-upstream.sh), so merges only show real changes: change this file only together
-# with a reformat of both branches.
+# they are imported (scripts/import-upstream.sh), so the diff between two releases on the upstream branch
+# (upstream~2..upstream) shows only what changed, and they are ported to main by hand from it. Change this file only
+# together with a reformat of both branches.
 BasedOnStyle: LLVM
 Language: Cpp
 IndentWidth: 4
@@ -22,11 +25,14 @@ AlignTrailingComments:
   OverEmptyLines: 0
 AlignConsecutiveMacros: AcrossComments
 IndentCaseLabels: true
-# Include order matters in places (glfn.h after the GL headers): never reorder
+# Include order matters in places (upstream's glfn.h after the GL headers): never reorder
 SortIncludes: Never
-# gpu/gl/renderer.c's SR(first, last) range list has no semicolons between items: without this, clang-format wraps it as
-# one expression and never settles. glfn.h's X-macro list has the same shape, but X is also a variable name
-# elsewhere, so scripts/format.sh leaves glfn.h alone instead
+# Formatting only changes whitespace: LLVM style would also add `// namespace` comments and sort using-declarations
+FixNamespaceComments: false
+SortUsingDeclarations: Never
+# Upstream's runtime/gpu_gl.c has an SR(first, last) range list with no semicolons between items: without this,
+# clang-format wraps it as one expression and never settles. Upstream's runtime/glfn.h X-macro list has the same shape,
+# but X is also a variable name elsewhere, so scripts/format.sh leaves glfn.h alone instead
 StatementMacros: [SR]
 ReflowComments: false
 # Splitting a long string into adjacent literals changes no code but is more than whitespace

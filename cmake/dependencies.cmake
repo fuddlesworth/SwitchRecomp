@@ -17,9 +17,16 @@ if(DEFINED CPM_SOURCE_CACHE)
 else()
     set(cpm_file "$ENV{CPM_SOURCE_CACHE}/cpm/CPM_${CPM_VERSION}.cmake")
 endif()
-if(NOT EXISTS "${cpm_file}")
-    file(DOWNLOAD "https://github.com/cpm-cmake/CPM.cmake/releases/download/v${CPM_VERSION}/CPM.cmake" "${cpm_file}"
-         EXPECTED_HASH SHA256=${CPM_HASH})
+# Checked on every configure, not only after downloading it: a download that failed its check or broke off leaves a
+# file behind, and the next configure would include it. The download goes to a .part file, renamed once checked
+set(cpm_have "")
+if(EXISTS "${cpm_file}")
+    file(SHA256 "${cpm_file}" cpm_have)
+endif()
+if(NOT cpm_have STREQUAL CPM_HASH)
+    file(DOWNLOAD "https://github.com/cpm-cmake/CPM.cmake/releases/download/v${CPM_VERSION}/CPM.cmake"
+         "${cpm_file}.part" EXPECTED_HASH SHA256=${CPM_HASH})
+    file(RENAME "${cpm_file}.part" "${cpm_file}")
 endif()
 include("${cpm_file}")
 
@@ -66,7 +73,6 @@ if(SWR_VULKAN)
                           "ENABLE_SPVREMAPPER OFF")
     swr_quiet(glslang glslang-default-resource-limits)
 endif()
-
 
 if(SWR_BACKEND STREQUAL "sdl3")
     if(WIN32)

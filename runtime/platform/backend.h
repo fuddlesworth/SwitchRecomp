@@ -12,7 +12,10 @@ void video_present_rgba(const u32* px, int w, int h, int stride); /* final RGBA8
 void video_poll(void);
 void backend_ini(const char* k, const char* v);
 void frontend_frame(void);
+/* the window's size in pixels, for the Vulkan renderer's swapchain: the SDL3 backend only (the headless build has no
+   Vulkan renderer) */
 void backend_window_size(int* w, int* h);
-void win_fatal_box(const char* msg); /* Windows */
+/* fatal's error box, on every platform despite the name (a no-op where the backend has none), from any thread */
+void win_fatal_box(const char* msg);
 
 #endif

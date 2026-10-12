@@ -13,6 +13,7 @@
 
 u64 g_code_lo, g_code_hi;
 
+/* every read is checked against slen, every write against dlen: a damaged file fails instead of reading past it */
 static int lz4_dec(const u8* src, u32 slen, u8* dst, u32 dlen) {
     u32 i = 0, o = 0;
     while (i < slen) {
@@ -21,27 +22,30 @@ static int lz4_dec(const u8* src, u32 slen, u8* dst, u32 dlen) {
         if (l == 15) {
             u8 b;
             do {
+                if (i >= slen) return -1;
                 b = src[i++];
                 l += b;
             } while (b == 255);
         }
-        if (o + l > dlen || i + l > slen) return -1;
+        if (l > dlen - o || l > slen - i) return -1;
         memcpy(dst + o, src + i, l);
         i += l;
         o += l;
         if (i >= slen) break;
+        if (slen - i < 2) return -1;
         u32 off = src[i] | (src[i + 1] << 8);
         i += 2;
         u32 m = tok & 15;
         if (m == 15) {
             u8 b;
             do {
+                if (i >= slen) return -1;
                 b = src[i++];
                 m += b;
             } while (b == 255);
         }
         m += 4;
-        if (off > o || o + m > dlen) return -1;
+        if (!off || off > o || m > dlen - o) return -1;
         for (u32 k = 0; k < m; k++) {
             dst[o] = dst[o - off];
             o++;
@@ -56,6 +60,10 @@ static u8* read_all(const char* path, u64* size) {
     fseek(f, 0, SEEK_END);
     long n = ftell(f);
     fseek(f, 0, SEEK_SET);
+    if (n < 0) {
+        fclose(f);
+        return NULL;
+    }
     u8* b = malloc(n > 0 ? n : 1);
     if (fread(b, 1, n, f) != (size_t)n) {
         fclose(f);
@@ -87,10 +95,11 @@ static int load_one(const SwrModInfo* mi) {
     u64 size = mi->size;
     if (mem_map(mi->base, size, MS_CODE, PERM_RW)) {
         WARN("could not map %s at %llx\n", mi->name, (unsigned long long)mi->base);
+        free(f);
         return -1;
     }
     u8* dst = GP(mi->base);
-    if (!memcmp(f, "NSO0", 4)) {
+    if (fsz >= 0x100 && !memcmp(f, "NSO0", 4)) {
         u32 flags;
         memcpy(&flags, f + 0xC, 4);
         u32 seg[3][3];
@@ -102,7 +111,13 @@ static int load_one(const SwrModInfo* mi) {
             free(f);
             return -2;
         }
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 3; i++) { /* each segment inside the file, and inside the module's mapping */
+            u32 stored = (flags & (1u << i)) ? fs[i] : seg[i][2];
+            if (seg[i][0] > fsz || stored > fsz - seg[i][0] || seg[i][1] > size || seg[i][2] > size - seg[i][1]) {
+                WARN("%s: segment %d lies outside the file or the module\n", mi->name, i);
+                free(f);
+                return -1;
+            }
             if (flags & (1u << i)) {
                 if (lz4_dec(f + seg[i][0], fs[i], dst + seg[i][1], seg[i][2]) != (int)seg[i][2]) {
                     WARN("LZ4 failed in %s\n", mi->name);
@@ -115,7 +130,8 @@ static int load_one(const SwrModInfo* mi) {
     } else if (fsz > 0x20 && !memcmp(f + 0x10, "NRO0", 4)) {
         u32 isz;
         memcpy(&isz, f + 0x18, 4);
-        memcpy(dst, f, isz < fsz ? isz : fsz);
+        u64 n = isz < fsz ? isz : fsz;
+        memcpy(dst, f, n < size ? n : size);
     } else {
         WARN("%s: unknown format\n", p);
         free(f);

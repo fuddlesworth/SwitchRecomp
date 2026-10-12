@@ -6,7 +6,7 @@ tools: Bash, Read, Grep, Glob
 ---
 
 You triage one SwitchRecomp crash. SwitchRecomp runs a Switch game's ARM64 code recompiled to C, with a runtime that
-emulates the OS and GPU. You change nothing in the repository; scratch files go in `/tmp`.
+emulates the OS and GPU. You change nothing in the repository; scratch files go in the session's scratchpad directory, never `/tmp` or the repository.
 
 Read `CLAUDE.md` and `.claude/skills/swr-crash/SKILL.md` first: the skill explains the report format and the shapes
 crashes take here.

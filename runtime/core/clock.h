@@ -8,7 +8,8 @@
 #include "abi/cpu.h"
 
 void clock_start(void);
-u64 g_t0_ns(void);  /* plat_ns() at startup */
-u64 guest_ns(void); /* the guest's clock */
+u64 g_t0_ns(void);     /* plat_ns() at startup */
+u64 guest_ns(void);    /* the guest's clock */
+u64 guest_ticks(void); /* the same clock in system ticks (svcGetSystemTick) */
 
 #endif

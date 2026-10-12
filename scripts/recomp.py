@@ -36,7 +36,7 @@ def main():
     subprocess.run(['cmake', '--build', '--preset', PRESET], cwd=REPO, check=True)
     runtime = os.path.join(REPO, 'build', PRESET, 'swr-runtime' + ('.exe' if WINDOWS else ''))
     extra = list(a.extra)
-    if '--cc' not in extra:
+    if not any(e == '--cc' or e.startswith('--cc=') for e in extra):
         extra += ['--cc', 'clang']
     cmd = [
         sys.executable,
@@ -77,7 +77,10 @@ def prebuild_shaders(romfs):
             continue
         os.makedirs(cache, exist_ok=True)
         print('Translating the shaders in %s' % os.path.relpath(root, romfs), flush=True)
-        subprocess.run([shaderc, '--nvn', root, '--cache', cache])
+        rc = subprocess.run([shaderc, '--nvn', root, '--cache', cache]).returncode
+        if rc:
+            # Not fatal: those shaders are compiled when the game first draws with them
+            print('swr-shaderc failed on some of them (exit %d): run it with --verbose to see which' % rc, flush=True)
 
 
 if __name__ == '__main__':

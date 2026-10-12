@@ -5,55 +5,54 @@
 /* set and set:sys: system settings */
 #include "hle/services_int.h"
 /* ================================================================ set */
+/* the LanguageCode list in index order (nn::settings::Language), used by am's GetDesiredLanguage too */
+static const char* const g_lang_codes[] = {"ja",    "en-US", "fr",     "de",      "it",      "es",
+                                           "zh-CN", "ko",    "nl",     "pt",      "ru",      "zh-TW",
+                                           "en-GB", "fr-CA", "es-419", "zh-Hans", "zh-Hant", "pt-BR"};
+#define NLANG ((int)(sizeof g_lang_codes / sizeof g_lang_codes[0]))
+static u64 lang_code(int i) {
+    u64 v = 0;
+    memcpy(&v, g_lang_codes[i], strlen(g_lang_codes[i]));
+    return v;
+}
+u64 set_language_code(int lang) { return lang_code(lang >= 0 && lang < NLANG ? lang : 1); }
 static int set_disp(SvcObj* o, IpcCtx* c) {
-    static const char* codes[] = {"ja", "en-US", "fr",    "de",    "it",    "es",     "zh-CN",   "ko",      "nl",
-                                  "pt", "ru",    "zh-TW", "en-GB", "fr-CA", "es-419", "zh-Hans", "zh-Hant", "pt-BR"};
     switch (c->cmd) {
-        case 0: {
-            u64 v = 0;
-            const char* s = codes[g_opt_lang % 18];
-            memcpy(&v, s, strlen(s));
-            out64(c, v);
-            return 0;
-        } /* GetLanguageCode */
+        case 0: out64(c, set_language_code(g_hle_lang)); return 0; /* GetLanguageCode */
         case 1:
         case 5: {
             u64 a, s;
             buf_out(c, 0, &a, &s);
             u32 n = (u32)(s / 8);
-            u32 max = c->cmd == 1 ? 15 : 18;
+            u32 max = c->cmd == 1 ? 15 : NLANG;
             if (n > max) n = max;
-            for (u32 i = 0; i < n; i++) {
-                u64 v = 0;
-                memcpy(&v, codes[i], strlen(codes[i]));
-                gw64(a + i * 8, v);
-            }
+            for (u32 i = 0; i < n; i++) gw64(a + i * 8, lang_code((int)i));
             out32(c, n);
             return 0;
         }
         case 2: {
             u32 idx = in32(c, 0);
-            u64 v = 0;
-            if (idx < 18) memcpy(&v, codes[idx], strlen(codes[idx]));
-            out64(c, v);
+            out64(c, idx < NLANG ? lang_code((int)idx) : 0);
             return 0;
         } /* MakeLanguageCode */
         case 3: out32(c, 15); return 0;
-        case 6: out32(c, 18); return 0;
+        case 6: out32(c, NLANG); return 0;
         case 4: out32(c, 1); return 0; /* GetRegionCode: usa */
         case 7:
         case 9: {
             u64 a, s;
             buf_out(c, 0, &a, &s);
-            memset(GP(a), 0, s);
+            if (a) memset(GP(a), 0, s);
             return 0;
         }
         case 8: out32(c, 0); return 0;
-        case 11: {
+        case 11: { /* GetDeviceNickName: a 0x80 byte buffer */
+            static const char name[] = "SwitchRecomp";
             u64 a, s;
             buf_out(c, 0, &a, &s);
+            if (!a || !s) return 0;
             memset(GP(a), 0, s);
-            strcpy((char*)GP(a), "SwitchRecomp");
+            memcpy(GP(a), name, s < sizeof name ? s - 1 : sizeof name);
             return 0;
         }
     }
@@ -83,18 +82,23 @@ static int setsys_disp(SvcObj* o, IpcCtx* c) {
             return 0;
         }
         case 23: out32(c, 0); return 0; /* GetColorSetId */
-        case 38:
-        case 62: out32(c, 0); return 0;
-        case 37: {
+        case 37: out64(c, 0); return 0; /* GetSettingsItemValueSize(class, key in X buffers): no such setting */
+        case 38: {                      /* GetSettingsItemValue: the value goes to the B buffer, its size out */
             u64 a, s;
             buf_out(c, 0, &a, &s);
-            memset(GP(a), 0, s);
+            if (a) memset(GP(a), 0, s);
             out64(c, 0);
             return 0;
-        } /* GetSettingsItemValueSize */
-        case 90:
-        case 91: out32(c, 0); return 0;
+        }
+        case 62: out8(c, 0); return 0; /* GetDebugModeFlag */
+        case 90: {                     /* GetMiiAuthorId */
+            u8 id[16];
+            memset(id, 0, sizeof id);
+            outbytes(c, id, 16);
+            return 0;
+        }
+        case 91: return 0; /* SetShutdownRtcValue */
     }
-    return quiet_ok(o, c);
+    return stub_ok(o, c);
 }
 SvcObj* new_setsys(void) { return svcobj_new("set:sys", setsys_disp, 0); }

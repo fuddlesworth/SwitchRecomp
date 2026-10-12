@@ -11,7 +11,7 @@ enum { ST_VS = 0, ST_TCS = 1, ST_TES = 2, ST_GS = 3, ST_FS = 4, ST_CS = 5 };
 typedef struct {
     u32 cbuf_off; /* handle offset in the texture cbuf, in words */
     u8 type;      /* 0 1D 1 2D 2 3D 3 CUBE */
-    u8 array, shadow, fetch_only, is_int;
+    u8 array, shadow;
     u8 bindless;
     u8 bl_cbuf;
     u8 bl2;
@@ -21,18 +21,14 @@ typedef struct {
 typedef struct {
     int stage;
     u32 sph[20];
-    u32 cbuf_mask; /* cbufs used */
-    u32 cbuf_indirect_mask;
+    u32 cbuf_mask;    /* cbufs used */
     u32 cbuf_max[18]; /* bytes used per cbuf, so we upload less */
     ShTex tex[SH_MAXTEX];
     int ntex;
-    u32 in_mask, out_mask; /* generic attribs 0..31 */
-    u32 attr_int_mask;     /* key: integer VS attribs */
+    u32 in_mask;       /* generic attribs 0..31 read */
+    u32 attr_int_mask; /* key: integer VS attribs */
     u32 attr_sint_mask;
-    u32 fs_flat_mask; /* key */
-    int writes_depth, uses_position_in, uses_clip_mask, writes_layer, writes_point_size, uses_front_face;
-    u32 frag_rt_mask;
-    int uses_global, uses_local, local_size;
+    int uses_position_in, uses_clip_mask, writes_layer, writes_point_size;
     u32 gbuf_cbuf_off[16];
     int ngbuf;       /* global buffers found (their cbuf0 offset) */
     int unsupported; /* count of instructions we couldn't translate */
@@ -44,8 +40,7 @@ typedef struct {
         u32 cbuf_off;
         u8 type, bindless, bl_cbuf, pad;
     } img[8];
-    int nimg;       /* SUST targets (compute) */
-    u32 sutex_mask; /* SULD.D reads, these need their format class in swr_tc */
+    int nimg;                                                   /* SUST targets (compute) */
     u32 tex_int_mask, tex_sint_mask, rt_int_mask, rt_sint_mask; /* FS key: integer textures / outputs */
 } ShaderInfo;
 /* the GLSL is for Vulkan: one descriptor set per stage (shader_vk_set), bindings in it by kind */

@@ -7,7 +7,9 @@
      swr-shaderc --nvn DIR --cache DIR
 
    --out writes each shader's GLSL and .spv to DIR, to compare the translator's output between two builds. --cache goes
-   through the runtime's SPIR-V cache in DIR, as the renderer does. Exit status 1 when anything failed.
+   through the runtime's SPIR-V cache in DIR, as the renderer does. Exit status 1 when a shader failed to compile or to
+   validate, a corpus file could not be read or an output could not be written. Shaders the translator doesn't support
+   are counted, not failures.
 
    --nvn fills the SPIR-V cache before the game first runs (scripts/recomp.py does it): DIR holds the game's own NVN
    shader files, as Catherine ships them in romfs. Their programs translate the way the renderer translates them on
@@ -19,14 +21,42 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
+#define USAGE                                                                                                          \
+    "usage: %s CORPUS_DIR [--out DIR] [--validate] [--cache DIR] [--verbose]\n"                                        \
+    "       %s --nvn DIR --cache DIR [--verbose]\n"
 
 static int write_file(const char* path, const void* p, size_t n) {
     FILE* f = fopen(path, "wb");
-    if (!f) return 0;
-    int ok = fwrite(p, 1, n, f) == n;
-    fclose(f);
+    int ok = f && fwrite(p, 1, n, f) == n;
+    if (f && fclose(f)) ok = 0;
+    if (!ok) fprintf(stderr, "cannot write %s\n", path);
     return ok;
+}
+
+/* s as one argument of the shell popen() runs: in single quotes for sh, in double quotes for cmd.exe (a Windows path
+   can't hold a double quote) */
+static void shell_quote(char* out, size_t n, const char* s) {
+#ifdef _WIN32
+    snprintf(out, n, "\"%s\"", s);
+#else
+    size_t o = 0;
+    out[o++] = '\'';
+    for (; *s && o + 6 < n; s++) {
+        if (*s == '\'') { /* close the quotes, an escaped quote, open them again */
+            memcpy(out + o, "'\\''", 4);
+            o += 4;
+        } else
+            out[o++] = *s;
+    }
+    out[o++] = '\'';
+    out[o] = 0;
+#endif
 }
 
 /* NVN shader files: a 0x19866891 magic, a control section, then the program (its header first) at 2896 bytes */
@@ -45,7 +75,13 @@ static int nvn_dir(const char* dir, const char* cache, int verbose) {
         snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
         FILE* f = fopen(path, "rb");
         if (!f) continue;
-        u8* buf = calloc(1, 0x10000 + NVN_CODE);
+        /* Room for twice the program: a VertexB found at offset o is read for 0x10000 bytes like any program
+           (shader_hash, shader_merge_dual), up to o bytes past the file's part, which the zeroed second half holds */
+        u8* buf = calloc(1, NVN_CODE + 2 * 0x10000);
+        if (!buf) {
+            fclose(f);
+            continue;
+        }
         size_t n = fread(buf, 1, 0x10000 + NVN_CODE, f);
         fclose(f);
         u32 magic, sph0;
@@ -107,7 +143,7 @@ static int nvn_dir(const char* dir, const char* cache, int verbose) {
     }
     closedir(d);
     printf("%d shaders: %d in the SPIR-V cache, %d failed to compile\n", total, done, failed);
-    return 0;
+    return failed ? 1 : 0;
 }
 
 int main(int argc, char** argv) {
@@ -127,7 +163,7 @@ int main(int argc, char** argv) {
         else if (argv[i][0] != '-' && !dir)
             dir = argv[i];
         else {
-            fprintf(stderr, "usage: %s CORPUS_DIR [--out DIR] [--validate] [--cache DIR] [--verbose]\n", argv[0]);
+            fprintf(stderr, USAGE, argv[0], argv[0]);
             return 2;
         }
     }
@@ -139,15 +175,24 @@ int main(int argc, char** argv) {
         return nvn_dir(nvn, cache, verbose);
     }
     if (!dir) {
-        fprintf(stderr, "usage: %s CORPUS_DIR [--out DIR] [--validate] [--cache DIR] [--verbose]\n", argv[0]);
+        fprintf(stderr, USAGE, argv[0], argv[0]);
         return 2;
     }
+    /* Without --out, spirv-val reads each .spv from a file of this process's own in the temporary folder */
+    const char* tmpdir = getenv("TMPDIR");
+    if (!tmpdir) tmpdir = getenv("TEMP");
+    if (!tmpdir) tmpdir = getenv("TMP");
+#ifdef _WIN32
+    if (!tmpdir) tmpdir = ".";
+#else
+    if (!tmpdir) tmpdir = "/tmp";
+#endif
     DIR* d = opendir(dir);
     if (!d) {
         fprintf(stderr, "cannot open %s\n", dir);
         return 2;
     }
-    int total = 0, bad_file = 0, untranslated = 0, compile_fail = 0, invalid = 0, ok = 0;
+    int total = 0, bad_file = 0, untranslated = 0, compile_fail = 0, invalid = 0, ok = 0, unwritten = 0;
     struct dirent* e;
     while ((e = readdir(d))) {
         size_t nl = strlen(e->d_name);
@@ -170,14 +215,15 @@ int main(int argc, char** argv) {
         free(code);
         if (!glsl || si.unsupported) {
             untranslated++;
-            if (verbose) printf("%s: not translated (%d unsupported, first %s)\n", base, si.unsupported, si.first_unsupported);
+            if (verbose)
+                printf("%s: not translated (%d unsupported, first %s)\n", base, si.unsupported, si.first_unsupported);
             free(glsl);
             continue;
         }
         if (out) {
             char p[2200];
             snprintf(p, sizeof p, "%s/%s.glsl", out, base);
-            write_file(p, glsl, strlen(glsl));
+            unwritten += !write_file(p, glsl, strlen(glsl));
         }
         char err[4096];
         size_t nwords = 0;
@@ -189,12 +235,20 @@ int main(int argc, char** argv) {
             continue;
         }
         char spvpath[2200];
-        snprintf(spvpath, sizeof spvpath, "%s/%s.spv", out ? out : "/tmp", base);
-        if (out || validate) write_file(spvpath, spv, nwords * 4);
+        if (out)
+            snprintf(spvpath, sizeof spvpath, "%s/%s.spv", out, base);
+        else
+            snprintf(spvpath, sizeof spvpath, "%s/swr-shaderc-%d-%s.spv", tmpdir, (int)getpid(), base);
+        int written = out || validate ? write_file(spvpath, spv, nwords * 4) : 1;
         free(spv);
+        if (!written) {
+            unwritten++;
+            continue;
+        }
         if (validate) {
-            char cmd[2400];
-            snprintf(cmd, sizeof cmd, "spirv-val --target-env vulkan1.3 '%s' 2>&1", spvpath);
+            char quoted[4500], cmd[4600];
+            shell_quote(quoted, sizeof quoted, spvpath);
+            snprintf(cmd, sizeof cmd, "spirv-val --target-env vulkan1.3 %s 2>&1", quoted);
             FILE* p = popen(cmd, "r");
             char msg[1024] = "";
             size_t got = p ? fread(msg, 1, sizeof msg - 1, p) : 0;
@@ -212,5 +266,6 @@ int main(int argc, char** argv) {
     closedir(d);
     printf("%d shaders: %d ok, %d not translated, %d failed to compile, %d invalid SPIR-V, %d unreadable\n", total, ok,
            untranslated, compile_fail, invalid, bad_file);
-    return (compile_fail || invalid || bad_file) ? 1 : 0;
+    if (unwritten) printf("%d files could not be written\n", unwritten);
+    return (compile_fail || invalid || bad_file || unwritten) ? 1 : 0;
 }

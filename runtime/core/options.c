@@ -93,7 +93,37 @@ static const char* ini_get(const char* k, const char* def) {
         if (!strcmp(g_ini_k[i], k)) return g_ini_v[i];
     return def;
 }
+/* what only applies when the game starts: the services, the window and the renderer read them once */
+static const char* const INI_RESTART[] = {"docked",    "language",    "fullscreen", "resolution",
+                                          "memory_gb", "heap_max_mb", "profile",    NULL};
+static int g_ini_started; /* the game runs: a reload leaves INI_RESTART's settings alone */
+static int ini_restart_only(const char* k) {
+    for (int i = 0; INI_RESTART[i]; i++)
+        if (!strcmp(k, INI_RESTART[i])) return 1;
+    return 0;
+}
+/* the command line's --key=value: they win over the file, at start and on every reload, and the rewritten file keeps
+   its own values */
+#define INI_MAXO 64
+static char g_ovr_k[INI_MAXO][64];
+static const char* g_ovr_v[INI_MAXO];
+static int g_ovr_n;
+void ini_override(const char* k, const char* v) {
+    k = ini_norm(k);
+    int i = 0;
+    while (i < g_ovr_n && strcmp(g_ovr_k[i], k)) i++;
+    if (i == INI_MAXO) return;
+    snprintf(g_ovr_k[i], sizeof g_ovr_k[i], "%s", k);
+    g_ovr_v[i] = v;
+    if (i == g_ovr_n) g_ovr_n++;
+}
+static int ini_overridden(const char* k) {
+    for (int i = 0; i < g_ovr_n; i++)
+        if (!strcmp(g_ovr_k[i], k)) return 1;
+    return 0;
+}
 static void ini_apply(const char* k, const char* v) {
+    if (g_ini_started && ini_restart_only(k)) return;
     if (!strcmp(k, "docked"))
         g_opt_docked = atoi(v);
     else if (!strcmp(k, "language"))
@@ -116,39 +146,13 @@ static void ini_apply(const char* k, const char* v) {
         g_opt_drs = atoi(v); /* 1 = let the game's own DRS work */
     else if (!strcmp(k, "memory_gb")) {
         g_opt_mem_gb = atoi(v);
-    } else if (!strcmp(k, "heap_max_mb")) {
-        g_heap_max = (u64)atoi(v) << 20;
+    } else if (!strcmp(k, "heap_max_mb")) { /* 0 or less: no cap but the heap region's */
+        long long mb = atoll(v);
+        g_heap_max = mb <= 0 ? 0 : (u64)mb < (HEAP_SIZE >> 20) ? (u64)mb << 20 : HEAP_SIZE;
     }
     backend_ini(k, v);
 }
-void ini_load(const char* path) {
-    FILE* f = fopen(path, "r");
-    if (!f) return;
-    char ln[1200];
-    while (fgets(ln, sizeof ln, f)) {
-        char* eq = strchr(ln, '=');
-        if (!eq || ln[0] == ';' || ln[0] == '#' || ln[0] == '[') continue;
-        *eq = 0;
-        char* v = eq + 1;
-        char* nl = strpbrk(v, "\r\n");
-        if (nl) *nl = 0;
-        char* k = ln;
-        while (*k == ' ' || *k == '\t') k++;
-        char* ke = k + strlen(k);
-        while (ke > k && (ke[-1] == ' ' || ke[-1] == '\t')) *--ke = 0;
-        while (*v == ' ' || *v == '\t') v++;
-        {
-            char* ve = v + strlen(v);
-            while (ve > v && (ve[-1] == ' ' || ve[-1] == '\t')) *--ve = 0;
-        }
-        if (ini_removed(k)) continue;
-        const char* kn = ini_norm(k);
-        ini_store(kn, v);
-        ini_apply(kn, v);
-    }
-    fclose(f);
-}
-/* rewrite the ini on every start: sorted, all keys, with help text */
+/* rewrite the ini on every start: the known keys by section with their help, then the others */
 typedef struct {
     const char* key;
     const char* def;
@@ -174,20 +178,58 @@ static const IniOpt INI_PERF[] = {
     {"fps_limit", "1",
      "1 = 60 FPS (the speed of a Switch), 0 = unlimited (the game runs faster). Values under 60 are treated as 60: the game advances one step per image, so 30 meant half speed. F4 changes it in game"},
     {"memory_gb", "0",
-     "Memory the game sees: 0 = automatic (3.2 GB like the console, more for games that need it,\n;   e.g. Tears of the Kingdom), 4 = console (3.2 GB), 6 or 8 = extended (like yuzu's extended memory layout)"},
+     "Memory the game sees: 0 or 4 = 3.2 GB like the console, 6 or 8 = more (like yuzu's extended memory layout).\n;   Games that run out of memory on 3.2 GB, like Tears of the Kingdom, need 6"},
     {NULL, NULL, NULL}};
-static const IniOpt INI_DBG[] = {{"log", "1", "Log detail: 1 = normal, 2 = everything (slow)"},
-                                 {"diag", "0", "1 = automatic diagnostic dumps (F5 always works)"},
-                                 {"profile", "0", "1 = write profile.txt every 10 seconds (CPU profiler)"},
-                                 {NULL, NULL, NULL}};
+static const IniOpt INI_DBG[] = {
+    {"log", "1", "Log detail: 1 = normal, 2 = everything (slow)"},
+    {"diag", "0", "1 = save the data of each new compute shader to captures/compute, for debugging"},
+    {"profile", "0", "1 = write profile.txt every 10 seconds (CPU profiler, Windows only)"},
+    {NULL, NULL, NULL}};
 static const IniSec INI_SECS[] = {
     {"Display", INI_DISPLAY}, {"Graphics", INI_GRAPHICS}, {"Performance", INI_PERF}, {"Debug", INI_DBG}, {NULL, NULL}};
+static void ini_load(const char* path) {
+    FILE* f = fopen(path, "r");
+    if (!f) return;
+    char ln[1200];
+    while (fgets(ln, sizeof ln, f)) {
+        char* k = ln;
+        while (*k == ' ' || *k == '\t') k++;
+        char* eq = strchr(k, '=');
+        if (!eq || *k == ';' || *k == '#' || *k == '[') continue;
+        *eq = 0;
+        char* v = eq + 1;
+        char* nl = strpbrk(v, "\r\n");
+        if (nl) *nl = 0;
+        char* ke = k + strlen(k);
+        while (ke > k && (ke[-1] == ' ' || ke[-1] == '\t')) *--ke = 0;
+        while (*v == ' ' || *v == '\t') v++;
+        {
+            char* ve = v + strlen(v);
+            while (ve > v && (ve[-1] == ' ' || ve[-1] == '\t')) *--ve = 0;
+        }
+        if (ini_removed(k)) continue;
+        const char* kn = ini_norm(k);
+        ini_store(kn, v);
+        if (!ini_overridden(kn)) ini_apply(kn, v);
+    }
+    fclose(f);
+    /* a known key missing from the file (deleted while the game runs) goes back to its default */
+    for (int s = 0; INI_SECS[s].title; s++)
+        for (const IniOpt* o = INI_SECS[s].o; o->key; o++)
+            if (!ini_get(o->key, NULL) && !ini_overridden(o->key)) ini_apply(o->key, o->def);
+}
 static char g_ini_path[1400];
-static u64 g_ini_mtime;
-static u64 file_mtime(const char* p) {
+/* the file as last read or written: a change of either means someone edited it */
+static u64 g_ini_mtime, g_ini_size;
+static int file_changed(const char* p, int remember) {
     struct stat st;
     if (stat(p, &st)) return 0;
-    return (u64)st.st_mtime;
+    int ch = (u64)st.st_mtime != g_ini_mtime || (u64)st.st_size != g_ini_size;
+    if (remember) {
+        g_ini_mtime = (u64)st.st_mtime;
+        g_ini_size = (u64)st.st_size;
+    }
+    return ch;
 }
 static int ini_known(const char* k) {
     for (int s = 0; INI_SECS[s].title; s++)
@@ -202,11 +244,12 @@ static void ini_write(void) {
     FILE* f = fopen(tmp, "w");
     if (!f) return;
     fprintf(f, "; =====================================================================\n");
-    fprintf(f, ";  %s - SwitchRecomp settings\n", g_mod && g_mod->title ? g_mod->title : g_exename);
-    fprintf(f, ";  Edit a value and save: most settings apply live while the game runs\n");
-    fprintf(f, ";  (docked, language, fullscreen and frame generation apply on restart).\n");
-    fprintf(f, ";  Keys in game: F1 help, F3 screenshot, F4 FPS limit, F5 trace,\n");
-    fprintf(f, ";  F7 record video, F8 full-res screenshot, F11 fullscreen.\n");
+    fprintf(f, "; SwitchRecomp settings for %s\n", g_mod && g_mod->title ? g_mod->title : g_exename);
+    fprintf(f, ";  Edit a value and save: most settings apply while the game runs.\n");
+    fprintf(f, ";  docked, language, fullscreen, resolution, memory_gb and profile\n");
+    fprintf(f, ";  apply when the game starts again.\n");
+    fprintf(f, ";  Keys in game: F1 help, F3 screenshot, F4 FPS limit, F5 thread dump,\n");
+    fprintf(f, ";  F11 or Alt+Enter fullscreen.\n");
     fprintf(f, "; =====================================================================\n");
     for (int s = 0; INI_SECS[s].title; s++) {
         fprintf(f, "\n[%s]\n", INI_SECS[s].title);
@@ -228,32 +271,41 @@ static void ini_write(void) {
         remove(tmp);
         return;
     }
-    g_ini_mtime = file_mtime(g_ini_path);
+    file_changed(g_ini_path, 1);
 }
-/* in-game toggles (F4) get persisted */
-static volatile int g_ini_dirty;
+/* in-game toggles (F4) get persisted. Kept until written, so a reload of a file edited meanwhile doesn't lose them */
+#define INI_MAXS 8
+static char g_set_k[INI_MAXS][64], g_set_v[INI_MAXS][64];
+static int g_set_n;
 void ini_set(const char* k, const char* v) {
     ini_store(k, v);
-    g_ini_dirty = 1;
+    int i = 0;
+    while (i < g_set_n && strcmp(g_set_k[i], k)) i++;
+    if (i == INI_MAXS) return;
+    snprintf(g_set_k[i], sizeof g_set_k[i], "%s", k);
+    snprintf(g_set_v[i], sizeof g_set_v[i], "%s", v);
+    if (i == g_set_n) g_set_n++;
 }
 void ini_open(const char* path) {
     strncpy(g_ini_path, path, sizeof g_ini_path - 1);
     ini_load(path);
+    for (int i = 0; i < g_ovr_n; i++) ini_apply(g_ovr_k[i], g_ovr_v[i]);
     ini_write();
+    g_ini_started = 1;
 }
 /* ini edited while running: reload and apply what we can live */
 void ini_poll(void) {
     if (!g_ini_path[0]) return;
-    if (g_ini_dirty) {
-        g_ini_dirty = 0;
-        ini_write();
+    if (file_changed(g_ini_path, 1)) {
+        g_ini_n = 0;
+        ini_load(g_ini_path);
+        for (int i = 0; i < g_set_n; i++) { /* a toggle made since the last write wins over the file */
+            ini_store(g_set_k[i], g_set_v[i]);
+            ini_apply(g_set_k[i], g_set_v[i]);
+        }
+        LOG("settings: %s reloaded\n", g_ini_path);
+    } else if (!g_set_n)
         return;
-    }
-    u64 m = file_mtime(g_ini_path);
-    if (!m || m == g_ini_mtime) return;
-    g_ini_mtime = m;
-    g_ini_n = 0;
-    ini_load(g_ini_path);
-    LOG("settings: %s reloaded\n", g_ini_path);
+    g_set_n = 0;
     ini_write();
 }

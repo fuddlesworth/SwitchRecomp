@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later
+     Copyright 2026 the SwitchRecomp fork contributors -->
+<!-- The runtime's application manifest on Windows (runtime.rc). activeCodePage UTF-8 makes the A functions, fopen
+     and argv take and give UTF-8, the encoding the runtime uses for every path (Windows 10 1903 and later).
+     longPathAware lets paths go past MAX_PATH where the system allows it. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

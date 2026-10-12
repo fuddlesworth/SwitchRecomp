@@ -17,8 +17,7 @@
 #include "gpu/gpu.h"
 #include "core/clock.h"
 
-/* engines.c */
-u64 gpu_ticks(void);
+/* engines.c (gpu_ticks is in gpu.h) */
 void query_get(GpuChannel* ch, u32* r, int base, u32 v);
 
 /* mme.c */

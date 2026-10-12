@@ -8,5 +8,7 @@
 #include "abi/cpu.h"
 
 u32 host1x_ioctl(int is_vic, u32 cmd, u8* d, u32 n);
+/* nvmap freed handle h: drops its NVDEC/VIC mapping so the IOVA range can be used again */
+void host1x_forget_handle(u32 h);
 
 #endif

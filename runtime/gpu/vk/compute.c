@@ -1,13 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
    Copyright 2026 the SwitchRecomp fork contributors */
-/* Compute: the compute class's launches (QMD), on the separate compute queue. Each dispatch gets copies of its constant and storage buffers in a host-visible arena and is recorded into
-   a batch. The batch is submitted and its results land in guest memory before anything could observe them: a read
-   of that memory (gmem_read and gmem_ptr call cs_mem_need), anything after it in the stream
-   the game can observe (semaphore releases and reports: gpu_signal_point), a GPU-side write of that memory, a
-   syncpoint increment or a wait. A byte is written only where the shader changed it and guest memory still holds what the shader
-   read, since on the console the GPU stores while it runs and a later CPU write wins.
+/* Compute: the compute class's launches (QMD), on a compute queue of their own when the device has one (a queue of a
+   compute-only family, or a second queue of the graphics family), else on the graphics queue. Each dispatch gets
+   copies of its constant and storage buffers in a host-visible arena and is recorded into a batch. The batch is
+   submitted and its results land in guest memory before anything could observe them: a read of that memory
+   (gmem_read and gmem_ptr call cs_mem_need), anything after it in the stream the game can observe (semaphore releases
+   and reports: gpu_signal_point), a GPU-side write of that memory, a syncpoint increment or a wait. A byte is written
+   only where the shader changed it and guest memory still holds what the shader read, since on the console the GPU
+   stores while it runs and a later CPU write wins.
 
-   The compute queue only waits for compute, so holding signals until results land costs a dispatch's run time,
+   A queue of its own only waits for compute, so holding signals until results land costs a dispatch's run time,
    not the rendering backlog's (which made that ordering too slow under the old OpenGL renderer, ROADMAP.md Phase 2).
    Dispatches that read textures run on the graphics queue, after everything recorded before them. */
 #include <stdlib.h>
@@ -24,6 +26,7 @@ typedef struct CsPipe {
     u64 key;
     VkPipeline p;
     ShaderInfo si;
+    VkCbReads cbr; /* the constant buffer words translation read */
     int failed;
     struct CsPipe* next;
 } CsPipe;
@@ -86,13 +89,11 @@ static void cs_init(void) {
                                     .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE};
     VkSemaphoreCreateInfo sci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, .pNext = &st};
     VK_OK(vkCreateSemaphore(g_vk.dev, &sci, NULL, &g_vk_csem));
-    VkDescriptorPoolSize sz[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4096 * 9},
-                                 {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4096 * 4},
-                                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024}};
-    VkDescriptorPoolCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                                      .maxSets = 4096,
-                                      .poolSizeCount = sizeof sz / sizeof sz[0],
-                                      .pPoolSizes = sz};
+    /* the dispatches of a batch: a batch that runs out lands, which resets the pool */
+    VkDescriptorPoolSize sz[4];
+    vk_pool_sizes(sz, 1024);
+    VkDescriptorPoolCreateInfo dci = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = 1024, .poolSizeCount = 4, .pPoolSizes = sz};
     VK_OK(vkCreateDescriptorPool(g_vk.dev, &dci, NULL, &g_dpool));
 }
 
@@ -197,6 +198,7 @@ static void write_changed(u64 addr, const u8* res, const u8* org, u32 size) {
 /* submits the batch without waiting; it signals g_vk_csem with the next value */
 static void cs_submit(void) {
     if (!g_recording) return;
+    vmaFlushAllocation(g_vk.vma, g_ar_mem, 0, VK_WHOLE_SIZE); /* the arena may not be host coherent */
     VK_OK(vkEndCommandBuffer(g_ccb));
     VkCommandBufferSubmitInfo c = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = g_ccb};
     VkSemaphoreSubmitInfo sig = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -208,9 +210,11 @@ static void cs_submit(void) {
                         .pCommandBufferInfos = &c,
                         .signalSemaphoreInfoCount = 1,
                         .pSignalSemaphoreInfos = &sig};
-    VK_OK(vkQueueSubmit2(g_vk.compute, 1, &si, g_cfence));
+    VkResult r = vkQueueSubmit2(g_vk.compute, 1, &si, g_cfence);
+    if (r == VK_ERROR_DEVICE_LOST) fatal("vulkan: the GPU device was lost (driver reset or crash)");
     g_recording = 0;
-    g_inflight = 1;
+    g_inflight = VK_OK(r);
+    if (!g_inflight) g_cval--; /* never signaled: draws don't wait for it, landing doesn't wait for the fence */
 }
 /* submits the batch if it isn't yet, waits for it, and lands its results */
 static void cs_land(void) {
@@ -218,14 +222,18 @@ static void cs_land(void) {
     g_landing = 1;
     u64 t0 = plat_ns();
     cs_submit();
-    VK_OK(vkWaitForFences(g_vk.dev, 1, &g_cfence, VK_TRUE, UINT64_MAX));
+    if (g_inflight) {
+        VK_OK(vkWaitForFences(g_vk.dev, 1, &g_cfence, VK_TRUE, UINT64_MAX));
+        VK_OK(vkResetFences(g_vk.dev, 1, &g_cfence));
+    }
     g_vk_cs_wait_ns += plat_ns() - t0;
-    VK_OK(vkResetFences(g_vk.dev, 1, &g_cfence));
     vmaInvalidateAllocation(g_vk.vma, g_ar_mem, 0, VK_WHOLE_SIZE);
     g_inflight = 0;
-    g_cs_any = 0;
     for (int i = 0; i < g_nout; i++)
         write_changed(g_out[i].addr, g_ar_ptr + g_out[i].off, g_org + g_out[i].off, g_out[i].size);
+    /* only now: until the results are in memory, readers on other threads wait for this landing in
+       vk_compute_mem_need */
+    g_cs_any = 0;
     g_nout = 0;
     g_out_lo = ~0ull;
     g_out_hi = 0;
@@ -238,13 +246,18 @@ static void cs_land(void) {
     g_vk_cs_batches++;
     g_landing = 0;
 }
-/* a draw reads [gva, gva + len), which one pending result covers: it reads it from the arena, after the batch */
+/* a draw reads [gva, gva + len), which one pending result covers: it reads it from the arena, after the batch. Any
+   other overlap lands the results now, so the caller's caches see them in memory */
 int vk_compute_gpu_src(u64 gva, u64 len, VkBuffer* buf, u64* off) {
     if (!g_cs_any || g_landing || gva >= g_out_hi || gva + len <= g_out_lo) return 0;
     for (int i = 0; i < g_nout; i++) {
         CsOut* o = &g_out[i];
         if (gva >= o->addr + o->size || o->addr >= gva + len) continue;
-        if (gva < o->addr || gva + len > o->addr + o->size) return 0; /* partly: it lands first */
+        /* partly covered, or at an offset that suits no use of it (index, storage and uniform buffers): it lands */
+        if (gva < o->addr || gva + len > o->addr + o->size || ((o->off + (gva - o->addr)) & (vk_stage_align() - 1))) {
+            cs_land();
+            return 0;
+        }
         cs_submit();
         g_ar_gfx = 1;
         g_vk_cs_wait_value = g_cval;
@@ -267,20 +280,28 @@ void vk_compute_before_write(u64 gva, u64 size) {
     else if (g_cs_any)
         vk_compute_mem_need(gva, size);
 }
-/* a read of guest memory: results for it have to be there first */
+/* a read of guest memory: results for it have to be there first. Called from any thread that reads guest memory while
+   g_cs_any is set: the pending results are looked at under vk_lock, which recording and landing them hold, so a
+   reader waits for a landing in progress on another thread. The landing thread itself passes (g_landing) */
 void vk_compute_mem_need(u64 a, u64 n) {
-    if (g_landing || a >= g_out_hi || a + n <= g_out_lo) return;
-    for (int i = 0; i < g_nout; i++)
-        if (a < g_out[i].addr + g_out[i].size && g_out[i].addr < a + n) {
-            vk_compute_land();
-            return;
-        }
+    vk_lock();
+    if (!g_landing && a < g_out_hi && a + n > g_out_lo)
+        for (int i = 0; i < g_nout; i++)
+            if (a < g_out[i].addr + g_out[i].size && g_out[i].addr < a + n) {
+                cs_land();
+                break;
+            }
+    vk_unlock();
 }
 
+/* the pipeline of a program (80 zero bytes, then the code), by its code and launch parameters, and by the constant
+   buffer words its translation read */
 static CsPipe* cs_pipe(const u8* code, u32 lx, u32 ly, u32 lz, u32 shm) {
-    u64 key = vk_hash(code + 80, 0x4000) ^ ((u64)lx << 40) ^ ((u64)ly << 48) ^ ((u64)lz << 56) ^ ((u64)shm << 20);
+    u32 blen;
+    u64 key =
+        shader_hash(code, 0x10000 + 80, &blen) ^ ((u64)lx << 40) ^ ((u64)ly << 48) ^ ((u64)lz << 56) ^ ((u64)shm << 20);
     CsPipe* p = g_csp[key & 255];
-    while (p && p->key != key) p = p->next;
+    while (p && (p->key != key || !vk_cb_reads_hold(&p->cbr, cs_cb_read))) p = p->next;
     if (p) return p;
     p = calloc(1, sizeof *p);
     p->key = key;
@@ -290,16 +311,9 @@ static CsPipe* cs_pipe(const u8* code, u32 lx, u32 ly, u32 lz, u32 shm) {
     p->si.cs_local[1] = ly;
     p->si.cs_local[2] = lz;
     p->si.shared_size = (int)shm;
-    int (*old)(u32, u32, u32*) = g_shader_cb_read;
-    g_shader_cb_read = cs_cb_read;
     const char* corpus = getenv("SWR_SHADER_CORPUS");
-    if (corpus) {
-        u32 blen;
-        shader_hash(code, 0x10000 + 80, &blen);
-        shader_corpus_save(corpus, code, blen, 0x10000 + 80, ST_CS, &p->si, key);
-    }
-    char* src = shader_to_glsl(code, 0x10000 + 80, ST_CS, &p->si);
-    g_shader_cb_read = old;
+    if (corpus) shader_corpus_save(corpus, code, blen, 0x10000 + 80, ST_CS, &p->si, key);
+    char* src = vk_translate(code, 0x10000 + 80, ST_CS, &p->si, cs_cb_read, &p->cbr);
     if (!src || p->si.unsupported) {
         p->failed = 1;
         LOG("vulkan: compute %016llx not translated (%d instructions, first %s)\n", (unsigned long long)key,
@@ -347,6 +361,21 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     u32 gx = q[12] & 0x7FFFFFFF, gy = q[13] & 0xFFFF, gz = q[13] >> 16, lx = q[18] >> 16, ly = q[19] & 0xFFFF,
         lz = q[19] >> 16, shm = q[17] & 0x3FFFF;
     if (!gx || !gy || !gz || !lx || !ly || !lz) return;
+    const VkPhysicalDeviceLimits* lim = &g_vk.props.limits;
+    if (gx > lim->maxComputeWorkGroupCount[0] || gy > lim->maxComputeWorkGroupCount[1] ||
+        gz > lim->maxComputeWorkGroupCount[2] || lx > lim->maxComputeWorkGroupSize[0] ||
+        ly > lim->maxComputeWorkGroupSize[1] || lz > lim->maxComputeWorkGroupSize[2] ||
+        (u64)lx * ly * lz > lim->maxComputeWorkGroupInvocations || shm > lim->maxComputeSharedMemorySize) {
+        static int said;
+        if (!said) {
+            said = 1;
+            LOG("vulkan: a dispatch of %ux%ux%u blocks of %ux%ux%u with %u bytes shared is past this GPU's limits "
+                "(skipped)\n",
+                gx, gy, gz, lx, ly, lz, shm);
+        }
+        g_vk_cs_skipped++;
+        return;
+    }
     cs_init();
     /* constant buffers from the QMD (reading them lands results they overlap) */
     u64 cba[8] = {0};
@@ -359,10 +388,24 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
         g_cbn[i] = sz;
         gmem_read(cba[i], g_cb[i], sz);
     }
-    static u8 code_buf[0x10000 + 80]; /* compute programs have no header: 80 zero bytes stand in for one */
-    memset(code_buf, 0, 80);
-    gmem_read(code + q[8], code_buf + 80, 0x10000);
-    CsPipe* p = cs_pipe(code_buf, lx, ly, lz, shm);
+    /* the program at an address is taken as the same until the next submit, as vk_shader_get does: the code isn't
+       read and hashed again for every dispatch of it */
+    static struct {
+        u64 addr;
+        u32 epoch, lx, ly, lz, shm;
+        CsPipe* p;
+    } fc[64];
+    u64 pa = code + q[8];
+    typeof(fc[0])* fe = &fc[((pa >> 8) ^ (pa >> 16)) & 63];
+    CsPipe* p = fe->p;
+    if (!p || fe->addr != pa || fe->epoch != g_vk_epoch || fe->lx != lx || fe->ly != ly || fe->lz != lz ||
+        fe->shm != shm || !vk_cb_reads_hold(&p->cbr, cs_cb_read)) {
+        static u8 code_buf[0x10000 + 80]; /* compute programs have no header: 80 zero bytes stand in for one */
+        memset(code_buf, 0, 80);
+        gmem_read(pa, code_buf + 80, 0x10000);
+        p = cs_pipe(code_buf, lx, ly, lz, shm);
+        *fe = (typeof(fc[0])){pa, g_vk_epoch, lx, ly, lz, shm, p};
+    }
     if (p->failed) {
         g_vk_cs_skipped++;
         return;
@@ -424,7 +467,7 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     VkDescriptorSetAllocateInfo dai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                                        .descriptorPool = g_dpool,
                                        .descriptorSetCount = 1,
-                                       .pSetLayouts = &g_vk_dslayout};
+                                       .pSetLayouts = &g_vk_dslayout[shader_vk_set(ST_CS)]};
     if (vkAllocateDescriptorSets(g_vk.dev, &dai, &set) != VK_SUCCESS) {
         cs_land();
         if (!VK_OK(vkAllocateDescriptorSets(g_vk.dev, &dai, &set))) return;
@@ -435,7 +478,8 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     u32 nw = 0;
     for (int i = 0; i < 8; i++)
         if (p->si.cbuf_mask & (1u << i)) {
-            /* only the bytes the shader reads (robust buffer access reads past them as zero) */
+            /* only the bytes the shader reads (robust buffer access keeps reads past them in bounds, of undefined
+               value) */
             u32 range = g_cbn[i];
             if (p->si.cbuf_max[i] && range > p->si.cbuf_max[i]) range = p->si.cbuf_max[i];
             range = (range + 15) & ~15u;
@@ -474,22 +518,16 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
                                        .pBufferInfo = &bi[nw]};
         nw++;
     }
-    /* the outputs, once every input is read (an input can alias another storage buffer's output) */
-    for (int i = 0; i < ng; i++)
-        if (((p->si.gbuf_wmask >> i) & 1) && sa[i]) {
-            memcpy(g_org + so[i], g_ar_ptr + so[i], ss[i]);
-            g_out[g_nout++] = (CsOut){sa[i], so[i], ss[i]};
-            if (sa[i] < g_out_lo) g_out_lo = sa[i];
-            if (sa[i] + ss[i] > g_out_hi) g_out_hi = sa[i] + ss[i];
-        }
     VkCommandBuffer cb;
     if (gfx) {
-        /* textures from the compute engine's headers; texture handles from its texture constant buffer bank */
+        /* textures from the compute engine's headers; texture handles from its texture constant buffer bank. Compute
+           shaders declare every texture as float (they aren't keyed on integer textures), and depth textures aren't
+           sampled here */
         u64 tic_base = ((u64)rc[0x55D] << 32) | rc[0x55E], tsc_base = ((u64)rc[0x557] << 32) | rc[0x558];
         u32 tcb = rc[0x982] & 7;
         int fmt_used = 0;
         i32 fmt[320] = {0}; /* SWR_FMT, std140: swr_ic[8] swr_tc[32] swr_ib[8] swr_tb[32], 16 bytes each */
-        for (int i = 0; i < p->si.ntex && i < 32; i++) {
+        for (int i = 0; i < p->si.ntex && i < SH_MAXTEX; i++) {
             ShTex* st = &p->si.tex[i];
             u32 h = 0, h2 = 0;
             cs_cb_read(st->bindless ? (st->bl_cbuf & 7) : tcb, st->cbuf_off * 4, &h);
@@ -497,21 +535,20 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
             u32 tic[8], tsc[8];
             gmem_read(tic_base + (h & 0xFFFFF) * 32ull, tic, 32);
             gmem_read(tsc_base + ((h >> 20) & 0xFFF) * 32ull, tsc, 32);
-            VkImageViewType want = st->type == 2 ? VK_IMAGE_VIEW_TYPE_3D
-                                   : st->type == 3
-                                       ? (st->array ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY : VK_IMAGE_VIEW_TYPE_CUBE)
-                                   : st->array ? VK_IMAGE_VIEW_TYPE_2D_ARRAY
-                                               : VK_IMAGE_VIEW_TYPE_2D;
+            VkImageViewType want = vk_tex_view_type(st);
             Surf* t = vk_tex_from_tic(tic);
-            VkComponentMapping id = {0};
-            VkImageView v = t && !t->f.is_int && !t->f.depth ? vk_tex_view(t, want, (tic[4] >> 22) & 1, &id) : 0;
+            VkImageView v = t && !t->f.depth ? vk_tex_bind_view(t, want, tic, 0) : VK_NULL_HANDLE;
             if (v)
-                vk_surf_use(vk_cmd(), t, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                vk_surf_use(vk_cmd(), t, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_SAMPLED_STAGES,
+                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             else
                 v = vk_null_view(want, 0);
-            tsc[0] &= ~(1u << 9);
-            ii[i] = (VkDescriptorImageInfo){vk_sampler(tsc), v, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkSampler smp = vk_tex_bind_sampler(tsc, st, 0);
+            if (!v || !smp) { /* before any output is recorded: nothing of this dispatch lands */
+                g_vk_cs_skipped++;
+                return;
+            }
+            ii[i] = (VkDescriptorImageInfo){smp, v, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             w[nw++] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                                              .dstSet = set,
                                              .dstBinding = SWR_VKB_TEX + i,
@@ -539,6 +576,16 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
                                            .pBufferInfo = &bi[nw]};
             nw++;
         }
+    }
+    /* the outputs, once every input is read (an input can alias another storage buffer's output) */
+    for (int i = 0; i < ng; i++)
+        if (((p->si.gbuf_wmask >> i) & 1) && sa[i]) {
+            memcpy(g_org + so[i], g_ar_ptr + so[i], ss[i]);
+            g_out[g_nout++] = (CsOut){sa[i], so[i], ss[i]};
+            if (sa[i] < g_out_lo) g_out_lo = sa[i];
+            if (sa[i] + ss[i] > g_out_hi) g_out_hi = sa[i] + ss[i];
+        }
+    if (gfx) {
         vk_render_end();
         cb = vk_cmd();
     } else {
@@ -575,6 +622,7 @@ void vk_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     g_vk_dispatches++;
     if (gfx) {
         /* everything before it on the graphics queue runs first; then its results land at once */
+        vmaFlushAllocation(g_vk.vma, g_ar_mem, 0, VK_WHOLE_SIZE); /* the arena may not be host coherent */
         vk_finish();
         vmaInvalidateAllocation(g_vk.vma, g_ar_mem, 0, VK_WHOLE_SIZE);
         g_landing = 1;

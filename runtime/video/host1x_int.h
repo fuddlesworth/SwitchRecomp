@@ -14,14 +14,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* little-endian u32 at p + off, unaligned */
+static inline u32 rd32(const u8* p, u32 off) {
+    u32 v;
+    memcpy(&v, p + off, 4);
+    return v;
+}
+
 /* host1x.c */
 u8* iova_ptr(u64 iova, u64 len);
 
 /* nvdec.c */
-u32 rd32(const u8* p, u32 off);
 extern u8* g_fy;
 extern u8* g_fuv;
-extern u32 g_fw, g_fh, g_fcap;
+extern u32 g_fw, g_fh;
 extern u32 g_vframes;
 void nvdec_execute(u32* r);
 

@@ -10,12 +10,15 @@ description: "Run a recompiled game unattended and judge the result: scripted bu
 ```bash
 tools/run_game.py Catherine --dump work/Catherine                 # 60 s, Catherine boot to the New Game cutscene
 tools/run_game.py Catherine --runs 5 --dump work/Catherine        # crash rate
-tools/run_game.py Catherine --seconds 20 --script "" --out /tmp/x # boot only, no input
+tools/run_game.py Catherine --seconds 20 --script "" --out "$SCRATCH/boot"  # boot only, no input
 ```
 
-It runs the game from `games/`, writes `runN.log` and `runN.png` (the last frame) per run, and prints one line per
-run: exit, crash site with symbols, last FPS. Look at the PNG with the Read tool: a frame that "rendered" can still be
-black or garbage, and only the picture shows it.
+`$SCRATCH` stands for the session's scratchpad directory: keep `--out` there, never in `/tmp` or the repo (without
+`--out` it makes a new folder in `/tmp`). It runs the game from `games/`, writes `runN.log` and `runN.png` (the last
+frame, converted from the runtime's `.ppm` when Pillow is installed, otherwise `runN.ppm` stays) per run, and prints
+one line per run: the exit, `ok` or the crash site with symbols (or the `svcBreak` reason), and the frame count. Look
+at the picture with the Read tool: a frame that "rendered" can still be black or garbage, and only the picture shows
+it.
 
 The runtime options behind it, for a run by hand from `games/`:
 
@@ -43,12 +46,15 @@ in a different order, so check the screenshots before trusting a script.
 `games/<Game>.log` (and the run log) grows to megabytes. Never print it whole.
 
 - `grep -n "Crash\|svcBreak\|FATAL" run1.log`: the failure, then `sed -n` around it.
-- `grep "performance:" run1.log | tail -3`: FPS and how busy the GPU thread is (near 100% means GPU-bound).
-- `grep "gpu: frames=" run1.log | tail -1`: draws, shader and texture counters. `failed shader` or `no program`
-  above 0 is a rendering bug.
+- The log has no FPS line. `frames=N` at the end of a `--seconds` run (what `run_game.py` reports) divided by the
+  seconds is the average frame rate.
+- `grep "vulkan:" run1.log | tail -3`: every 600 presents, the draws and skipped draws, compute dispatches and
+  batches with the time spent waiting on them, and skipped dispatches. `WARN` lines with `vulkan: shader ... didn't
+  compile` or `untranslated instructions` are rendering bugs.
 - `video:` lines: NVDEC and VIC jobs. `romfs:` lines: files the game opened (movies are `.usm`).
 - `games/threads.txt`: every guest thread's state and wait, rewritten every 15 s. A hang is read from here.
-- `diag=1` in the game's `.ini` dumps render targets and a frame trace to `games/captures/` at 20 and 40 s.
+- `diag=1` in the game's `.ini` saves the QMD and program of each new compute shader (the first 32) to
+  `games/captures/compute/`. F5 writes every game thread's state to the log at any time.
 
 Crash reports are handled with the `swr-crash` skill.
 

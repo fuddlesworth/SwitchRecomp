@@ -37,11 +37,16 @@ def main():
     ap.add_argument('-q', '--quiet', action='store_true')
     a = ap.parse_args()
     say = (lambda m: None) if a.quiet else (lambda m: print(m, flush=True))
-    say('SwitchRecomp - use your own copy of the game. No games or keys included.')
+    say('SwitchRecomp: use your own copy of the game. No games or keys are included.')
     target_win = a.target == 'win64' or (a.target == 'auto' and sys.platform.startswith('win'))
     mods, npdm, romfs = nxloader.load_program(a.input)
     for m in mods:
         say('  %-8s %010X  code %.1f MB  .eh_frame functions %d' % (m.name, m.base, m.text[1] / 1048576.0, len(m.fde)))
+        if m.eh_error:
+            say(
+                '  warning: the .eh_frame of %s %s. Its other functions are found by following calls.'
+                % (m.name, m.eh_error)
+            )
     info = nxloader.parse_npdm(npdm)
     title = (
         a.out
@@ -55,11 +60,12 @@ def main():
     hints = []
     hp = base + '.hints'
     if os.path.exists(hp):
-        for ln in open(hp):
-            try:
-                hints.append(int(ln.strip(), 16))
-            except ValueError:
-                pass
+        with open(hp) as f:
+            for ln in f:
+                try:
+                    hints.append(int(ln.strip(), 16))
+                except ValueError:
+                    pass
         say('Previous execution hints: %d' % len(hints))
     prog = codegen.Program(mods, hints)
     if a.interp_only:
@@ -75,24 +81,29 @@ def main():
     datadir = base + '_data'
     data.copy_data(mods, npdm, romfs, a.input, datadir, say)
     if not os.path.exists(base + '.ini'):
-        open(base + '.ini', 'w').write(data.INI % {'title': title})
+        with open(base + '.ini', 'w', encoding='utf-8') as f:
+            f.write(data.INI % {'title': title})
     if a.no_build:
         return
     cc = toolchain.find_cc(a.cc, target_win)
     if not cc:
-        raise SystemExit('No C compiler found (clang or tcc).')
+        raise SystemExit('C compiler not found: %s' % a.cc if a.cc else 'No C compiler found (clang or tcc).')
     say('Compiling with %s (-O%s, %d at a time)...' % (os.path.basename(cc), a.O, a.jobs))
     extra = []
     if a.native and not toolchain.is_tcc(cc):
         extra.append('-march=native')
     if os.environ.get('SWR_CFLAGS') and not toolchain.is_tcc(cc):
         extra += os.environ['SWR_CFLAGS'].split()  # e.g. -march for someone else's cpu
-    objs = toolchain.compile_all(files, cc, a.O, build, target_win, a.jobs, say, extra)
+    objs = toolchain.compile_all(files, cc, a.O, target_win, a.jobs, say, extra)
     modout = base + ('_code.dll' if target_win else '_code.so')
     say('Linking %s ...' % os.path.basename(modout))
-    toolchain.link_module(objs, cc, modout, target_win, say)
+    toolchain.link_module(objs, cc, modout, target_win)
     exe = base + ('.exe' if target_win else '')
-    shutil.copyfile(a.runtime or toolchain.build_runtime(cc, target_win, say), exe)
+    # copy beside it and rename over it (as cmake/deploy.cmake does): writing into a runtime that is running fails
+    # (ETXTBSY), and an interrupted copy would leave half an executable
+    tmp = exe + '.tmp'
+    shutil.copyfile(a.runtime or toolchain.build_runtime(target_win, say), tmp)
     if not target_win:
-        os.chmod(exe, 0o755)
+        os.chmod(tmp, 0o755)
+    os.replace(tmp, exe)
     say('Done: %s' % exe)

@@ -14,14 +14,15 @@ from . import abi_version
 
 
 def write_if_changed(p, text):
-    # don't touch unchanged files so make-style reuse of the .o works
+    # don't touch unchanged files so make-style reuse of the .o works. utf-8 both ways: the title can be non-ASCII and
+    # the locale's encoding differs between systems (Windows)
     try:
-        with open(p, 'r') as fi:
+        with open(p, 'r', encoding='utf-8') as fi:
             if fi.read() == text:
                 return False
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         pass
-    with open(p, 'w') as fo:
+    with open(p, 'w', encoding='utf-8') as fo:
         fo.write(text)
     return True
 
@@ -51,7 +52,6 @@ def gen_module(prog, mods, npdm, outdir, title, chunk_instrs, say):
         for f in ch:
             c = codegen.emit_function(prog, f, funcs)
             body.append(c)
-        names_here = {f.name for f in ch}
         text = '\n'.join(body)
         # only prototype what this chunk references
         for m in set(re.findall(r'\bF_[0-9A-F]+\b', text)):
@@ -81,9 +81,6 @@ def gen_module(prog, mods, npdm, outdir, title, chunk_instrs, say):
     )
     L.append('static const u32 ENT_FN[%d]={%s};' % (max(1, len(ents)), ','.join(str(idx[n]) for _, n in ents) or '0'))
     L.append('static u64 ENT_ADDR[%d]; static GuestFn ENT_PTR[%d];' % (max(1, len(ents)), max(1, len(ents))))
-    L.append(
-        'typedef struct SwrModInfo { const char* name; u64 base, size; u8 build_id[32]; u32 text_off, text_size, ro_off, ro_size, data_off, data_size, bss_size; u32 is_nro; } SwrModInfo;'
-    )
     mi = []
     for m in mods:
         bid = (m.build_id + b'\0' * 32)[:32]
@@ -108,11 +105,7 @@ def gen_module(prog, mods, npdm, outdir, title, chunk_instrs, say):
     lo = min(m.base + m.text[0] for m in mods)
     hi = max(m.base + m.text[0] + m.text[1] for m in mods)
     np_ = nxloader.parse_npdm(npdm)
-    L.append("""typedef struct SwrModule { u32 abi; u32 nmods; const SwrModInfo* mods; u32 nentries; const u64* entry_addr; const GuestFn* entry_fn;
-  GuestFn interp; u64 code_lo, code_hi; const char* title; u64 title_id; u32 main_stack, main_prio, main_core;
-  void (*init)(const RtAPI* rt); u64 (*step)(CPU* c, u32 w, u64 pc); } SwrModule;""")
-    L.append('static const RtAPI* g_rt;')
-    L.append('static void mod_init(const RtAPI* rt){ g_rt=rt; }')
+    # SwrModInfo and SwrModule come from cpu.h, the definition the runtime's loader reads them with
     L.append('static SwrModule MOD;')
     L.append('SWR_EXPORT const SwrModule* swr_module(void){')
     L.append(
@@ -129,7 +122,7 @@ def gen_module(prog, mods, npdm, outdir, title, chunk_instrs, say):
         % (lo, hi, title.replace('"', ''), np_['title_id'])
     )
     L.append(
-        ' MOD.main_stack=%d; MOD.main_prio=%d; MOD.main_core=%d; MOD.init=mod_init; return &MOD; }'
+        ' MOD.main_stack=%d; MOD.main_prio=%d; MOD.main_core=%d; return &MOD; }'
         % (np_['stack'], np_['prio'], np_['core'])
     )
     p = os.path.join(outdir, 'module.c')

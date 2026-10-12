@@ -5,6 +5,7 @@
    buffers), descriptor pools, and the resources to destroy once its work is done. Starting to record a frame waits
    for its previous use to finish. */
 #include <stdlib.h>
+#include "platform/log.h"
 #include "gpu/vk/vk.h"
 
 typedef struct {
@@ -24,6 +25,7 @@ typedef struct {
     VmaAllocation stage_mem;
     u8* stage_ptr;
     u64 stage_cap, stage_used;
+    u32 stage_small; /* frames in a row that used a quarter of it or less */
     /* destroyed once this frame's work is done */
     Dead* dead;
     int ndead, capdead;
@@ -50,6 +52,25 @@ u64 vk_hash(const void* p, u64 size) {
     for (; i < n; i++) a = (a ^ q[i]) * 0x100000001B3ull;
     for (u64 k = n * 8; k < size; k++) b = (b ^ ((const u8*)p)[k]) * 0x100000001B3ull;
     return a ^ (b << 1) ^ (c << 2) ^ (d << 3) ^ size;
+}
+
+u64 vk_sample_hash(u64 gva, u64 len) {
+    u8 tmp[2048 + 128];
+    if (len <= sizeof tmp) {
+        gmem_read(gva, tmp, len);
+        return vk_hash(tmp, len);
+    }
+    u32 n = 0;
+    gmem_read(gva, tmp, 64);
+    n = 64;
+    gmem_read(gva + len - 64, tmp + n, 64);
+    n += 64;
+    u64 step = (len - 32) / 62;
+    for (int i = 0; i < 62; i++) {
+        gmem_read(gva + (u64)i * step, tmp + n, 32);
+        n += 32;
+    }
+    return vk_hash(tmp, n);
 }
 
 u64 vk_stage_align(void) {
@@ -98,6 +119,8 @@ void vk_cmd_init(void) {
     }
 }
 
+#define STAGE_MIN (16ull << 20)
+
 /* waits for a frame's previous submit, then frees what it was holding */
 static void frame_wait(Frame* f) {
     if (!f->pending) return;
@@ -117,6 +140,16 @@ VkCommandBuffer vk_cmd(void) {
             for (int i = 1; i < f->npool; i++) vkDestroyDescriptorPool(g_vk.dev, f->pool_d[i], NULL);
             f->npool = 1;
         }
+        /* a staging buffer grown for a burst goes once it has been mostly unused for a while (the frame's work is
+           done, nothing reads it); the next vk_stage makes one of the usual size */
+        f->stage_small = f->stage_cap > STAGE_MIN && f->stage_used <= f->stage_cap / 4 ? f->stage_small + 1 : 0;
+        if (f->stage_small >= 300) {
+            vmaDestroyBuffer(g_vk.vma, f->stage, f->stage_mem);
+            f->stage = VK_NULL_HANDLE;
+            f->stage_mem = VK_NULL_HANDLE;
+            f->stage_cap = 0;
+            f->stage_small = 0;
+        }
         f->stage_used = 0;
         VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
@@ -134,7 +167,7 @@ u8* vk_stage(u64 size, u64 align, VkBuffer* buf, u64* off) {
     if (!f->stage || at + size > f->stage_cap) {
         /* a bigger buffer; the old one stays alive until this frame's work is done */
         if (f->stage) dead_push(f, (Dead){.buf = f->stage, .mem = f->stage_mem});
-        u64 cap = f->stage_cap ? f->stage_cap * 2 : (16ull << 20);
+        u64 cap = f->stage_cap ? f->stage_cap * 2 : STAGE_MIN;
         while (cap < size) cap *= 2;
         VkBufferCreateInfo bci = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                                   .size = cap,
@@ -166,7 +199,7 @@ void vk_submit(VkSemaphore wait, VkPipelineStageFlags2 wait_stage, VkSemaphore s
     vk_render_end();
     Frame* f = &g_fr[g_cur];
     vk_cmd(); /* a submit with nothing recorded still has to wait and signal */
-    /* staging memory is host coherent, but the host writes must be visible to the transfers */
+    /* staging memory may not be host coherent: the host writes are made visible to the GPU here */
     if (f->stage_mem) vmaFlushAllocation(g_vk.vma, f->stage_mem, 0, VK_WHOLE_SIZE);
     VK_OK(vkEndCommandBuffer(f->cb));
     VkSemaphoreSubmitInfo w[2] = {
@@ -190,9 +223,11 @@ void vk_submit(VkSemaphore wait, VkPipelineStageFlags2 wait_stage, VkSemaphore s
                         .pCommandBufferInfos = &c,
                         .signalSemaphoreInfoCount = signal ? 1u : 0u,
                         .pSignalSemaphoreInfos = &s};
-    VK_OK(vkQueueSubmit2(g_vk.gfx, 1, &si, f->done));
+    VkResult r = vkQueueSubmit2(g_vk.gfx, 1, &si, f->done);
+    if (r == VK_ERROR_DEVICE_LOST) fatal("vulkan: the GPU device was lost (driver reset or crash)");
+    VK_OK(r);
     f->recording = 0;
-    f->pending = 1;
+    f->pending = r == VK_SUCCESS; /* a failed submit never signals the fence: nothing to wait for */
     g_cur = (g_cur + 1) % VK_FRAMES;
     g_frame_no++;
 }
@@ -205,15 +240,12 @@ void vk_finish(void) {
 u64 vk_frame_number(void) { return g_frame_no; }
 
 static VkDescriptorPool desc_pool_new(void) {
-    /* sized for the per-stage set layout (gpu/vk/pipeline.c): a few thousand draws a frame */
-    VkDescriptorPoolSize sz[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4096 * 6},
-                                 {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4096},
-                                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4096 * 6},
-                                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 512}};
-    VkDescriptorPoolCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                                     .maxSets = 4096,
-                                     .poolSizeCount = sizeof sz / sizeof sz[0],
-                                     .pPoolSizes = sz};
+    /* a thousand sets of the stage layout (gpu/vk/pipeline.c), each with all its descriptors: a frame chains more
+       pools when it needs them */
+    VkDescriptorPoolSize sz[4];
+    vk_pool_sizes(sz, 1024);
+    VkDescriptorPoolCreateInfo ci = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = 1024, .poolSizeCount = 4, .pPoolSizes = sz};
     VkDescriptorPool p = VK_NULL_HANDLE;
     VK_OK(vkCreateDescriptorPool(g_vk.dev, &ci, NULL, &p));
     return p;
@@ -223,8 +255,17 @@ VkDescriptorSet vk_desc_alloc(VkDescriptorSetLayout layout) {
     Frame* f = &g_fr[g_cur];
     for (int tries = 0; tries < 2; tries++) {
         if (!f->npool || tries) {
-            if (f->npool == (int)(sizeof f->pool_d / sizeof f->pool_d[0])) return VK_NULL_HANDLE;
-            f->pool_d[f->npool++] = desc_pool_new();
+            if (f->npool == (int)(sizeof f->pool_d / sizeof f->pool_d[0])) {
+                static int said;
+                if (!said) {
+                    said = 1;
+                    LOG("vulkan: a frame used all its descriptor pools (draws skipped)\n");
+                }
+                return VK_NULL_HANDLE;
+            }
+            VkDescriptorPool p = desc_pool_new();
+            if (!p) return VK_NULL_HANDLE;
+            f->pool_d[f->npool++] = p;
         }
         VkDescriptorSetAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                                           .descriptorPool = f->pool_d[f->npool - 1],
@@ -241,10 +282,17 @@ VkDescriptorSet vk_desc_alloc(VkDescriptorSetLayout layout) {
     return VK_NULL_HANDLE;
 }
 
+/* vk_cmd() first: after a submit g_cur is the next slot, still holding an older frame's work. Starting it waits for
+   that work and frees its list, so what is pushed now waits for the frame recorded from now on, which is submitted
+   after every frame that can still use it */
 void vk_defer_image(VkImage img, VmaAllocation a, VkImageView v1, VkImageView v2) {
+    vk_cmd();
     dead_push(&g_fr[g_cur], (Dead){.img = img, .mem = a, .v1 = v1, .v2 = v2});
 }
-void vk_defer_buffer(VkBuffer b, VmaAllocation a) { dead_push(&g_fr[g_cur], (Dead){.buf = b, .mem = a}); }
+void vk_defer_buffer(VkBuffer b, VmaAllocation a) {
+    vk_cmd();
+    dead_push(&g_fr[g_cur], (Dead){.buf = b, .mem = a});
+}
 
 void vk_barrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect, VkPipelineStageFlags2 src_stage,
                 VkAccessFlags2 src_access, VkImageLayout from, VkPipelineStageFlags2 dst_stage,
@@ -271,10 +319,14 @@ static VkBuffer g_rb;
 static VmaAllocation g_rb_mem;
 static u8* g_rb_ptr;
 static u64 g_rb_cap;
+static u32 g_rb_small; /* readbacks in a row of an eighth of it or less */
 u8* vk_readback_buffer(u64 size, VkBuffer* buf) {
-    if (size > g_rb_cap) {
+    /* it grows to the biggest readback, and shrinks back after many small ones */
+    g_rb_small = g_rb_cap > STAGE_MIN && size <= g_rb_cap / 8 ? g_rb_small + 1 : 0;
+    if (size > g_rb_cap || g_rb_small >= 64) {
         if (g_rb) vk_defer_buffer(g_rb, g_rb_mem);
-        u64 cap = g_rb_cap ? g_rb_cap : (16ull << 20);
+        u64 cap = size > g_rb_cap ? (g_rb_cap ? g_rb_cap : STAGE_MIN) : STAGE_MIN;
+        g_rb_small = 0;
         while (cap < size) cap *= 2;
         VkBufferCreateInfo bci = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                                   .size = cap,

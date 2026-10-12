@@ -12,7 +12,8 @@ u64 nvmap_addr(u32 handle);
 u64 nvmap_addr_by_id(u32 id);
 u32 nvmap_size(u32 h);
 u64 gmmu_translate(u64 gva);
-u32 syncpt_alloc(void);
+u32 syncpt_alloc(void);   /* fatal past the 128 ids NVIDIA's stream library has room for */
+void syncpt_free(u32 id); /* the id can be handed out again */
 u32 syncpt_read(u32 id);
 void syncpt_incr(u32 id);
 int syncpt_wait(u32 id, u32 thresh, i64 timeout_ns);

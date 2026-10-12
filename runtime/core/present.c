@@ -23,7 +23,14 @@ static u64 g_last_present;
 void present_init(void) { pm_init(&g_flock); }
 void vi_convert_cpu(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, u32* out) {
     u32 bpp = (fmt == 4 || fmt == 6 || fmt == 7) ? 2 : 4;
-    u8* lin = malloc((size_t)w * h * bpp);
+    /* a buffer per calling thread, kept for the next frame */
+    static __thread u8* lin;
+    static __thread size_t lin_cap;
+    if ((size_t)w * h * bpp > lin_cap) {
+        free(lin);
+        lin_cap = (size_t)w * h * bpp;
+        lin = malloc(lin_cap);
+    }
     if (layout == 3 || layout == 2) {
         deswizzle(lin, w * bpp, GP(a), w * bpp, h, bhl);
     } else {
@@ -63,12 +70,13 @@ void vi_convert_cpu(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt
             out[i] = r | (g << 8) | (b << 16) | 0xFF000000u;
         }
     }
-    free(lin);
 }
 void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt) {
     u64 a = nvmap_addr_by_id(nvmap_id);
-    if (!a) {
-        WARN("vi: buffer without memory (nvmap %u)\n", nvmap_id);
+    if (!a) { /* the game queues it every frame: said a few times */
+        static int said;
+        if (__atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 5)
+            WARN("vi: buffer without memory (nvmap %u)\n", nvmap_id);
         return;
     }
     a += offset;
@@ -86,8 +94,8 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
         video_present_rgba(g_frame, (int)w, (int)h, (int)w);
         pm_unlock(&g_flock);
     }
-    g_frames++;
-    /* fps_limit: 1 = 60, otherwise N fps */
+    __atomic_add_fetch(&g_frames, 1, __ATOMIC_RELAXED);
+    /* fps_limit: 0 = no limit, 60 to 240 = that many fps, anything else = 60 */
     if (g_opt_fps) {
         u64 per = g_opt_fps >= 60 && g_opt_fps <= 240 ? 1000000000ull / (u64)g_opt_fps : 16666667ull;
         if (g_opt_fps >= 10 && g_opt_fps < 60) {

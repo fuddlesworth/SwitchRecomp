@@ -10,7 +10,6 @@
 typedef struct {
     u64 buttons;
     i32 lx, ly, rx, ry;
-    int touch, tx, ty;
 } PadState;
 extern PadState g_pad;
 void hid_update(void);

@@ -2,7 +2,8 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
-/* VIC: the video image compositor, which converts and scales a decoded frame into the game's surface */
+/* VIC: the video image compositor. Here it converts the last picture NVDEC decoded (not the input slot the job
+   names) into the game's surface, without scaling: a picture larger than the surface is cropped */
 #include "video/host1x_int.h"
 /* VIC output surface config, u64 at config(0x708)+0x20:
    0-6 format (0x1F A8B8G8R8, 0x20 A8R8G8B8, 0x44 NV12), 11-14 bl kind, 15-18 block height log2,
@@ -12,7 +13,7 @@ static void vic_put(u8* base, u64 off, const u8* src, u32 n, u64 lim) {
     if (off + n <= lim) memcpy(base + off, src, n);
 }
 void vic_execute(u32* r) {
-    if (!g_vframes) return;
+    if (!g_vframes || !g_fy) return;
     {
         static u32 nv;
         nv++;
@@ -20,16 +21,34 @@ void vic_execute(u32* r) {
     }
     u64 ly = (u64)r[0x720 / 4] << 8, lc = (u64)r[0x724 / 4] << 8, cfg_iova = (u64)r[0x708 / 4] << 8;
     u8* cs = iova_ptr(cfg_iova, 0x28);
-    u64 cfg = 0;
-    if (cs) memcpy(&cfg, cs + 0x20, 8);
+    if (!cs) {
+        /* without the config the surface's format, size and layout are unknown: writing a guess corrupts it */
+        static int said;
+        if (said < 4) {
+            said++;
+            LOG("video: VIC config at iova %llx not mapped, job skipped\n", (unsigned long long)cfg_iova);
+        }
+        return;
+    }
+    u64 cfg;
+    memcpy(&cfg, cs + 0x20, 8);
     u32 fmt = (u32)(cfg & 0x7F), blk = (u32)((cfg >> 11) & 15), bh = (u32)((cfg >> 15) & 15);
     u32 sw = (u32)((cfg >> 32) & 0x3FFF) + 1, sh = (u32)((cfg >> 46) & 0x3FFF) + 1;
-    if (!cs) {
-        fmt = 0x44;
-        sw = g_fw;
-        sh = g_fh;
+    /* SWR_VIC_FMT=n overrides the output format the config names, to try another one while debugging */
+    static int fmt_env = -1;
+    if (fmt_env == -1) {
+        const char* e = getenv("SWR_VIC_FMT");
+        fmt_env = e ? (int)(strtoul(e, 0, 0) & 0x7F) : -2;
     }
-    if (getenv("SWR_VIC_FMT")) fmt = (u32)strtoul(getenv("SWR_VIC_FMT"), 0, 0);
+    if (fmt_env >= 0) fmt = (u32)fmt_env;
+    if (fmt != 0x1F && fmt != 0x20 && fmt != 0x44) {
+        static int said;
+        if (said < 4) {
+            said++;
+            LOG("video: VIC output format %x isn't handled, job skipped\n", fmt);
+        }
+        return;
+    }
     u32 w = g_fw < sw ? g_fw : sw, h = g_fh < sh ? g_fh : sh;
     {
         static int said;
@@ -40,8 +59,11 @@ void vic_execute(u32* r) {
         }
     }
     if (fmt == 0x1F || fmt == 0x20) {
-        u32 pitch = sw * 4;
-        u64 lim = blk ? (u64)pitch * (((sh + (8u << bh) - 1) / (8u << bh)) * (8u << bh)) : (u64)pitch * sh;
+        /* pitch linear rows are 256 aligned, as in the NV12 path below. A block linear surface spans whole GOBs:
+           64 bytes wide (bl_offset rounds the width up the same way), 8 << bh rows high */
+        u32 pitch = blk ? sw * 4 : (sw * 4 + 255) & ~255u;
+        u64 lim =
+            blk ? (u64)((pitch + 63) & ~63u) * (((sh + (8u << bh) - 1) / (8u << bh)) * (8u << bh)) : (u64)pitch * sh;
         u8* py = iova_ptr(ly, lim);
         if (!py) {
             py = iova_ptr(ly, (u64)pitch * h);
@@ -58,7 +80,12 @@ void vic_execute(u32* r) {
         static u8* row;
         static u32 rcap;
         if (rcap < pitch) {
-            row = realloc(row, pitch);
+            u8* nr = realloc(row, pitch);
+            if (!nr) {
+                WARN("video: out of memory for a %u byte VIC row\n", pitch);
+                return;
+            }
+            row = nr;
             rcap = pitch;
         }
         int ri = fmt == 0x1F ? 0 : 2, bi = fmt == 0x1F ? 2 : 0;
@@ -95,9 +122,11 @@ void vic_execute(u32* r) {
     u32 pitch = blk ? sw : (sw + 255) & ~255u;
     u64 ylim = (u64)pitch * sh, clim = (u64)pitch * ((sh + 1) / 2);
     if (blk) {
+        /* whole GOBs: 64 bytes wide (bl_offset rounds the width up the same way), 8 << bh rows high */
         u32 gy = 8u << bh;
-        ylim = (u64)pitch * ((sh + gy - 1) / gy * gy);
-        clim = (u64)pitch * (((sh + 1) / 2 + gy - 1) / gy * gy);
+        u64 gw = (pitch + 63) & ~63u;
+        ylim = gw * ((sh + gy - 1) / gy * gy);
+        clim = gw * (((sh + 1) / 2 + gy - 1) / gy * gy);
     }
     u8* py = iova_ptr(ly, ylim);
     u8* pc = lc ? iova_ptr(lc, clim) : NULL;
@@ -108,6 +137,13 @@ void vic_execute(u32* r) {
             LOG("video: VIC output luma at iova %llx not mapped\n", (unsigned long long)ly);
         }
         return;
+    }
+    if (!pc) {
+        static int said;
+        if (said < 4) {
+            said++;
+            LOG("video: VIC output chroma at iova %llx not mapped, the picture has no color\n", (unsigned long long)lc);
+        }
     }
     for (u32 y = 0; y < h; y++) {
         const u8* s = g_fy + (u64)y * g_fw;

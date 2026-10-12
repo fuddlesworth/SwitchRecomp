@@ -2,31 +2,34 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
-/* sm, am, set, time, acc, apm, plus a bunch of stub services that just say ok (nifm, shop, prepo...) */
-#include "hle/services.h"
-#include "core/main.h"
-#include "core/options.h"
-#include "kernel/ipc.h"
-#include "kernel/kernel.h"
-#include "kernel/mem.h"
-#include "platform/log.h"
-#include "platform/plat.h"
-#include <stdlib.h>
-#include <string.h>
+/* the events the services share, and the registration of the services in sm.c, am.c, set.c, time.c, acc.c,
+   audio.c and misc.c */
 #include "hle/services_int.h"
 
 /* ================================================================ shared events */
 u32 ev_handle(KEvent* e) { return h_new(&e->o); }
+int g_hle_docked, g_hle_lang;
+
+/* the service keeps these events for the whole run: its reference keeps them alive when the game closes the
+   handles it was given */
+static KEvent* owned_event(const char* name) {
+    KEvent* e = kevent_new(name, 0);
+    kobj_ref(&e->o);
+    return e;
+}
 
 void svc_core_init(void) {
-    g_msg_event = kevent_new("applet msg", 0);
-    g_launch_ev = kevent_new("launchable", 0);
-    g_res_ev = kevent_new("res change", 0);
-    g_opmode_ev = kevent_new("opmode", 0);
-    g_aud_ev = kevent_new("audio renderer", 0);
+    g_hle_docked = g_opt_docked;
+    g_hle_lang = g_opt_lang;
+    g_msg_event = owned_event("applet msg");
+    g_launch_ev = owned_event("launchable");
+    g_res_ev = owned_event("res change");
+    g_sleep_ev = owned_event("sleep lock");
+    g_aud_ev = owned_event("audio renderer");
+    time_init();
     plat_thread(audio_clock, NULL, 64 * 1024);
     am_push_msg(0xF);  /* FocusStateChanged */
-    am_push_msg(0x1F); /* OperationModeChanged / resume */
+    am_push_msg(0x1F); /* PerformanceModeChanged */
     kevent_signal(g_launch_ev);
     svc_register("sm:", new_sm);
     svc_register("appletOE", new_appletoe);
@@ -61,7 +64,7 @@ void svc_core_init(void) {
     svc_register("ns:ro", new_ns);
     svc_register("audren:u", new_audren);
     svc_register("audout:u", new_audout);
-    svc_register("audin:u", new_audout);
+    svc_register("audin:u", new_audin);
     svc_register("hwopus", new_hwopus);
     svc_register("bsd:u", new_bsd);
     svc_register("bsd:s", new_bsd);

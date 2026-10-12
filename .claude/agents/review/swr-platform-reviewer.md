@@ -34,3 +34,4 @@ The orchestrator applies your fixes without re-deriving them. A confident causal
 - **Portability**: Windows code (`_WIN32` parts, `plat_win32.c`, `profiler_win32.c`) still compiles there; a shared header change must not break them even though Linux only cross-builds them.
 
 ## Known past-bug shapes to check for
+- (none recorded yet)

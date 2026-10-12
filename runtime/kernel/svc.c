@@ -5,6 +5,16 @@
 /* the SVC dispatch: each supervisor call the game makes, by number */
 #include "kernel/kernel_int.h"
 static void swr_svc_(CPU* c, u32 imm);
+/* svcCreateEvent's writable end: SignalEvent and ClearEvent take it, WaitSynchronization doesn't */
+typedef struct {
+    KObj o;
+    KEvent* ev;
+} KWEvent;
+static void wev_destroy(KObj* o) {
+    kobj_unref(&((KWEvent*)o)->ev->o);
+    free(o->waiters);
+    free(o);
+}
 void swr_svc(CPU* c, u32 imm) {
     u64 a0 = c->x[0], a1 = c->x[1], a2 = c->x[2];
     u64 a3 = c->x[3];
@@ -22,7 +32,9 @@ void swr_svc(CPU* c, u32 imm) {
         r->o1 = c->x[1];
     }
     static u32 nbad;
-    if ((u32)c->x[0] == R_BADHANDLE && imm != 0x16 && (nbad++ < 20 || !(nbad & 0xFFFF)))
+    /* GetSystemTick, SleepThread and GetCurrentProcessorNumber don't return a result in x0 */
+    if ((u32)c->x[0] == R_BADHANDLE && imm != 0x16 && imm != 0x1E && imm != 0x0B && imm != 0x10 &&
+        (nbad++ < 20 || !(nbad & 0xFFFF)))
         WARN("SVC 0x%x with invalid handle (args %llx %llx %llx) pc=%llx\n", imm, (unsigned long long)a0,
              (unsigned long long)a1, (unsigned long long)a2, (unsigned long long)c->pc);
 }
@@ -30,16 +42,10 @@ static void swr_svc_(CPU* c, u32 imm) {
     KThread* t = kthread_cur();
     u64* x = c->x;
     switch (imm) {
-        case 0x01: {
-            u64 a = mem_heap_set(x[1]);
-            if (!a && x[1]) {
-                x[0] = R_OUTOFMEM;
-                return;
-            }
-            x[0] = 0;
-            x[1] = HEAP_BASE;
+        case 0x01:
+            x[0] = svc_set_heap_size(x[1]);
+            if (!x[0]) x[1] = HEAP_BASE;
             return;
-        }
         case 0x02:
             mem_set_state(x[0], x[1], 0xFFFFFFFFu, (u32)x[2]);
             x[0] = 0;
@@ -58,12 +64,21 @@ static void swr_svc_(CPU* c, u32 imm) {
         case 0x08: {
             int prio = (int)(u32)x[4], core = (int)(i32)(u32)x[5];
             if (core == -2) core = 0;
+            /* the console's checks: a core and a priority the npdm gives the process */
+            if (core < 0 || core >= 64 || !((g_core_mask >> core) & 1)) {
+                x[0] = R_BADCORE;
+                return;
+            }
+            if (prio < 0 || prio >= 64 || !((g_prio_mask >> prio) & 1)) {
+                x[0] = R_BADPRIO;
+                return;
+            }
             KThread* n = kthread_create(x[1], x[2], x[3], prio, core);
             u32 h = h_new(&n->o);
-            x[0] = 0;
-            x[1] = h;
             LOGV("CreateThread entry=%llx stack=%llx prio=%d core=%d -> %x\n", (unsigned long long)x[1],
                  (unsigned long long)n->stack_top, prio, core, h);
+            x[0] = 0;
+            x[1] = h;
             return;
         }
         case 0x09: {
@@ -104,7 +119,14 @@ static void swr_svc_(CPU* c, u32 imm) {
                 x[0] = R_BADHANDLE;
                 return;
             }
-            n->prio = (int)(u32)x[1];
+            u32 prio = (u32)x[1];
+            if (prio >= 64 || !((g_prio_mask >> prio) & 1)) {
+                x[0] = R_BADPRIO;
+                return;
+            }
+            pm_lock(&g_klock); /* the waiter lists pick by priority under it */
+            n->prio = (int)prio;
+            pm_unlock(&g_klock);
             x[0] = 0;
             return;
         }
@@ -132,38 +154,46 @@ static void swr_svc_(CPU* c, u32 imm) {
             return;
         }
         case 0x10: x[0] = (u32)(t ? t->core : 0); return;
-        case 0x11: {
-            KEvent* e = (KEvent*)h_get_type((u32)x[0], KO_EVENT);
-            if (!e) {
+        case 0x11: { /* SignalEvent: the writable end only */
+            KWEvent* w = (KWEvent*)h_get_ref((u32)x[0], KO_WEVENT);
+            if (!w) {
                 x[0] = R_BADHANDLE;
                 return;
             }
-            kevent_signal(e);
+            kevent_signal(w->ev);
+            kobj_unref(&w->o);
             x[0] = 0;
             return;
         }
-        case 0x12:
-        case 0x17: {
-            KObj* o = h_get((u32)x[0]);
-            if (!o) {
-                x[0] = R_BADHANDLE;
-                return;
-            }
-            if (o->type == KO_EVENT) {
-                KEvent* e = (KEvent*)o;
+        case 0x12:   /* ClearEvent: either end */
+        case 0x17: { /* ResetSignal: the readable end, and an error when it wasn't signaled */
+            KObj* o = h_get_ref((u32)x[0], 0);
+            KEvent* e = !o                                    ? NULL
+                        : o->type == KO_EVENT                 ? (KEvent*)o
+                        : o->type == KO_WEVENT && imm == 0x12 ? ((KWEvent*)o)->ev
+                                                              : NULL;
+            if (e) {
                 pm_lock(&g_klock);
                 int was = e->signaled;
                 e->signaled = 0;
                 pm_unlock(&g_klock);
                 x[0] = (imm == 0x17 && !was) ? R_BADSTATE : 0;
-                return;
-            }
-            x[0] = 0;
+            } else
+                x[0] = R_BADHANDLE;
+            kobj_unref(o);
             return;
         }
         case 0x13: x[0] = svc_map_shm((u32)x[0], x[1], x[2], (u32)x[3]); return;
         case 0x14: x[0] = svc_unmap_shm((u32)x[0], x[1], x[2]); return;
-        case 0x15: {
+        case 0x15: { /* CreateTransferMemory: the source stays locked, with the permission given, until it's closed */
+            if (x[1] & 0xFFF) {
+                x[0] = R_BADADDR;
+                return;
+            }
+            if (!x[2] || (x[2] & 0xFFF)) {
+                x[0] = R_BADSIZE;
+                return;
+            }
             KTmem* m = calloc(1, sizeof *m);
             m->o.type = KO_TMEM;
             m->o.destroy = tmem_destroy;
@@ -171,11 +201,13 @@ static void swr_svc_(CPU* c, u32 imm) {
             m->addr = x[1];
             m->size = x[2];
             m->perm = (u32)x[3];
+            mem_set_attr(m->addr, m->size, 1, 1);
+            mem_set_state(m->addr, m->size, 0xFFFFFFFFu, m->perm & PERM_RW);
             x[0] = 0;
             x[1] = h_new(&m->o);
             return;
         }
-        case 0x16: x[0] = ((u32)x[0] == H_CUR_THREAD || (u32)x[0] == H_CUR_PROC) ? 0 : (u32)h_close((u32)x[0]); return;
+        case 0x16: x[0] = (u32)h_close((u32)x[0]); return; /* pseudo handles too are InvalidHandle, as on console */
         case 0x18: {
             u32 idx = 0;
             u32 r = svc_wait_sync(t, x[1], (u32)x[2], (i64)x[3], &idx);
@@ -221,8 +253,11 @@ static void swr_svc_(CPU* c, u32 imm) {
             x[1] = 0x51;
             return;
         case 0x25: {
-            KObj* o = h_get((u32)x[1]);
-            KThread* n = (o && o->type == KO_THREAD) ? (KThread*)o : t;
+            KThread* n = (KThread*)h_get_type((u32)x[1], KO_THREAD);
+            if (!n) {
+                x[0] = R_BADHANDLE;
+                return;
+            }
             x[0] = 0;
             x[1] = n->id;
             return;
@@ -250,11 +285,13 @@ static void swr_svc_(CPU* c, u32 imm) {
                 if (a < 0x10000 || a >= AS_SIZE - 256) continue;
                 MemBlock b;
                 mem_query(a, &b);
-                if (b.state == MS_FREE) continue;
+                if (b.state == MS_FREE || b.state == MS_INACCESSIBLE) continue;
+                u64 room = b.addr + b.size - a; /* don't read past the mapping */
+                int max = room < 200 ? (int)room : 200;
                 const char* p = (const char*)GP(a);
                 int n = 0;
-                while (n < 200 && p[n] >= 32 && p[n] < 127) n++;
-                if (n >= 4 && (p[n] == 0 || n == 200)) WARN("  x%d -> \"%.*s\"\n", r, n, p);
+                while (n < max && p[n] >= 32 && p[n] < 127) n++;
+                if (n >= 4 && (n == max || p[n] == 0)) WARN("  x%d -> \"%.*s\"\n", r, n, p);
             }
             fatal("The game stopped (svcBreak). See the .log for details.");
             return;
@@ -281,58 +318,21 @@ static void swr_svc_(CPU* c, u32 imm) {
         case 0x5E:
         case 0x5F:
         case 0x36: x[0] = 0; return;
-        case 0x2C: {
-            u64 a = x[0], s = x[1];
-            if ((a | s) & 0xFFF) {
-                x[0] = R_BADADDR;
-                return;
-            }
-            /* only map the holes */
-            for (u64 p = a; p < a + s;) {
-                MemBlock b;
-                mem_query(p, &b);
-                u64 e = b.addr + b.size;
-                if (e > a + s) e = a + s;
-                if (b.state == MS_FREE) {
-                    mem_map(p, e - p, MS_NORMAL, PERM_RW);
-                    g_phys_mapped += e - p;
-                }
-                p = e;
-            }
-            x[0] = 0;
-            return;
-        }
-        case 0x2D: {
-            u64 a = x[0], s = x[1];
-            for (u64 p = a; p < a + s;) {
-                MemBlock b;
-                mem_query(p, &b);
-                u64 e = b.addr + b.size;
-                if (e > a + s) e = a + s;
-                if (e <= p) break;
-                if (b.state == MS_NORMAL) {
-                    u64 n = e - p;
-                    g_phys_mapped = g_phys_mapped > n ? g_phys_mapped - n : 0;
-                }
-                p = e;
-            }
-            mem_unmap(a, s);
-            x[0] = 0;
-            return;
-        }
+        case 0x2C: x[0] = svc_map_physical(x[0], x[1]); return;
+        case 0x2D: x[0] = svc_unmap_physical(x[0], x[1]); return;
         case 0x2E: x[0] = R_NOTFOUND; return;
         case 0x2F: x[0] = R_NOTFOUND; return;
         case 0x30:
         case 0x37: {
             u32 which = (u32)x[2];
             x[0] = 0;
-            x[1] = which == 0 ? mem_total() : which == 1 ? 800 : which == 2 ? 800 : which == 3 ? 256 : 64;
+            x[1] = which == 0 ? mem_total() : which == 1 ? THREAD_MAX : which == 2 ? 800 : which == 3 ? 256 : 64;
             return;
         }
         case 0x31: {
             u32 which = (u32)x[2];
             x[0] = 0;
-            x[1] = which == 0 ? used_memory() : which == 1 ? (u64)g_nthreads : 16;
+            x[1] = which == 0 ? used_memory() : which == 1 ? (u64)kthread_live_count() : 16;
             return;
         }
         case 0x32: x[0] = 0; return;
@@ -357,10 +357,15 @@ static void swr_svc_(CPU* c, u32 imm) {
         case 0x35: x[0] = svc_signal_addr(x[0], (u32)x[1], (i32)(u32)x[2], (i32)(u32)x[3]); return;
         case 0x45: {
             KEvent* e = kevent_new("user event", 0);
-            u32 w = h_new(&e->o), r = h_new(&e->o);
+            KWEvent* we = calloc(1, sizeof *we);
+            we->o.type = KO_WEVENT;
+            we->o.destroy = wev_destroy;
+            we->o.name = "user event (writable)";
+            we->ev = e;
+            kobj_ref(&e->o);
             x[0] = 0;
-            x[1] = w;
-            x[2] = r;
+            x[1] = h_new(&we->o);
+            x[2] = h_new(&e->o);
             return;
         }
         case 0x4B: {

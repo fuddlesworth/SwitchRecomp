@@ -5,23 +5,27 @@
 /* the sampling profiler (profile=1, Windows): about every millisecond it suspends each thread, reads its instruction
    pointer and maps it to a game function, the runtime or another module. profile.txt is rewritten every 10 s */
 #include "core/loader.h"
-#include "gpu/renderer.h"
+#include "core/main.h"
 #include "kernel/mem.h"
 #include "platform/plat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <process.h>
-static HANDLE g_pth[256];
-static volatile LONG g_npth;
+/* the sampled threads. A slot is freed by prof_thread when its thread has ended, and taken again by a new thread:
+   guest threads come and go, and 256 slots filled up for good */
+static HANDLE volatile g_pth[256];
+static volatile LONG g_npth; /* slots in use or used before: the ones prof_thread looks at */
 void plat_prof_add_thread(HANDLE h) {
     HANDLE d = NULL;
     if (!DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(), &d, 0, FALSE, DUPLICATE_SAME_ACCESS)) return;
-    LONG i = InterlockedIncrement(&g_npth) - 1;
-    if (i < 256)
-        g_pth[i] = d;
-    else
-        CloseHandle(d);
+    for (LONG i = 0; i < 256; i++)
+        if (!InterlockedCompareExchangePointer((PVOID volatile*)&g_pth[i], d, NULL)) {
+            LONG n;
+            while ((n = g_npth) <= i && InterlockedCompareExchange(&g_npth, i + 1, n) != n) {}
+            return;
+        }
+    CloseHandle(d);
 }
 typedef struct {
     u64 host;
@@ -101,10 +105,10 @@ static void prof_note(u64 rip) {
     }
     if (i < g_npmod) g_pmod[i].n++;
 }
-static const char* g_pfile = "profile.txt";
-static int g_pboot;
 static void prof_write(void) {
-    FILE* f = fopen(g_pfile, "w");
+    char pth[1200]; /* next to the game like its log, not in whatever folder it was started from */
+    snprintf(pth, sizeof pth, "%sprofile.txt", g_exedir);
+    FILE* f = fopen(pth, "w");
     if (!f) return;
     /* idle threads sit in ntdll/kernelbase/win32u, so percentages are of non-idle samples */
     u64 idle = 0;
@@ -175,14 +179,18 @@ static unsigned __stdcall prof_thread(void* a) {
     (void)a;
     u64 last = GetTickCount64();
     DWORD me = GetCurrentThreadId();
-    u64 start = last;
     for (;;) {
-        Sleep(g_pboot ? 2 : 1);
+        Sleep(1);
         LONG n = g_npth;
         if (n > 256) n = 256;
         for (LONG i = 0; i < n; i++) {
             HANDLE h = g_pth[i];
             if (!h || GetThreadId(h) == me) continue;
+            if (WaitForSingleObject(h, 0) == WAIT_OBJECT_0) { /* the thread has ended: free its slot */
+                g_pth[i] = NULL;
+                CloseHandle(h);
+                continue;
+            }
             if (SuspendThread(h) == (DWORD)-1) continue;
             CONTEXT cx;
             memset(&cx, 0, sizeof cx);
@@ -193,21 +201,15 @@ static unsigned __stdcall prof_thread(void* a) {
             } else
                 ResumeThread(h);
         }
-        if (GetTickCount64() - last >= (g_pboot ? 5000u : 10000u)) {
+        if (GetTickCount64() - last >= 10000u) {
             last = GetTickCount64();
             prof_write();
-        }
-        if (g_pboot && GetTickCount64() - start >= 90000) {
-            prof_write();
-            break;
         }
     }
     return 0;
 }
-void plat_prof_start(int boot) {
+void plat_prof_start(void) {
     if (!g_mod || !g_mod->nentries) return;
-    g_pboot = boot;
-    if (boot) g_pfile = "startup.txt";
     g_npe = g_mod->nentries;
     g_pe = malloc(sizeof(PEnt) * g_npe);
     g_pcnt = calloc(g_npe, 4);

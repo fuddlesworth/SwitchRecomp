@@ -5,18 +5,10 @@
 /* ASTC LDR 2D decoder, written from the Khronos spec.
    Desktop GPUs mostly lack ASTC so we decode on upload. */
 #include "gpu/texture/astc.h"
-#include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
-typedef uint8_t u8;
-typedef uint32_t u32;
-typedef int32_t i32;
-typedef uint64_t u64;
 
 /* ---------------------------------------------------------------- bits */
-typedef struct {
-    const u8* d;
-} Bits;
 static u32 getbits(const u8* d, int pos, int n) {
     u32 v = 0;
     for (int i = 0; i < n; i++) {
@@ -119,27 +111,17 @@ static void ise_decode(const u8* d, int pos, int count, int q, int* vals, int re
                     pos += nb;
                 } else
                     m[i] = 0;
-                if (i < n || 1) {
-                    int k = tb[i][1];
-                    u32 tv = 0;
-                    if (i < n) {
-                        tv = GB(pos, k);
-                        pos += k;
-                    } else {
-                        tv = 0;
-                    }
-                    T |= tv << tb[i][0];
+                u32 tv = 0;
+                if (i < n) {
+                    tv = GB(pos, tb[i][1]);
+                    pos += tb[i][1];
                 }
+                T |= tv << tb[i][0];
             }
             /* trit bits past count aren't stored, clamp pos */
             int tr[5];
             decode_trits(T, tr);
             for (int i = 0; i < n; i++) vals[blk + i] = (int)(m[i] | ((u32)tr[i] << nb));
-            if (n < 5) {
-                static const int used[6] = {0, 2 + 0, 4, 5, 7, 8};
-                int extra = 8 - used[n];
-                (void)extra;
-            }
         }
     } else if (t->quints) {
         for (int blk = 0; blk < count; blk += 3) {
@@ -173,9 +155,8 @@ static int unq_color(int v, int q) {
     const Q* t = &qtab[q];
     int nb = t->bits;
     if (!t->trits && !t->quints) { /* bit-replicate to 8 bits */
-        int r = 0, s = nb;
         int x = v;
-        r = x << (8 - nb);
+        int r = x << (8 - nb);
         int sh = 8 - nb;
         while (sh > 0) {
             sh -= nb;
@@ -185,9 +166,7 @@ static int unq_color(int v, int q) {
     }
     int m = v & ((1 << nb) - 1), tq = v >> nb;
     int A = (m & 1) ? 0x1FF : 0, B = 0, C = 0, D = tq;
-    int b = (m >> 1) & 1, c = (m >> 2) & 1, dd = (m >> 3) & 1, e = (m >> 4) & 1, f = (m >> 5) & 1, g = (m >> 6) & 1,
-        h = (m >> 7) & 1;
-    (void)h;
+    int b = (m >> 1) & 1, c = (m >> 2) & 1, dd = (m >> 3) & 1, e = (m >> 4) & 1, f = (m >> 5) & 1;
     if (t->trits) {
         switch (nb) {
             case 1:
@@ -241,7 +220,6 @@ static int unq_color(int v, int q) {
             default: C = 0; B = 0;
         }
     }
-    (void)g;
     int T2 = D * C + B;
     T2 ^= A;
     T2 = (A & 0x80) | (T2 >> 2);
@@ -325,7 +303,6 @@ static void blue_contract(int* r, int* g, int* b) {
     *g = (*g + *b) >> 1;
 }
 static void decode_endpoints(int mode, const int* v, int e0[4], int e1[4]) {
-    int a, b;
     switch (mode) {
         case 0:
             e0[0] = e0[1] = e0[2] = v[0];
@@ -398,19 +375,20 @@ static void decode_endpoints(int mode, const int* v, int e0[4], int e1[4]) {
             bit_transfer_signed(&v1, &v0);
             bit_transfer_signed(&v3, &v2);
             bit_transfer_signed(&v5, &v4);
+            /* the sums stay unclamped through blue_contract and are clamped at the end, as for mode 13 */
             if (v1 + v3 + v5 >= 0) {
                 e0[0] = v0;
                 e0[1] = v2;
                 e0[2] = v4;
                 e0[3] = 255;
-                e1[0] = clamp255(v0 + v1);
-                e1[1] = clamp255(v2 + v3);
-                e1[2] = clamp255(v4 + v5);
+                e1[0] = v0 + v1;
+                e1[1] = v2 + v3;
+                e1[2] = v4 + v5;
                 e1[3] = 255;
             } else {
-                e0[0] = clamp255(v0 + v1);
-                e0[1] = clamp255(v2 + v3);
-                e0[2] = clamp255(v4 + v5);
+                e0[0] = v0 + v1;
+                e0[1] = v2 + v3;
+                e0[2] = v4 + v5;
                 e0[3] = 255;
                 e1[0] = v0;
                 e1[1] = v2;
@@ -502,8 +480,6 @@ static void decode_endpoints(int mode, const int* v, int e0[4], int e1[4]) {
             for (int i = 0; i < 4; i++) e1[i] = e0[i];
             break;
     }
-    (void)a;
-    (void)b;
 }
 
 /* ---------------------------------------------------------------- partitions */
@@ -592,7 +568,6 @@ static int decode_block_mode(u32 bm, int* gw, int* gh, int* dual, int* wq) {
     int R, H = (bm >> 9) & 1, D = (bm >> 10) & 1, A, B;
     if (!(bm & 3)) { /* low 2 bits == 0 */
         R = ((bm >> 4) & 1) | ((bm >> 1) & 6);
-        if (!((bm >> 2) & 3) && 0) {}
         A = (bm >> 5) & 3;
         B = (bm >> 9) & 3;
         switch ((bm >> 7) & 3) {
@@ -655,10 +630,8 @@ static int decode_block_mode(u32 bm, int* gw, int* gh, int* dual, int* wq) {
         }
     }
     if (R < 2) return 0;
-    static const int qmap[2][6] = {{1, 2, 3, 4, 5, 6}, {7, 8, 9, 10, 11, 12}};
-    /* R 2..7 -> ranges: H=0: 2,3,4,5,6,7 -> quantization indices 0..5; H=1: 9..20 */
+    /* R 2..7 -> weight ranges 2,3,4,5,6,8 (H=0) or 10,12,16,20,24,32 (H=1): qtab indices 0..11 */
     static const int qidx[2][8] = {{-1, -1, 0, 1, 2, 3, 4, 5}, {-1, -1, 6, 7, 8, 9, 10, 11}};
-    (void)qmap;
     *wq = qidx[H][R];
     *dual = D;
     return 1;
@@ -666,6 +639,12 @@ static int decode_block_mode(u32 bm, int* gw, int* gh, int* dual, int* wq) {
 static void decode_block(const u8* blk, int bw, int bh, u8* out) {
     u32 bm = getbits(blk, 0, 11);
     if ((bm & 0x1FF) == 0x1FC) { /* void extent = solid color */
+        /* bit 9 makes it HDR (FP16 colours), which an LDR decoder can't give, and bits 10-11 are reserved as 1s:
+           otherwise the block is an error */
+        if (((bm >> 9) & 1) || ((bm >> 10) & 3) != 3) {
+            error_block(out, bw, bh);
+            return;
+        }
         u32 r = getbits(blk, 64, 16), g = getbits(blk, 80, 16), b = getbits(blk, 96, 16), a = getbits(blk, 112, 16);
         for (int i = 0; i < bw * bh; i++) {
             out[i * 4] = (u8)(r >> 8);
@@ -680,17 +659,8 @@ static void decode_block(const u8* blk, int bw, int bh, u8* out) {
         error_block(out, bw, bh);
         return;
     }
-    static const int wqtab[12] = {1, 2, 3,  4,  5,  7,
-                                  8, 9, 11, 14, 17, 20}; /* qtab index for 3,4,5,6,8,10,12,16,20,24,32... levels */
-    static const int wq_to_q[12] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
-    (void)wqtab;
-    /* weight ranges: 2,3,4,5,6,8 | 10,12,16,20,24,32 -> qtab indices */
-    static const int wrange[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-    static const int wq_q[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-    (void)wrange;
-    (void)wq_to_q;
-    /* qtab: 0:2 1:3 2:4 3:5 4:6 5:8 6:10 7:12 8:16 9:20 10:24 11:32 12:40 ... */
-    int qw = wq_q[wq];
+    /* qtab: 0:2 1:3 2:4 3:5 4:6 5:8 6:10 7:12 8:16 9:20 10:24 11:32 12:40 ... (the weight range is its index) */
+    int qw = wq;
     int nparts = (int)getbits(blk, 11, 2) + 1;
     int nweights = gw * gh * (dual ? 2 : 1);
     int wbits = ise_bits(nweights, qw);
@@ -737,11 +707,11 @@ static void decode_block(const u8* blk, int bw, int bh, u8* out) {
         error_block(out, bw, bh);
         return;
     }
-    int ccomp_pos = dual ? 2 : 0;
     int avail = 128 - wbits - pos - extra_cem_bits - (dual ? 2 : 0);
-    /* pick the highest color quant level that fits */
+    /* pick the highest color quant level that fits; colour endpoints have 6 levels at least (qtab 4), a block
+       with less room is an error */
     int cq = -1;
-    for (int q = 20; q >= 0; q--) {
+    for (int q = 20; q >= 4; q--) {
         if (ise_bits(nvals, q) <= avail) {
             cq = q;
             break;
@@ -756,7 +726,6 @@ static void decode_block(const u8* blk, int bw, int bh, u8* out) {
     for (int i = 0; i < nvals; i++) cvals[i] = unq_color(cvals[i], cq);
     int plane2_comp = -1;
     if (dual) plane2_comp = (int)getbits(blk, 128 - wbits - extra_cem_bits - 2, 2);
-    (void)ccomp_pos;
     int ep[4][2][4];
     int vi = 0;
     for (int i = 0; i < nparts; i++) {

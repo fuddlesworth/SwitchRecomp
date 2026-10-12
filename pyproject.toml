@@ -1,7 +1,11 @@
-# Settings for ruff, which scripts/format.sh runs through uvx. The project has no Python package to install.
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
+# Settings for ruff, which scripts/format.sh runs through uvx. switchrecomp runs from the checkout
+# (python3 -m switchrecomp) and is never installed, so this file holds nothing else.
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+# The oldest Python the README asks for
+target-version = "py312"
 
 [tool.ruff.format]
 quote-style = "single"

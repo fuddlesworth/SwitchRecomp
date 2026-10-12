@@ -20,7 +20,7 @@ void vk_unlock(void) {
     if (!--t_vkdepth) pm_unlock(&g_vklock);
 }
 
-const char* vk_result_str(VkResult r) {
+static const char* vk_result_str(VkResult r) {
     switch (r) {
         case VK_SUCCESS: return "VK_SUCCESS";
         case VK_NOT_READY: return "VK_NOT_READY";
@@ -74,6 +74,7 @@ static int create_instance(void) {
     const char* ext[16];
     u32 next = 0;
     for (u32 i = 0; i < nbe && next < 15; i++) ext[next++] = be[i];
+    if (nbe > 15) WARN("vulkan: the window backend wants %u instance extensions, only 15 are taken\n", nbe);
     const char* layers[1];
     u32 nlayers = 0;
     int validation = getenv("SWR_VK_VALIDATION") != NULL;
@@ -111,8 +112,9 @@ static int create_instance(void) {
     return 1;
 }
 
-/* a device that has Vulkan 1.3, the swapchain extension and a queue that can draw and present to our surface */
-static int device_score(VkPhysicalDevice pd, u32* gfx, u32* compute) {
+/* a device that has Vulkan 1.3, the swapchain extension and a queue that can draw and present to our surface.
+   *gfx_queues: how many queues the graphics family has */
+static int device_score(VkPhysicalDevice pd, u32* gfx, u32* compute, u32* gfx_queues) {
     VkPhysicalDeviceProperties p;
     vkGetPhysicalDeviceProperties(pd, &p);
     if (p.apiVersion < VK_API_VERSION_1_3) return -1;
@@ -139,6 +141,7 @@ static int device_score(VkPhysicalDevice pd, u32* gfx, u32* compute) {
         if ((q[i].queueFlags & VK_QUEUE_COMPUTE_BIT) && !(q[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && *compute == ~0u)
             *compute = i;
     if (*compute == ~0u) *compute = *gfx;
+    *gfx_queues = *gfx != ~0u ? q[*gfx].queueCount : 0;
     free(q);
     if (*gfx == ~0u) return -1;
     return p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? 3
@@ -152,14 +155,16 @@ static int create_device(void) {
     VkPhysicalDevice* pds = calloc(n ? n : 1, sizeof *pds);
     vkEnumeratePhysicalDevices(g_vk.instance, &n, pds);
     int best = -1;
+    u32 gfx_queues = 0;
     for (u32 i = 0; i < n; i++) {
-        u32 gf, cf;
-        int s = device_score(pds[i], &gf, &cf);
+        u32 gf, cf, gq;
+        int s = device_score(pds[i], &gf, &cf, &gq);
         if (s > best) {
             best = s;
             g_vk.phys = pds[i];
             g_vk.gfx_family = gf;
             g_vk.compute_family = cf;
+            gfx_queues = gq;
         }
     }
     free(pds);
@@ -168,23 +173,26 @@ static int create_device(void) {
         return 0;
     }
     vkGetPhysicalDeviceProperties(g_vk.phys, &g_vk.props);
-    vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &g_vk.mem);
 
-    float prio = 1.0f;
+    /* compute gets a queue of its own: of a compute-only family, or else a second one of the graphics family */
+    int second = g_vk.compute_family == g_vk.gfx_family && gfx_queues >= 2;
+    float prio[2] = {1.0f, 1.0f};
     VkDeviceQueueCreateInfo qci[2] = {{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                                        .queueFamilyIndex = g_vk.gfx_family,
-                                       .queueCount = 1,
-                                       .pQueuePriorities = &prio},
+                                       .queueCount = second ? 2 : 1,
+                                       .pQueuePriorities = prio},
                                       {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                                        .queueFamilyIndex = g_vk.compute_family,
                                        .queueCount = 1,
-                                       .pQueuePriorities = &prio}};
+                                       .pQueuePriorities = prio}};
     /* the features drawing uses, where the device has them */
     VkPhysicalDeviceFeatures have;
     vkGetPhysicalDeviceFeatures(g_vk.phys, &have);
     VkPhysicalDeviceFeatures* want = &g_vk.feat;
 #define WANT(f) want->f = have.f
-    WANT(robustBufferAccess); /* constant buffers are bound with the bytes the shader reads, not the 64K it declares */
+    /* constant buffers are bound with the bytes the shader reads, not the 64K it declares: reads past them stay in
+       bounds (their values are undefined) */
+    WANT(robustBufferAccess);
     WANT(imageCubeArray);
     WANT(independentBlend);
     WANT(dualSrcBlend);
@@ -228,9 +236,11 @@ static int create_device(void) {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT};
     VkPhysicalDeviceCustomBorderColorFeaturesEXT fbc = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT};
-    VkPhysicalDeviceVulkan11Features q11 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
+    VkPhysicalDeviceVulkan12Features q12 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    VkPhysicalDeviceVulkan11Features q11 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
+                                            .pNext = &q12};
     VkPhysicalDeviceFeatures2 f2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &q11};
-    void** tail = &q11.pNext;
+    void** tail = &q12.pNext;
     if (g_vk.has_divisor) {
         *tail = &fdiv;
         tail = &fdiv.pNext;
@@ -244,8 +254,15 @@ static int create_device(void) {
     g_vk.has_border_color = g_vk.has_border_color && fbc.customBorderColors && fbc.customBorderColorWithoutFormat;
     VkPhysicalDeviceVulkan11Features f11 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
                                             .shaderDrawParameters = q11.shaderDrawParameters};
-    VkPhysicalDeviceVulkan12Features f12 = {
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, .pNext = &f11, .timelineSemaphore = VK_TRUE};
+    /* also where the device has them: the mirror-once address mode (texture.c), and gl_Layer from vertex shaders
+       (shader.c's GL_ARB_shader_viewport_layer_array) */
+    g_vk.has_mirror_clamp = q12.samplerMirrorClampToEdge;
+    VkPhysicalDeviceVulkan12Features f12 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+                                            .pNext = &f11,
+                                            .samplerMirrorClampToEdge = q12.samplerMirrorClampToEdge,
+                                            .timelineSemaphore = VK_TRUE,
+                                            .shaderOutputViewportIndex = q12.shaderOutputViewportIndex,
+                                            .shaderOutputLayer = q12.shaderOutputLayer};
     VkPhysicalDeviceVulkan13Features f13 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
                                             .pNext = &f12,
                                             .synchronization2 = VK_TRUE,
@@ -278,7 +295,7 @@ static int create_device(void) {
     if (!VK_OK(vkCreateDevice(g_vk.phys, &dci, NULL, &g_vk.dev))) return 0;
     volkLoadDevice(g_vk.dev);
     vkGetDeviceQueue(g_vk.dev, g_vk.gfx_family, 0, &g_vk.gfx);
-    vkGetDeviceQueue(g_vk.dev, g_vk.compute_family, 0, &g_vk.compute);
+    vkGetDeviceQueue(g_vk.dev, g_vk.compute_family, second ? 1 : 0, &g_vk.compute);
     VmaVulkanFunctions vf = {.vkGetInstanceProcAddr = vkGetInstanceProcAddr,
                              .vkGetDeviceProcAddr = vkGetDeviceProcAddr};
     VmaAllocatorCreateInfo vai = {.physicalDevice = g_vk.phys,
@@ -290,30 +307,25 @@ static int create_device(void) {
     LOG("vulkan: %s, Vulkan %u.%u.%u, driver %08x, graphics queue family %u, compute %u%s\n", g_vk.props.deviceName,
         VK_API_VERSION_MAJOR(g_vk.props.apiVersion), VK_API_VERSION_MINOR(g_vk.props.apiVersion),
         VK_API_VERSION_PATCH(g_vk.props.apiVersion), g_vk.props.driverVersion, g_vk.gfx_family, g_vk.compute_family,
-        g_vk.compute_family == g_vk.gfx_family ? " (shared)" : " (separate)");
+        g_vk.compute_family != g_vk.gfx_family ? " (separate family)"
+        : second                               ? " (a second queue)"
+                                               : " (the graphics queue)");
     return 1;
 }
 
-void vk_swapchain_destroy(void) {
-    if (!g_vk.swapchain) return;
-    vkDeviceWaitIdle(g_vk.dev);
-    for (u32 i = 0; i < g_vk.sc_count; i++)
-        if (g_vk.sc_done[i]) vkDestroySemaphore(g_vk.dev, g_vk.sc_done[i], NULL);
-    vkDestroySwapchainKHR(g_vk.dev, g_vk.swapchain, NULL);
-    g_vk.swapchain = VK_NULL_HANDLE;
-    g_vk.sc_count = 0;
-}
-
-/* (re)creates the swapchain at the window's current size. 0 while the window has no area (minimized) */
-int vk_swapchain_create(void) {
+int vk_swapchain_create(int srgb) {
     VkSurfaceCapabilitiesKHR caps;
     if (!VK_OK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_vk.phys, g_vk.surface, &caps))) return 0;
+    if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
+        WARN("vulkan: the window's surface can't be drawn to by copies, which presenting needs\n");
+        return 0;
+    }
+    int ww, wh; /* what presents compare against, whatever the surface makes of it */
+    backend_window_size(&ww, &wh);
     VkExtent2D ext = caps.currentExtent;
     if (ext.width == 0xFFFFFFFFu) { /* Wayland: the swapchain decides, so the window's size */
-        int w, h;
-        backend_window_size(&w, &h);
-        ext.width = (u32)w;
-        ext.height = (u32)h;
+        ext.width = ww > 0 ? (u32)ww : 0;
+        ext.height = wh > 0 ? (u32)wh : 0;
     }
     if (ext.width < caps.minImageExtent.width) ext.width = caps.minImageExtent.width;
     if (ext.height < caps.minImageExtent.height) ext.height = caps.minImageExtent.height;
@@ -325,14 +337,27 @@ int vk_swapchain_create(void) {
     vkGetPhysicalDeviceSurfaceFormatsKHR(g_vk.phys, g_vk.surface, &nf, NULL);
     VkSurfaceFormatKHR* fs = calloc(nf ? nf : 1, sizeof *fs);
     vkGetPhysicalDeviceSurfaceFormatsKHR(g_vk.phys, g_vk.surface, &nf, fs);
+    /* 8-bit, in the encoding of the frames presented: a blit from an sRGB target to a UNORM image decodes the bytes,
+       where the console's display shows them as they are */
     VkSurfaceFormatKHR fmt = fs[0];
-    for (u32 i = 0; i < nf; i++) /* the game renders in linear 8-bit */
-        if ((fs[i].format == VK_FORMAT_B8G8R8A8_UNORM || fs[i].format == VK_FORMAT_R8G8B8A8_UNORM) &&
-            fs[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-            fmt = fs[i];
-            break;
+    int found = 0;
+    for (int pass = srgb ? 0 : 1; pass < 2 && !found; pass++)
+        for (u32 i = 0; i < nf && !found; i++) {
+            VkFormat a = pass ? VK_FORMAT_B8G8R8A8_UNORM : VK_FORMAT_B8G8R8A8_SRGB,
+                     b = pass ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R8G8B8A8_SRGB;
+            if ((fs[i].format == a || fs[i].format == b) && fs[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                fmt = fs[i];
+                found = 1;
+            }
         }
     free(fs);
+    if (srgb && fmt.format != VK_FORMAT_B8G8R8A8_SRGB && fmt.format != VK_FORMAT_R8G8B8A8_SRGB) {
+        static int said;
+        if (!said) {
+            said = 1;
+            LOG("vulkan: the window has no sRGB format: frames in sRGB show darker\n");
+        }
+    }
 
     /* no vsync: the runtime paces frames itself (fps_limit) */
     u32 nm = 0;
@@ -349,7 +374,10 @@ int vk_swapchain_create(void) {
 
     u32 count = caps.minImageCount + 1;
     if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
-    if (count > 8) count = 8;
+    if (count > VK_SC_MAX) count = VK_SC_MAX > caps.minImageCount ? VK_SC_MAX : caps.minImageCount;
+    VkCompositeAlphaFlagBitsKHR alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    if (!(caps.supportedCompositeAlpha & alpha)) /* the lowest one it has */
+        alpha = (VkCompositeAlphaFlagBitsKHR)(caps.supportedCompositeAlpha & -caps.supportedCompositeAlpha);
     VkSwapchainKHR old = g_vk.swapchain;
     if (old) vkDeviceWaitIdle(g_vk.dev);
     VkSwapchainCreateInfoKHR ci = {.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -362,25 +390,40 @@ int vk_swapchain_create(void) {
                                    .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                    .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
                                    .preTransform = caps.currentTransform,
-                                   .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+                                   .compositeAlpha = alpha,
                                    .presentMode = mode,
                                    .clipped = VK_TRUE,
                                    .oldSwapchain = old};
     VkSwapchainKHR sc;
     if (!VK_OK(vkCreateSwapchainKHR(g_vk.dev, &ci, NULL, &sc))) return 0;
+    u32 nimg = 0;
+    vkGetSwapchainImagesKHR(g_vk.dev, sc, &nimg, NULL);
+    if (nimg > VK_SC_MAX) {
+        WARN("vulkan: the swapchain has %u images, more than the %d taken\n", nimg, VK_SC_MAX);
+        vkDestroySwapchainKHR(g_vk.dev, sc, NULL);
+        return 0;
+    }
+    /* the old images' semaphores: a present may still wait on one after the device is idle (the presentation engine
+       isn't covered by vkDeviceWaitIdle), so they go a swapchain later, when those presents are long done */
+    static VkSemaphore retired[VK_SC_MAX];
+    static u32 nretired;
+    for (u32 i = 0; i < nretired; i++) vkDestroySemaphore(g_vk.dev, retired[i], NULL);
+    nretired = 0;
     if (old) {
-        for (u32 i = 0; i < g_vk.sc_count; i++) vkDestroySemaphore(g_vk.dev, g_vk.sc_done[i], NULL);
+        for (u32 i = 0; i < g_vk.sc_count; i++) retired[nretired++] = g_vk.sc_done[i];
         vkDestroySwapchainKHR(g_vk.dev, old, NULL);
     }
     g_vk.swapchain = sc;
-    g_vk.sc_format = fmt.format;
     g_vk.sc_extent = ext;
-    g_vk.sc_mode = mode;
-    g_vk.sc_count = 8;
+    g_vk.sc_win_w = ww;
+    g_vk.sc_win_h = wh;
+    g_vk.sc_srgb = fmt.format == VK_FORMAT_B8G8R8A8_SRGB || fmt.format == VK_FORMAT_R8G8B8A8_SRGB;
+    g_vk.sc_count = nimg;
     vkGetSwapchainImagesKHR(g_vk.dev, sc, &g_vk.sc_count, g_vk.sc_images);
     VkSemaphoreCreateInfo si = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (u32 i = 0; i < g_vk.sc_count; i++) vkCreateSemaphore(g_vk.dev, &si, NULL, &g_vk.sc_done[i]);
-    LOG("vulkan: swapchain %ux%u, %u images, %s\n", ext.width, ext.height, g_vk.sc_count,
+    LOG("vulkan: swapchain %ux%u, %u images%s, %s\n", ext.width, ext.height, g_vk.sc_count,
+        g_vk.sc_srgb ? ", sRGB" : "",
         mode == VK_PRESENT_MODE_MAILBOX_KHR     ? "mailbox"
         : mode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate"
                                                 : "fifo");
@@ -401,5 +444,5 @@ int vk_init(void) {
         return 0;
     }
     if (!create_device()) return 0;
-    return vk_swapchain_create();
+    return vk_swapchain_create(0);
 }

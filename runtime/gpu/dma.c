@@ -5,7 +5,6 @@
 /* the copy engine: DMA between linear and block-linear surfaces in guest memory */
 #include "gpu/engines_int.h"
 /* ============================================================ DMA */
-volatile u64 g_dma_copies;
 /* host pointer to a whole bl surface (slice dz, block depth bd) if it's contiguous, so DMA can memcpy
    instead of translating + tracking every 16 bytes */
 static u8* bl_span_ptr(u64 base, u32 wbytes, u32 h, u32 bh, u32 z, u32 bd, u64* span) {
@@ -26,6 +25,18 @@ static void bl_span_done(u64 base, u64 span) {
             for (u64 o = 0; o < span; o += 0x10000) g_ww_touch((u64)(p - g_mem) + o);
     }
     gpu_mem_written(base, span);
+}
+/* a line's buffer; NULL (said once) when there is no memory, and the copy is left out */
+static u8* dma_buf(u32 len) {
+    u8* b = malloc(len ? len : 1);
+    if (!b) {
+        static int said;
+        if (!said) {
+            said = 1;
+            WARN("dma: no memory for a line of %u bytes, copy left out\n", len);
+        }
+    }
+    return b;
 }
 void dma_method(GpuChannel* ch, u32 m, u32 v) {
     m &= 0x1FF;
@@ -77,10 +88,21 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
             src += lsz * sl;
         }
     }
-    {
-        static u64 ndma;
-        ndma++;
-        g_dma_copies = ndma;
+    if (!multi && (!src_linear || !dst_linear)) { /* Ryujinx copies line_len bytes flat without MULTI_LINE_ENABLE */
+        static int said;
+        if (said < 4) {
+            said++;
+            LOG("dma: single-line copy with a block linear %s (launch %x), copied through the layout\n",
+                src_linear ? "destination" : "source", v);
+        }
+    }
+    if (remap && (r[0x1C2] & 0x7777) == 0x4444) { /* every destination component is CONST_A: a fill, not a copy */
+        static int said;
+        if (said < 4) {
+            said++;
+            LOG("dma: remap writes constant A (%x) to every component (remap %x), copied from the source instead\n",
+                r[0x1C0], r[0x1C2]);
+        }
     }
     {
         static int said;
@@ -102,25 +124,24 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
     (void)spp;
     (void)sspan;
     if (src_linear && dst_linear) {
-        if (!multi) {
-            u8* tmp = malloc(line_len);
+        u8* tmp = dma_buf(line_len);
+        if (tmp && !multi) {
             gmem_read(src, tmp, line_len);
             gmem_write(dst, tmp, line_len);
-            free(tmp);
-        } else {
-            u8* tmp = malloc(line_len);
+        } else if (tmp) {
             for (u32 y = 0; y < lines; y++) {
                 gmem_read(src + (u64)y * pitch_in, tmp, line_len);
                 gmem_write(dst + (u64)y * pitch_out, tmp, line_len);
             }
-            free(tmp);
         }
+        free(tmp);
     } else if (src_linear && !dst_linear &&
                (dpp = bl_span_ptr(dst, dw * (remap ? bpp : 1), dh, dbh, dz, dbd, &dspan))) {
-        /* contiguous dst: copy directly, one write record at the end */
+        /* contiguous dst: copy directly, one write record at the end. Compute results over it land first */
         u32 wb = dw * (remap ? bpp : 1);
-        u8* buf = malloc(line_len);
-        for (u32 y = 0; y < lines; y++) {
+        u8* buf = dma_buf(line_len);
+        if (g_gpu_before_write) g_gpu_before_write(dst, dspan);
+        for (u32 y = 0; buf && y < lines; y++) {
             gmem_read(src + (u64)y * pitch_in, buf, line_len);
             for (u32 x = 0; x < line_len;) {
                 u32 xb = dx * (remap ? bpp : 1) + x, n = 16 - (xb & 15);
@@ -137,8 +158,8 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
         bl_span_done(dst, dspan);
     } else if (src_linear && !dst_linear) {
         u32 wb = dw * (remap ? bpp : 1);
-        u8* buf = malloc(line_len);
-        for (u32 y = 0; y < lines; y++) {
+        u8* buf = dma_buf(line_len);
+        for (u32 y = 0; buf && y < lines; y++) {
             gmem_read(src + (u64)y * pitch_in, buf, line_len);
             /* bl keeps 16 byte groups contiguous, so copy per group not per byte (was ~11% in profiles) */
             for (u32 x = 0; x < line_len;) {
@@ -152,8 +173,8 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
         free(buf);
     } else if (!src_linear && dst_linear) {
         u32 wb = sw * (remap ? bpp : 1);
-        u8* buf = malloc(line_len);
-        for (u32 y = 0; y < lines; y++) {
+        u8* buf = dma_buf(line_len);
+        for (u32 y = 0; buf && y < lines; y++) {
             for (u32 x = 0; x < line_len;) {
                 u32 xb = sx * (remap ? bpp : 1) + x, n = 16 - (xb & 15);
                 if (n > line_len - x) n = line_len - x;
@@ -168,6 +189,7 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
                (dpp = bl_span_ptr(dst, dw * (remap ? bpp : 1), dh, dbh, dz, dbd, &dspan)) &&
                (spp = bl_span_ptr(src, sw * (remap ? bpp : 1), sh, sbh, sz_, sbd, &sspan))) {
         u32 swb = sw * (remap ? bpp : 1), dwb = dw * (remap ? bpp : 1);
+        if (g_gpu_before_write) g_gpu_before_write(dst, dspan); /* compute results over dst land first */
         for (u32 y = 0; y < lines; y++)
             for (u32 x = 0; x < line_len;) {
                 u32 xs = sx * (remap ? bpp : 1) + x, xd = dx * (remap ? bpp : 1) + x, n = 16 - (xs & 15),
@@ -201,16 +223,17 @@ void dma_method(GpuChannel* ch, u32 m, u32 v) {
             }
     }
     if (g_renderer_up) g_renderer->rt_reload(dst);
-    /* completion semaphore */
+    /* completion semaphore: one word (1), or four (2): the payload, 0, and the timestamp */
     u32 sem = (v >> 3) & 3;
     if (sem) {
         u64 sa = ((u64)r[0x90] << 32) | r[0x91];
-        if (sem == 1 || sem == 2) gmem_w32(sa, r[0x92]);
+        gpu_signal_point(); /* the game can see this: what the renderer holds lands first */
+        if (sem == 1) gmem_w32(sa, r[0x92]);
         if (sem == 2) {
+            u32 q[4] = {r[0x92], 0, 0, 0};
             u64 t = gpu_ticks();
-            gmem_w64(sa + 8, t);
+            memcpy(&q[2], &t, 8);
+            gmem_write(sa, q, 16);
         }
     }
 }
-
-void gpu_flush(GpuChannel* ch) { r3d_flush(ch); }

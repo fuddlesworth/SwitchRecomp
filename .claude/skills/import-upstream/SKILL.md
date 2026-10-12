@@ -19,7 +19,7 @@ description: "Bring a new MZ Labs SwitchRecomp release into this fork: import th
 4. **New third-party binaries.** If the zip added prebuilt libraries, they stay out: add a CPM package to
    `cmake/dependencies.cmake` instead (`swr-build` skill). If it added a new top-level Windows toolchain folder, add it to the excludes in
    `scripts/import-upstream.sh` and `.gitignore`.
-5. **Rebuild and verify.** Build (`cmake --preset default`), and run the game
+5. **Rebuild and verify.** Build (`cmake --preset default && cmake --build --preset default`), and run the game
    (`swr-run`, a few runs). If the port changed the recompiler, anything in `runtime/abi/` or `SWR_ABI`, recompile the
    game first.
 6. **Open the PR** once verified, and update ROADMAP.md if the release changed what is done or planned.

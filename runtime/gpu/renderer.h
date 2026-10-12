@@ -11,8 +11,9 @@
 typedef struct Renderer {
     const char* name;
     int (*start)(void); /* 0 when it can't run here */
-    /* a GPFIFO submission from a channel's thread: 1 when the renderer took it to run on its own thread, 0 when the
-       caller runs it now (gpu_submit) */
+    /* called first for every GPFIFO submission, on the submitting thread. 1 would mean the renderer took it to run on a
+       thread of its own; both renderers return 0, and gpu_submit runs it then and there (Vulkan only notes that guest
+       memory may have changed) */
     int (*async_submit)(u64* e, u32 n, u32 syncpt, u32 incs);
     /* the 3D engine (maxwell3d.c) */
     void (*clear)(GpuChannel* ch, u32 v);

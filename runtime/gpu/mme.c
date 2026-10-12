@@ -17,7 +17,13 @@ typedef struct {
     u32 dpc;
 } Mme;
 static void mme_send(Mme* m, u32 v) {
-    maxwell3d_method(m->ch, m->method, v, 1);
+    /* a send to the macro methods (0xE00+) only sets the register, as in Ryujinx, where macros start from the
+       pushbuffer alone: going through maxwell3d_method would start a macro inside this one, over the parameters
+       (ch->mme_params) this one is still reading */
+    if (m->method >= 0xE00)
+        m->ch->r3d[m->method] = v;
+    else
+        maxwell3d_method(m->ch, m->method, v, 1);
     m->method += m->incr;
     m->method &= 0xFFF;
 }
@@ -122,8 +128,7 @@ static int mme_step(Mme* m, int delay) {
     } else
         m->pc += 4;
     u32 op = w & 7, rop = (w >> 4) & 7, dst = (w >> 8) & 7, sa = (w >> 11) & 7, sb = (w >> 14) & 7;
-    i32 imm = ((i32)(w << 0)) >> 14; /* imm: 18 bits signed @14 */
-    imm = (i32)(w >> 14);
+    i32 imm = (i32)(w >> 14); /* imm: 18 bits signed @14 */
     if (imm & 0x20000) imm |= ~0x3FFFF;
     u32 bf_src = (w >> 17) & 31, bf_size = (w >> 22) & 31, bf_dst = (w >> 27) & 31;
     u32 mask = (1u << bf_size) - 1;
@@ -141,12 +146,12 @@ static int mme_step(Mme* m, int delay) {
         }
         case 3: {
             u32 d = m->regs[sa], s = m->regs[sb];
-            mme_result(m, rop, dst, ((s >> d) & mask) << bf_dst);
+            mme_result(m, rop, dst, ((s >> (d & 31)) & mask) << bf_dst); /* shift counts as Ryujinx's (mod 32) */
             break;
         }
         case 4: {
             u32 d = m->regs[sa], s = m->regs[sb];
-            mme_result(m, rop, dst, ((s >> bf_src) & mask) << d);
+            mme_result(m, rop, dst, ((s >> bf_src) & mask) << (d & 31));
             break;
         }
         case 5: {
@@ -168,8 +173,8 @@ static int mme_step(Mme* m, int delay) {
                 mme_step(m, 1);
                 return 1;
             }
-            return 1;
-        } /* bit 7 is not exit on branches (yuzu does the same) */
+            break; /* not taken: the exit bit counts, as for any instruction (as in Ryujinx's interpreter) */
+        }
         default: WARN("mme: op %u\n", op); break;
     }
     if (((w >> 7) & 1) && !delay) {

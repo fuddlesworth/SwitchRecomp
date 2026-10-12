@@ -51,7 +51,9 @@ option(SWR_H264 "Decode NVDEC video (H.264) with FFmpeg" ON)
 option(SWR_DEPLOY "Copy the runtime next to every recompiled game in SWR_GAMES_DIR after building" ON)
 set(SWR_GAMES_DIR "${CMAKE_SOURCE_DIR}/games" CACHE PATH "Folder holding the recompiled games")
 
-# Upstream builds with -O2. RelWithDebInfo keeps that and adds symbols for crash reports, without -DNDEBUG
+# Upstream builds with -O2. RelWithDebInfo keeps that and adds symbols for crash reports. It leaves out -DNDEBUG, as
+# upstream does: the runtime has no assert(), so this only keeps the asserts of the libraries built with it (glslang,
+# VMA) on, which stop at a misuse instead of carrying on with broken state
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
 endif()
@@ -67,8 +69,8 @@ if(SWR_VULKAN)
     add_subdirectory(tools)
 endif()
 
-# `cmake --install` puts the runtime, hactool and the desktop entry under CMAKE_INSTALL_PREFIX, which is what the
-# AppImage is made from (.github/workflows/build.yml)
+# `cmake --install` puts the runtime, hactool, the desktop entry and the licenses under CMAKE_INSTALL_PREFIX, which is
+# what the AppImage and the CI artifacts are made from (.github/workflows/build.yml)
 include(GNUInstallDirs)
 install(TARGETS swr-runtime RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(TARGET hactool)
@@ -76,5 +78,36 @@ if(TARGET hactool)
 endif()
 if(NOT WIN32)
     install(FILES dist/switchrecomp.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
-    install(FILES dist/switchrecomp.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+    install(FILES dist/wimsy.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+endif()
+
+# The licenses go with the binaries: the fork's (GPL-3.0), MZ Labs' (Apache 2.0, with its NOTICE), and those of the
+# libraries built into the runtime and hactool, each in a folder named after it
+set(licenses "${CMAKE_INSTALL_DATADIR}/licenses/switchrecomp")
+install(FILES LICENSE LICENSE.apache NOTICE DESTINATION ${licenses})
+if(SWR_H264)
+    install(FILES "${FFmpeg_SOURCE_DIR}/COPYING.LGPLv2.1" "${FFmpeg_SOURCE_DIR}/LICENSE.md"
+            DESTINATION ${licenses}/FFmpeg)
+endif()
+if(SWR_VULKAN)
+    install(FILES "${Vulkan-Headers_SOURCE_DIR}/LICENSE.md" DESTINATION ${licenses}/Vulkan-Headers)
+    install(DIRECTORY "${Vulkan-Headers_SOURCE_DIR}/LICENSES" DESTINATION ${licenses}/Vulkan-Headers)
+    install(FILES "${volk_SOURCE_DIR}/LICENSE.md" DESTINATION ${licenses}/volk)
+    install(FILES "${VulkanMemoryAllocator_SOURCE_DIR}/LICENSE.txt" DESTINATION ${licenses}/VulkanMemoryAllocator)
+    install(FILES "${glslang_SOURCE_DIR}/LICENSE.txt" DESTINATION ${licenses}/glslang)
+    install(DIRECTORY "${glslang_SOURCE_DIR}/LICENSES" DESTINATION ${licenses}/glslang)
+endif()
+if(WIN32 AND SWR_BACKEND STREQUAL "sdl3")
+    install(FILES "${SDL3_SOURCE_DIR}/LICENSE.txt" DESTINATION ${licenses}/SDL3)
+endif()
+if(TARGET hactool)
+    install(FILES "${hactool_SOURCE_DIR}/LICENSE" DESTINATION ${licenses}/hactool)
+    install(FILES "${hactool_SOURCE_DIR}/mbedtls/LICENSE" "${hactool_SOURCE_DIR}/mbedtls/apache-2.0.txt"
+            DESTINATION ${licenses}/hactool/mbedtls)
+    # cJSON's license is the comment at the top of its header
+    file(READ "${hactool_SOURCE_DIR}/cJSON.h" cjson)
+    string(FIND "${cjson}" "*/" cjson_end)
+    string(SUBSTRING "${cjson}" 0 ${cjson_end} cjson)
+    file(WRITE "${CMAKE_BINARY_DIR}/cJSON-LICENSE.txt" "${cjson}*/\n")
+    install(FILES "${CMAKE_BINARY_DIR}/cJSON-LICENSE.txt" DESTINATION ${licenses}/hactool/cJSON RENAME LICENSE.txt)
 endif()

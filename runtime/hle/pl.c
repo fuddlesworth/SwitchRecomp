@@ -13,13 +13,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* pl:u shared fonts. We don't ship Nintendo's: use GAME_data/fonts/<Name>.bfttf|.ttf if there,
-   else a system ttf (Arial, Segoe UI, DejaVu) wrapped in BFTTF. */
+/* pl:u shared fonts. We don't ship Nintendo's: use GAME_data/fonts/<Name>.bfttf|.ttf if there, else a system TTF
+   (Arial, Segoe UI or Tahoma on Windows, DejaVu Sans or FreeSans elsewhere). The shared memory holds each font as
+   plain TTF behind the 8 byte obfuscated header the SDK reads its size from (a .bfttf is decrypted into it). */
 static const char* g_font_names[6] = {
     "FontStandard", "FontChineseSimplified", "FontExtendedChineseSimplified", "FontChineseTraditional",
     "FontKorean",   "FontNintendoExtended"};
 static u32 g_font_off[6], g_font_size[6];
-static int g_fonts_ready;
+static KShmem* g_font_shm;
+static PMutex g_font_lock; /* the first request fills the shared memory, the others wait for it */
 static u8* read_file_all(const char* path, u64* size) {
     FILE* f = fopen(path, "rb");
     if (!f) return NULL;
@@ -30,9 +32,8 @@ static u8* read_file_all(const char* path, u64* size) {
         fclose(f);
         return NULL;
     }
-    u8* d = malloc((size_t)n + 4);
-    memset(d + n, 0, 4);
-    if (fread(d, 1, (size_t)n, f) != (size_t)n) {
+    u8* d = malloc((size_t)n);
+    if (!d || fread(d, 1, (size_t)n, f) != (size_t)n) {
         fclose(f);
         free(d);
         return NULL;
@@ -73,8 +74,6 @@ static u8* font_fallback(u64* size) {
     return NULL;
 }
 static void fonts_fill(u8* shm, u64 cap) {
-    if (g_fonts_ready) return;
-    g_fonts_ready = 1;
     const u32 RESULT = 0x7f9a0218u, MAGIC = 0x36f81a1eu;
     u32 key = bswap32_(RESULT ^ MAGIC);
     u64 off = 0;
@@ -101,13 +100,18 @@ static void fonts_fill(u8* shm, u64 cap) {
             }
             if (!fb) fb = font_fallback(&fbs);
             if (!fb) {
-                WARN("pl: no TTF font found; system text will not be shown\n");
+                WARN("pl: no TTF font found, so system text will not be shown\n");
                 return;
             }
             d = fb;
             sz = fbs;
         } else
             LOG("pl: %s <- %s\n", g_font_names[i], p);
+        if (is_bfttf && sz < 8) { /* not even the header */
+            WARN("pl: %s is not a BFTTF font\n", p);
+            free(d);
+            continue;
+        }
         u64 words = (sz + 3) / 4;
         if (off + 8 + words * 4 > cap) {
             WARN("pl: font %s does not fit\n", g_font_names[i]);
@@ -124,9 +128,10 @@ static void fonts_fill(u8* shm, u64 cap) {
             u32 k2 = w0 ^ RESULT;
             u32 tsz = bswap32_(w1 ^ k2);
             if (tsz > sz - 8) tsz = (u32)(sz - 8);
+            /* word by word; a last partial word reads only the bytes the file has */
             for (u64 k = 0; k + 8 < sz; k += 4) {
-                u32 w;
-                memcpy(&w, d + 8 + k, 4);
+                u32 w = 0;
+                memcpy(&w, d + 8 + k, sz - 8 - k < 4 ? sz - 8 - k : 4);
                 w = bswap32_(w ^ k2);
                 memcpy(shm + off + 8 + k, &w, 4);
             }
@@ -147,11 +152,16 @@ static void fonts_fill(u8* shm, u64 cap) {
     if (fb) free(fb);
 }
 static int pl_disp(SvcObj* o, IpcCtx* c) {
-    static KShmem* shm;
+    pm_lock(&g_font_lock);
+    KShmem* shm = g_font_shm;
     if (!shm) {
+        /* the service keeps it for the whole run: its reference keeps it alive when the game closes its handle */
         shm = kshmem_new(0x1100000, "font");
+        kobj_ref(&shm->o);
         fonts_fill(kshmem_ptr(shm), 0x1100000);
+        g_font_shm = shm;
     }
+    pm_unlock(&g_font_lock);
     u32 id = in32(c, 0);
     if (id > 5) id = 0;
     switch (c->cmd) {
@@ -162,7 +172,7 @@ static int pl_disp(SvcObj* o, IpcCtx* c) {
         case 4: out_copy_h(c, h_new(&shm->o)); return 0;
         case 5:
         case 6: { /* GetSharedFontInOrderOfPriority */
-            u64 a0, s0, a1, s1, a2, s2;
+            u64 a0 = 0, s0 = 0, a1 = 0, s1 = 0, a2 = 0, s2 = 0;
             buf_out(c, 0, &a0, &s0);
             buf_out(c, 1, &a1, &s1);
             buf_out(c, 2, &a2, &s2);
@@ -182,6 +192,7 @@ static int pl_disp(SvcObj* o, IpcCtx* c) {
 }
 static SvcObj* new_pl(void) { return svcobj_new("pl:u", pl_disp, 0); }
 void svc_pl_init(void) {
+    pm_init(&g_font_lock);
     svc_register("pl:u", new_pl);
     svc_register("pl:s", new_pl);
 }

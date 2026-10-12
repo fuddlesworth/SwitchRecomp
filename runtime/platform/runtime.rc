@@ -1,0 +1,5 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright 2026 the SwitchRecomp fork contributors */
+/* the executable's resources on Windows: its application manifest (1 = CREATEPROCESS_MANIFEST_RESOURCE_ID,
+   24 = RT_MANIFEST) */
+1 24 "runtime.manifest"

@@ -4,7 +4,8 @@
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Helpers that get compiled into the game code module: FP with exact arm semantics (saturation, NaN
    handling, min/max, recip estimates), the AdvSIMD ops we don't emit inline, crypto (AES/SHA/CRC/PMULL)
-   and sysregs. No libm on purpose, this has to build the same with gcc, clang and tcc. */
+   and sysregs. Builds with clang and tcc. The only libm function used is fma, for f64 fused multiply-add when the
+   target has no FMA instruction (FMLA64 in cpu.h). */
 #include "cpu.h"
 
 /* The helpers by topic, in the order they depend on each other (the module compiles this as one file) */
@@ -43,8 +44,22 @@ int swr_simd(CPU* c, u8* M, u32 w) {
                 if (hi) return 0;
                 v = x + y;
                 break;
-            case 0x0C: v = hi ? fminnm_(x, y, sz) : fmaxnm_(x, y, sz); break;
-            case 0x0F: v = hi ? fmin_(x, y, sz) : fmax_(x, y, sz); break;
+            case 0x0C:
+                if (!sz) { /* f32 straight from the lanes: via double, a signalling NaN would arrive quiet */
+                    r.f[0] = hi ? fp_minnm32(a.f[0], a.f[1]) : fp_maxnm32(a.f[0], a.f[1]);
+                    *VR(rd) = r;
+                    return 1;
+                }
+                v = hi ? fminnm_(x, y, sz) : fmaxnm_(x, y, sz);
+                break;
+            case 0x0F:
+                if (!sz) {
+                    r.f[0] = hi ? fp_min32(a.f[0], a.f[1]) : fp_max32(a.f[0], a.f[1]);
+                    *VR(rd) = r;
+                    return 1;
+                }
+                v = hi ? fmin_(x, y, sz) : fmax_(x, y, sz);
+                break;
             default: return 0;
         }
         wrf(&r, sz, 0, v);

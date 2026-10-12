@@ -2,33 +2,15 @@
    Licensed under the Apache License 2.0. See LICENSE.txt and NOTICE.txt;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
-/* software 3D fallback, only does clears for now */
+/* the 3D engine's side of the renderer: clears, draws, constant buffers and blits go to it, with clears done in guest
+   memory when no renderer runs (the headless build). Also the log of what the GPU wrote to memory */
 #include <stdlib.h>
 #include <string.h>
 #include "gpu/renderer.h"
 #include "hle/nvdrv.h"
 #include "kernel/mem.h"
+#include "platform/log.h"
 #include "gpu/gpu.h"
-static u32 bpp_of_rt(u32 f) {
-    switch (f) {
-        case 0xC0: return 16;
-        case 0xC6:
-        case 0xC8:
-        case 0xCA:
-        case 0xCB:
-        case 0xCC:
-        case 0xCE: return 8;
-        case 0xE8:
-        case 0xF3: return 1;
-        case 0xE9:
-        case 0xDA:
-        case 0xDB:
-        case 0xDC:
-        case 0xDD:
-        case 0xDE: return 2;
-        default: return 4;
-    }
-}
 void r3d_clear(GpuChannel* ch, u32 v) {
     if (g_renderer_up) {
         g_renderer->clear(ch, v);
@@ -43,7 +25,7 @@ void r3d_clear(GpuChannel* ch, u32 v) {
     if (!addr || !w || !h) return;
     float cc[4];
     memcpy(cc, &r[0x360], 16);
-    u32 bpp = bpp_of_rt(fmt);
+    u32 bpp = gpu_color_bpp(fmt);
     u8 px[16];
     if (bpp == 4) {
         u32 c = 0;
@@ -57,22 +39,29 @@ void r3d_clear(GpuChannel* ch, u32 v) {
         memset(px, 0, 16);
     int linear = (tm >> 12) & 1;
     u32 bh = (tm >> 4) & 15;
-    u8* base = gmem_ptr(addr, 1);
-    if (!base) return;
-    if (linear) {
-        for (u32 y = 0; y < h; y++)
-            for (u32 x = 0; x < w; x++) memcpy(base + (u64)y * w * bpp + x * bpp, px, bpp);
-    } else {
-        u8* row = malloc((size_t)w * bpp);
-        for (u32 x = 0; x < w; x++) memcpy(row + x * bpp, px, bpp);
-        for (u32 y = 0; y < h; y++)
-            for (u32 x = 0; x < w * bpp; x += 16) {
-                u64 o = bl_offset(x, y, 0, w * bpp, h, bh, 0);
-                u32 n = w * bpp - x < 16 ? w * bpp - x : 16;
-                if (gmmu_translate(addr + o)) memcpy(GP(gmmu_translate(addr + o)), row + x, n);
-            }
-        free(row);
+    /* a pitch-linear target holds its row pitch in bytes where the width is (as gpu/vk/render.c reads it) */
+    u32 pitch = linear ? w : w * bpp, wb = linear ? w / bpp * bpp : w * bpp;
+    if (!wb) return;
+    u8* row = malloc(wb);
+    if (!row) {
+        WARN("gpu: no memory to clear a %ux%u target\n", w, h);
+        return;
     }
+    for (u32 x = 0; x < wb; x += bpp) memcpy(row + x, px, bpp);
+    if (linear) {
+        for (u32 y = 0; y < h; y++) gmem_write(addr + (u64)y * pitch, row, wb);
+    } else { /* 16 bytes at a time, logged once as the whole range */
+        u64 hi = 0;
+        for (u32 y = 0; y < h; y++)
+            for (u32 x = 0; x < wb; x += 16) {
+                u64 o = bl_offset(x, y, 0, wb, h, bh, 0), cpu = gmmu_translate(addr + o);
+                u32 n = wb - x < 16 ? wb - x : 16;
+                if (cpu) memcpy(GP(cpu), row + x, n);
+                if (o + n > hi) hi = o + n;
+            }
+        gpu_mem_written(addr, hi);
+    }
+    free(row);
 }
 void r3d_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 base_vertex, u32 base_instance,
               u32 instances) {
@@ -90,12 +79,20 @@ void r3d_draw(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u
     (void)instances;
     g_draws++;
 }
-void r3d_const_upload(GpuChannel* ch, u32 v) {
+/* constant buffer data comes a word per method: the words of a method batch are collected and written at once, when
+   the batch ends or before any other method (maxwell3d_method, call_method) and at the end of a submission */
+void r3d_const_upload(GpuChannel* ch, u32 v, int last) {
     u32* r = ch->r3d;
-    u64 a = ((u64)r[0x8E1] << 32) | r[0x8E2];
-    u32 off = r[0x8E3];
-    gmem_w32(a + off, v);
-    r[0x8E3] = off + 4;
+    if (ch->cb_n == sizeof ch->cb_words / sizeof ch->cb_words[0]) r3d_const_flush(ch);
+    if (!ch->cb_n) ch->cb_addr = (((u64)r[0x8E1] << 32) | r[0x8E2]) + r[0x8E3];
+    ch->cb_words[ch->cb_n++] = v;
+    r[0x8E3] += 4;
+    if (last) r3d_const_flush(ch);
+}
+void r3d_const_flush(GpuChannel* ch) {
+    if (!ch->cb_n) return;
+    gmem_write(ch->cb_addr, ch->cb_words, (u64)ch->cb_n * 4);
+    ch->cb_n = 0;
 }
 void r3d_cb_bind(GpuChannel* ch, int stage, u32 v) {
     if (g_renderer_up) g_renderer->cb_bind(ch, stage, v);
@@ -105,7 +102,6 @@ int r3d_blit(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, d
     if (g_renderer_up) return g_renderer->blit(s, d, dx, dy, dw, dh, sx, sy, sdx, sdy);
     return 0;
 }
-void r3d_flush(GpuChannel* ch) { (void)ch; }
 
 /* write log for GPU-side writes (cb_data, I2M, DMA, 2D, reports) so we can tell a range changed
    without rehashing it. Back-to-back writes (cb_data goes word by word) get merged. */
@@ -156,4 +152,3 @@ int gpu_mem_dirty_since(u64 since, u64 a, u64 sz) {
     }
     return 1;
 } /* older than the log, assume dirty */
-void gpu3d_init(void) {}

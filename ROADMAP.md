@@ -3,7 +3,8 @@
 This fork takes SwitchRecomp v142 (MZ Labs) and makes it a Linux-first project, with Catherine: Full Body
 (USA release, TID 0100BF00112C0000 with its v2.0 update) as the game everything is checked against. Until 2026-10-11
 that was the Asian release (TID 0100BC4010896000): game addresses quoted below before that date, like the
-title-screen crash's, are in its code. The phases are in the order they should land. A phase can start before the previous one is finished where it says so.
+title-screen crash's, are in its code. The phases are in the order they should land. A phase can start before the
+previous one is finished where it says so.
 
 Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 
@@ -12,10 +13,10 @@ someone with a pad. Phase 8 (code layout) is done. Next: Phase 2's remaining ite
 
 ## Where things stand (2026-10-11)
 
-Catherine (the USA release since 2026-10-11, with its v2.0 update) boots through the logos, the intro movie, the terms screen, the main menu and the New Game cutscene at
-60 FPS. It took eight fixes to the v142 runtime to get there (see the history of `main`). There is no sound. The
-runtime draws with Vulkan: the OpenGL renderer, where the title-screen crash from Phase 2 still happened in about
-half the runs, was removed on 2026-10-11.
+Catherine (the USA release since 2026-10-11, with its v2.0 update) boots through the logos, the intro movie, the
+terms screen, the main menu and the New Game cutscene at 60 FPS. It took eight fixes to the v142 runtime to get
+there (see the history of `main`). There is no sound. The runtime draws with Vulkan: the OpenGL renderer, where the
+title-screen crash from Phase 2 still happened in about half the runs, was removed on 2026-10-11.
 
 How the pieces fit:
 
@@ -25,7 +26,7 @@ How the pieces fit:
 - **GPU**: emulated at the hardware level. The game's own NVN driver is recompiled with the game and writes Maxwell
   command buffers. `runtime/gpu/` decodes them (`gpu.c`, the engines, `maxwell3d.c`), `gpu/shader/` translates
   Maxwell shader binaries to GLSL, and the Vulkan renderer (`gpu/vk/`) draws.
-  The front end reaches the active one through `g_renderer`, a table of about 20 operations (`gpu/renderer.h`).
+  The front end reaches it through `g_renderer`, the table of operations in `gpu/renderer.h`.
 - **Video**: `runtime/video/` emulates NVDEC and VIC, with FFmpeg's libavcodec doing the H.264 decode.
 
 ## Phase 0: repository and build
@@ -38,21 +39,21 @@ How the pieces fit:
       replaced the submodules and `scripts/bootstrap.py`, so `cmake -B build` works on a fresh clone.
 - [x] CMake build with Clang only (23 in development), C23 and C++23. GCC was dropped: one compiler for the runtime,
       the game code and the libraries. Presets `default` and `windows-cross`.
-- [x] FreeBSD builds (`plat.c`'s mmap flags and crash handler), and CI builds it in a FreeBSD 15.1 VM.
+- [x] FreeBSD builds (`plat_posix.c`'s mmap flags and crash handler), and CI builds it in a FreeBSD 15.1 VM.
 - [x] A nightly AppImage of the runtime that runs on any Linux, made with pkgforge's quick-sharun in CI and released
       under the rolling `nightly` tag after every green push to `main`. The runtime takes its name and folder from
       `$APPIMAGE`, so a copy named after a game finds the game's code as the bare runtime does.
 - [x] Scripts for the whole pipeline: extract a dump, recompile, deploy the runtime into `games/`.
 - [x] Formatting: clang-format 23 and ruff through `scripts/format.sh`, applied to the whole history.
 - [x] Windows: `scripts/bootstrap.ps1` downloads a pinned, checksummed toolchain (llvm-mingw, CMake, Ninja, NASM,
-      Python, and w64devkit for FFmpeg's shell and make) so a Windows machine needs only Git. CMake builds the Windows runtime natively or cross-built with
-      llvm-mingw.
+      Python, and w64devkit for FFmpeg's shell and make) so a Windows machine needs only Git. CMake builds the
+      Windows runtime natively or cross-built with llvm-mingw.
 - [x] CI on every push and pull request: formatting, Linux, FreeBSD, Windows from a bare runner, and the Linux to
       Windows cross build, all with Clang.
 - [x] Debugging tools in `tools/`: symbol names, disassembly, unattended runs.
 - [ ] Still to move from bring-up: the thread-dump reader and the Maxwell instruction scanner.
-- [x] `README.md` for the Linux setup, crediting "SwitchRecomp by MZ Labs" as NOTICE requires. `LICENSE` and
-      `NOTICE` replace the release's `.txt` files.
+- [x] `README.md` for the Linux setup, crediting "SwitchRecomp by MZ Labs" as NOTICE requires. `NOTICE` and
+      `LICENSE.apache` are the release's `NOTICE.txt` and `LICENSE.txt`, and `LICENSE` is the fork's GPL.
 - [x] The fork is GPL-3.0-or-later since 2026-10-11, so code from yuzu and its forks can be ported. MZ Labs' files
       keep their Apache-2.0 headers and NOTICE, with `LICENSE.apache`.
 - [x] FFmpeg's libavcodec decodes the NVDEC H.264 jobs instead of OpenH264: FFmpeg 9.0.2, built from source with only
@@ -74,8 +75,10 @@ How the pieces fit:
 This came before sound: the title-screen crash ended most runs, so nothing past it could be tested reliably, and a
 renderer rewrite on top of a memory-corruption bug would have made every regression ambiguous.
 
-- [ ] Smoke test: a scripted run from boot to the New Game cutscene that checks for crashes, FPS and screenshots,
-      runnable unattended (Xvfb or a headless Wayland compositor).
+- [~] Smoke test: a scripted run from boot to the New Game cutscene that checks for crashes, FPS and screenshots,
+      runnable unattended (Xvfb or a headless Wayland compositor). `tools/run_game.py` runs the New Game script any
+      number of times and reports each run's exit, crash site and frame count, with the last frame as a picture.
+      Still missing: an FPS figure, a check of the pictures against known-good ones, and a run without a display.
 - [x] VIC jobs wrote past NvRmStream's 128-entry syncpoint table into the game's heap (host1x syncpoints now come
       from the GPU's allocator).
 - [x] Compute write-back wrote the whole SSBO range back late, reverting game writes made in the meantime. Only
@@ -84,7 +87,7 @@ renderer rewrite on top of a memory-corruption bug would have made every regress
       records over the game's deferred-release list nodes (`{obj, arg1, arg2, fn1, fn2, next}`, walked at
       `0x82df5c0`), and the game later calls a float as a function pointer. Established by measurement:
       - The nodes are already inside the SSBO range when the GPU thread runs the dispatch, 1 to 8 ms after its
-        submit. The shader really writes that whole range; stores land at their true addresses.
+        submit. The shader really writes that whole range, and its stores land at their true addresses.
       - Not the cause: game-thread races (crashes pinned to one core), GPU VA remapping (all maps are made once),
         pushbuffers changing after submit, out-of-bounds shader writes, stream syncpoint wait timeouts, GPU-thread
         lag. Throttling DequeueBuffer on the frame fence made it worse.
@@ -105,8 +108,8 @@ renderer rewrite on top of a memory-corruption bug would have made every regress
 
 Catherine uses two audio paths, and both are silent today.
 
-- [ ] **Audio output device.** SDL3 audio streams (SDL3 is already a dependency of Phase 4). The runtime only uses
-      SDL's audio subsystem until the SDL3 window backend exists.
+- [ ] **Audio output device.** SDL3 audio streams, through the SDL3 backend the runtime already has on Linux and
+      Windows. Nothing reaches an audio device today.
 - [ ] **`audout` (movie audio).** Buffers are already released on a 48 kHz clock. Send their PCM to the device and
       let the device's consumption drive the release instead of the wall clock, so movies stay in sync.
 - [ ] **`audren` (music and sound effects).** The runtime answers `RequestUpdate` in the right format but mixes
@@ -118,16 +121,17 @@ Catherine uses two audio paths, and both are silent today.
 
 ## Phase 4: Wayland and the platform layer
 
-- [x] An SDL3 backend (`backend_sdl3.c`), the Linux default. It runs natively on Wayland and on X11, with gamepads
-      (SDL's controller database, hotplug, buttons by position), fullscreen, and the Windows backend's keys and
-      hotkeys.
+- [x] An SDL3 backend (`platform/backend/sdl3.c`), the Linux default. It runs natively on Wayland and on X11, with
+      gamepads (SDL's controller database, hotplug, buttons by position), fullscreen, and the Windows backend's keys
+      and hotkeys.
 - [x] The GL context: SDL creates it (EGL under Wayland) on the GPU thread. The GL worker's shared context is current
       on a hidden helper window, since EGL won't make one surface current on two threads. (Gone with the OpenGL
       renderer on 2026-10-11.)
 - [x] The SDL3 backend on Windows too, for controllers other than XInput ones and for the Vulkan renderer. The
       CMake build links SDL3 statically from source. It runs Catherine on Vulkan under Wine.
 - [x] The x11, x11es and win32 backends were removed on 2026-10-11: SDL3 is the window backend on Linux and Windows,
-      with headless for tests. The android backend went with OpenGL the same day, since it drew with GLES. SDL3 still hasn't run on real Windows, only under Wine.
+      with headless for tests. The android backend went with OpenGL the same day, since it drew with GLES. SDL3
+      still hasn't run on real Windows, only under Wine.
 - [ ] Try a real controller: the mapping follows SDL's positional buttons, but no pad was at hand to test it.
 
 ## Phase 5: shaders
@@ -155,8 +159,9 @@ The game stalled the first time it met a shader (`waiting for shader=414` in a s
 Some GPU emulation can't be avoided: the shaders are compiled Maxwell code and have to be translated whatever sits
 underneath. What can change is how much of the hardware is emulated and how well it maps to the host.
 
-- [x] A Vulkan backend implementing the same interface as `gpu_gl.c`, in the same runtime as OpenGL. Vulkan 1.3 (timeline semaphores, synchronization2, dynamic rendering), loaded through
-      SDL's loader with volk so nothing links against a Vulkan library.
+- [x] A Vulkan backend implementing the same interface as `gpu_gl.c` did, in the same runtime as OpenGL at first.
+      Vulkan 1.3 (timeline semaphores, synchronization2, dynamic rendering), loaded through SDL's loader with volk so
+      nothing links against a Vulkan library.
   - [x] Step 1, presenting: instance, device with a graphics and a separate compute queue, swapchain through SDL3
         (Wayland and X11), and the CPU path's frames shown on it. Nothing is drawn yet.
   - [x] Step 2, shaders: the Maxwell translator has a Vulkan mode (`#version 450`, one descriptor set per stage with
@@ -164,7 +169,7 @@ underneath. What can change is how much of the hardware is emulated and how well
         an on-disk SPIR-V cache. `SWR_SHADER_CORPUS` records the shaders a run translates, and `swr-shaderc` checks a
         corpus offline: 116 of Catherine's 117 shaders compile and pass `spirv-val` (the other uses a global load the
         translator can't place, in GL too), and the GL output is byte-identical to before.
-  - [~] Step 3, drawing: render targets, textures, samplers, pipelines and draws, ported from `gpu_gl.c`, in slices.
+  - [x] Step 3, drawing: render targets, textures, samplers, pipelines and draws, ported from `gpu_gl.c`, in slices.
     - [x] Render targets and clears: targets by guest address (parked and reused when a size or format comes
           back), dynamic rendering passes kept open across clears and draws to the same set, write-back to guest
           memory and reload from it around CPU-side copies, frames in flight with a staging ring and deferred
@@ -173,14 +178,14 @@ underneath. What can change is how much of the hardware is emulated and how well
           with the rest dynamic, a descriptor set per stage from per-frame pools, textures from texture headers
           (deswizzled on the CPU, BCn native, ASTC decoded, change checks backing off like GL's), samplers, and
           vertex, index, constant and storage buffers (stable data in buffers of its own, changing data read from
-          the staging ring). Catherine's logos, menus and the opening movie match GL; the Atlus logo is
+          the staging ring). Catherine's logos, menus and the opening movie match GL, and the Atlus logo is
           pixel-identical. The viewport maps the guest's transform directly (y down), so shaders don't flip y.
     - [x] 3D scenes: the New Game cutscene matches GL, with its skinned models (step 4). Draws that read the depth
           target they test against (soft particles) bind it read-only. Clears with a partial color mask are a
           full-screen draw with that mask, the 2D engine's blits between render targets run on the GPU, and the
           driver's pipeline cache is kept in `shader_cache/vk_pipelines.bin`. A draw that samples a color target
           it renders to reads it as empty (none in Catherine so far).
-  - [x] Step 4, compute on its own queue (`vk_compute.c`). Dispatches are batched on the compute queue, and their
+  - [x] Step 4, compute on its own queue (`gpu/vk/compute.c`). Dispatches are batched on the compute queue, and their
         results land in guest memory, with the rule from Phase 2, before anything the game can observe: a read
         or GPU write of that memory, a semaphore release or report, a syncpoint. That is the ordering that
         stopped the title-screen crash, and it costs little on the compute queue. Draws read results that haven't
@@ -189,21 +194,22 @@ underneath. What can change is how much of the hardware is emulated and how well
         and is reused rather than filling up: about 200 000 dispatches in 4 800 batches over 150 s, with 1.3 s
         spent waiting. 0 crashes in 13 runs past the title screen (GL: 2 of 5 the same day), slightly faster than
         GL (8 700 frames in 150 s against 8 600).
-  - [x] Step 5, the default. The sdl3 backend builds both renderers into one runtime (`renderer.c` calls the active
-        one; `gl_names.h` renames `gpu_gl.c`'s side without editing it), and `renderer=auto` in the .ini picks Vulkan,
-        falling back to OpenGL when Vulkan can't start or when LSFG frame generation is set up. Vulkan has the
-        resolution scale (render targets at the scaled size, written back and reloaded through unscaled images) and
-        `shadows=0`. Catherine matches OpenGL from boot to the New Game cutscene: the logo frame is pixel-identical,
-        later screens match by eye. Only OpenGL has LSFG, dynamic resolution, the F7 recorder and F8 screenshots.
-        On Windows the SDL3 backend is the same as on Linux, and runs Catherine on Vulkan under Wine.
+  - [x] Step 5, the default. The sdl3 backend built both renderers into one runtime (`renderer.c` called the
+        active one, and `gl_names.h` renamed `gpu_gl.c`'s side without editing it), and `renderer=auto` in the .ini
+        picked Vulkan, falling back to OpenGL when Vulkan couldn't start or when LSFG frame generation was set up.
+        Vulkan got the resolution scale (render targets at the scaled size, written back and reloaded through
+        unscaled images) and `shadows=0`. Catherine matched OpenGL from boot to the New Game cutscene: the logo frame
+        was pixel-identical, and later screens matched by eye. Only OpenGL had LSFG, dynamic resolution, the F7
+        recorder and F8 screenshots. On Windows the SDL3 backend is the same as on Linux, and runs Catherine on
+        Vulkan under Wine. OpenGL was removed on 2026-10-11 (below).
 - [x] Texture and buffer cache tracking. On Linux the guest's memory is registered with a userfaultfd in
       asynchronous write-protect mode, and `PAGEMAP_SCAN` lists the pages written since a range was last scanned
-      (`plat_ww_scan`; Windows has `GetWriteWatch` with `SWR_WW`). The Vulkan caches scan a texture or buffer when they
-      use it and re-read it only when it was written, instead of checking contents on a back-off that could miss a
-      change for several frames: a movie's frames now reach their texture every frame. Results land in guest memory
-      with the rule from Phase 2, and render targets are written back before any CPU-side copy reads them.
+      (`plat_ww_scan`, and `GetWriteWatch` with `SWR_WW` on Windows). The Vulkan caches scan a texture or buffer
+      when they use it and re-read it only when it was written, instead of checking contents on a back-off that could
+      miss a change for several frames: a movie's frames now reach their texture every frame. Results land in guest
+      memory with the rule from Phase 2, and render targets are written back before any CPU-side copy reads them.
 - [x] Research: NVN-level emulation, for Catherine. Findings (from the disassembly, nothing run):
-      - The NVN driver is linked statically into the `sdk` module; `nvnBootstrapLoader` (0xcf8fd90) is exported
+      - The NVN driver is linked statically into the `sdk` module. `nvnBootstrapLoader` (0xcf8fd90) is exported
         there and imported by `main` through a PLT stub (GOT slot 0x8ae3d20), so the runtime could interpose it at
         load time.
       - `main`'s loader (0x8320b70) asks `nvnDeviceGetProcAddress` for 468 entry points into a table of function
@@ -217,8 +223,9 @@ underneath. What can change is how much of the hardware is emulated and how well
         texture and sampler pools as packed Maxwell descriptors (shaders index them by handle), memory pools as
         CPU-visible memory with aliasing, and the same shader translation (the programs are still Maxwell code, and
         shaders read raw GPU addresses from constant buffers). It would replace command-buffer decoding, the
-        register shadowing in `gpu_3d.c` and the cache guessing, since NVN states what changes. A partial version
-        that keeps the real driver for most calls is hard, because both would have to agree on object state.
+        register shadowing in `gpu/engines.c` and `gpu/maxwell3d.c` and the cache guessing, since NVN states what
+        changes. A partial version that keeps the real driver for most calls is hard, because both would have to
+        agree on object state.
         With the register-level Vulkan renderer now matching OpenGL, this stays a possible later rewrite rather
         than a next step: the cost is large and it fixes nothing that is broken today.
 - [x] The OpenGL renderer removed (2026-10-11). Vulkan had drawn by default since step 4, matched OpenGL from boot to
@@ -232,8 +239,8 @@ underneath. What can change is how much of the hardware is emulated and how well
 
 - [ ] Performance: the CPU side is the limit in 3D scenes (GPU thread about 45% busy at 40 FPS). Try LTO and
       `-march=native` for the game module, then profile the hot runtime paths.
-- [ ] The Western release with its update (TID 0100BF00112C0000). BKTR updates are supported by the extraction
-      script. It needs a matching base game.
+- [x] The Western release with its update (TID 0100BF00112C0000), extracted with its BKTR update. It replaced the
+      Asian release as the game everything is checked against on 2026-10-11.
 - [ ] Other games, to keep the fixes general rather than tuned to Catherine.
 
 ## Phase 8: code layout
@@ -241,14 +248,15 @@ underneath. What can change is how much of the hardware is emulated and how well
 The release is a flat `runtime/` of 70 files, wired together with `extern` declarations inside functions (167 of
 them), a catch-all `rt.h`, files of up to 7900 lines, and the recompiler's modules loose at the top. This fork is a
 hard fork from here (decided 2026-10-11): upstream releases are ported by hand rather than merged (see the
-`import-upstream` skill), so files can be moved, split and renamed freely. Each step is its own PR, built in every
-variant and run on Catherine with both renderers.
+`import-upstream` skill), so files can be moved, split and renamed freely. Each step was its own PR, built in
+every variant and run on Catherine with both renderers while OpenGL was still there.
 
 - [x] The recompiler as a package (`switchrecomp/`, run as `python3 -m switchrecomp`), split by job. The runtime is
       built only by CMake, so its source list lives in one place, and `SWR_ABI` in `cpu.h` is the one ABI version
       both sides check.
-- [x] `runtime/` as a tree of components (`abi`, `core`, `kernel`, `hle`, `gpu` with `gl` and `vk`, `video`,
-      `platform`), each a CMake object library, with includes by path.
+- [x] `runtime/` as a tree of components (`abi`, `core`, `kernel`, `hle`, `gpu` with `vk` and, until OpenGL went,
+      `gl`, `video`, `platform`), with includes by path. Each is a CMake object library, apart from `abi`, which is
+      compiled into the game module, and `gpu`, which is several (`gpu`, `shader`, `spirv`, `vk`, `null`).
 - [x] Headers per component: `rt.h` split into a header per module (`platform/plat.h`, `platform/log.h`,
       `kernel/mem.h`, `kernel/kernel.h`, `kernel/ipc.h`, `core/loader.h`, `core/main.h`, `core/options.h`, one per
       service and device in `hle/`, `video/host1x.h`, `platform/backend.h`...). Every function and global used across
@@ -257,14 +265,15 @@ variant and run on Catherine with both renderers.
       `missing-variable-declarations` keep it that way. It turned up three copies of the 2D
       blit surface struct passed as `void*`, renderer functions whose definitions didn't match the interface's types,
       a backend static shadowing an LSFG global, and declarations of functions that no longer exist.
-- [x] The renderer interface as a table of operations (`Renderer` in `gpu/renderer.h`) that the OpenGL, Vulkan and
-      null renderers each fill in completely, and `g_renderer` pointing at the active one. It replaces the
+- [x] The renderer interface as a table of operations (`Renderer` in `gpu/renderer.h`) that each renderer fills in
+      completely (OpenGL, Vulkan and null at the time, Vulkan and null now), and `g_renderer` pointing at the active
+      one. It replaces the
       `gpu_gl_*` names, `gpu/renderer.c`'s forwarding macros and `gpu/gl/names.h`, and each renderer's functions are
       now static to its own files.
 - [x] The big files split along their seams: `gpu/gl/renderer.c`, `shader.c`, `hle/services.c` (one file per service
       family), `main.c`, `kernel.c`, `cpu_helpers.c`, `plat.c`, `host1x.c`, `gpu/engines.c`. Done: the OpenGL
-      renderer (7900 lines) is ten files by job, sharing `gpu/gl/gl.h`, and the shader translator
-      is four (`shader.c`, `decode.c`, `translate.c`, `corpus.c`), sharing `gpu/shader/translator.h`.
+      renderer (7900 lines) became ten files by job, sharing `gpu/gl/gl.h`, before it was removed, and the shader
+      translator is four (`shader.c`, `decode.c`, `translate.c`, `corpus.c`), sharing `gpu/shader/translator.h`.
       The services are one file per family in `hle/`, sharing `hle/services_int.h`. `core/main.c` is split
       by job: options, the guest clock, RtAPI, the crash report and the CPU-side present stay in `core/`, and
       the audio renderer update and the shared fonts moved to `hle/audren.c` and `hle/pl.c`. The kernel

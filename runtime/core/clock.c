@@ -10,3 +10,8 @@ static u64 g_t0;
 void clock_start(void) { g_t0 = plat_ns(); }
 u64 g_t0_ns(void) { return g_t0; }
 u64 guest_ns(void) { return plat_ns() - g_t0; }
+/* the system tick runs at 19.2 MHz */
+u64 guest_ticks(void) {
+    u64 ns = guest_ns();
+    return ns / 10000 * 192 + ns % 10000 * 192 / 10000;
+}

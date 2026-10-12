@@ -7,22 +7,8 @@
 /* ============================================================ threads */
 KThread* g_threads[256];
 int g_nthreads;
-#if defined(__ANDROID__)
-static pthread_key_t g_tkey;
-static pthread_once_t g_tonce = PTHREAD_ONCE_INIT;
-static void tkey_init(void) { pthread_key_create(&g_tkey, NULL); }
-KThread* kthread_cur(void) {
-    pthread_once(&g_tonce, tkey_init);
-    return (KThread*)pthread_getspecific(g_tkey);
-}
-static void kthread_set(void* t) {
-    pthread_once(&g_tonce, tkey_init);
-    pthread_setspecific(g_tkey, t);
-}
-#else
 KThread* kthread_cur(void) { return (KThread*)tls_thread; }
 static void kthread_set(void* t) { tls_thread = t; }
-#endif
 static int th_sig(KObj* o) { return ((KThread*)o)->state == 2; }
 static void th_destroy(KObj* o) { (void)o; /* thread objects are never freed */ }
 static u64 alloc_tls(void) {
@@ -47,7 +33,19 @@ KThread* kthread_create(u64 entry, u64 arg, u64 stack_top, int prio, int core) {
     pc_init(&t->cv);
     pm_lock(&g_klock);
     t->id = g_next_tid++;
-    if (g_nthreads < 256) g_threads[g_nthreads++] = t;
+    /* the table is for the dumps and the thread counts: once full, an exited thread's slot is reused */
+    if (g_nthreads < 256)
+        g_threads[g_nthreads++] = t;
+    else {
+        int i = 0;
+        while (i < 256 && g_threads[i]->state != 2) i++;
+        if (i < 256)
+            g_threads[i] = t;
+        else {
+            static int said;
+            if (!said++) WARN("kernel: more than 256 live threads, the dumps leave the newest out\n");
+        }
+    }
     pm_unlock(&g_klock);
     CPU* c = &t->cpu;
     memset(c, 0, sizeof *c);
@@ -78,6 +76,14 @@ static void thread_body(void* p) {
         f(c, c->pc);
     }
 }
+int kthread_live_count(void) {
+    int live = 0;
+    pm_lock(&g_klock);
+    for (int i = 0; i < g_nthreads; i++)
+        if (g_threads[i]->state != 2) live++;
+    pm_unlock(&g_klock);
+    return live;
+}
 void kthread_start(KThread* t) {
     t->state = 1;
     if (plat_thread(thread_body, t, (size_t)64 << 20)) fatal("could not create a system thread");
@@ -97,10 +103,11 @@ void kernel_init(void) { pm_init(&g_klock); }
 KThread* g_main;
 void kernel_run_main(u64 entry, u64 stack_size, int prio, int core) {
     stack_size = (stack_size + 0xFFF) & ~0xFFFull;
-    u64 st = mem_find_free(STACK_BASE, STACK_BASE + STACK_SIZE, stack_size + 0x2000, 0x1000) + 0x1000;
-    mem_map(st, stack_size, MS_STACK, PERM_RW);
+    u64 st = mem_find_free(STACK_BASE, STACK_BASE + STACK_SIZE, stack_size + 0x2000, 0x1000);
+    if (!st || mem_map(st + 0x1000, stack_size, MS_STACK, PERM_RW))
+        fatal("Could not map the game's main thread stack (%llu KB)", (unsigned long long)(stack_size >> 10));
+    st += 0x1000; /* a free page on each side */
     KThread* t = kthread_create(entry, 0, st + stack_size, prio, core);
-    t->is_main = 1;
     g_main = t;
     strcpy(t->name, "main");
     u32 h = h_new(&t->o);
@@ -108,9 +115,11 @@ void kernel_run_main(u64 entry, u64 stack_size, int prio, int core) {
     kthread_start(t);
 }
 
+/* svcExitProcess. exit() would run the atexit handlers and tear the runtime down while the other guest threads still
+   run in it, so the process ends at once, the way main.c ends it when the window closes */
 void process_exit(int code) {
-    g_exiting = 1;
+    save_hints();
     LOG("The game exited (code %d)\n", code);
     fflush(NULL);
-    exit(code);
+    _Exit(code);
 }

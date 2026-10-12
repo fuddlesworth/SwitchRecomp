@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "gpu/gpu.h"
+#include "gpu/renderer.h"
 #include "kernel/mem.h"
 #include "platform/log.h"
 #include "platform/plat.h"
@@ -90,25 +91,6 @@ static const u8* guest_bytes(u64 gva, u64 len) {
     return g_tmp;
 }
 
-static u64 sample_hash(u64 gva, u64 len) {
-    u8 tmp[2048 + 128];
-    if (len <= sizeof tmp) {
-        gmem_read(gva, tmp, len);
-        return vk_hash(tmp, len);
-    }
-    u32 n = 0;
-    gmem_read(gva, tmp, 64);
-    n = 64;
-    gmem_read(gva + len - 64, tmp + n, 64);
-    n += 64;
-    u64 step = (len - 32) / 62;
-    for (int i = 0; i < 62; i++) {
-        gmem_read(gva + (u64)i * step, tmp + n, 32);
-        n += 32;
-    }
-    return vk_hash(tmp, n);
-}
-
 int vk_buf_copy(u64 gva, u64 len, VkBuffer* buf, u64* off) {
     u8* p = vk_stage(len ? len : 16, vk_stage_align(), buf, off);
     if (!p) return 0;
@@ -159,6 +141,9 @@ static int make_own(Vb* e, const u8* src) {
 int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
     if (!len) return 0;
     if (vk_compute_gpu_src(gva, len, buf, off)) return 1; /* a compute result that hasn't landed yet */
+    /* one that covers the range only in part lands first (its write shows in gpu_mem_dirty_since below): the cached
+       copy would otherwise be used without it */
+    if (g_cs_any) vk_compute_mem_need(gva, len);
     u32 k = (u32)((gva >> 6) ^ (gva >> 20) ^ len) & (VBH - 1);
     Vb* e = g_vbh[k];
     for (; e; e = e->next)
@@ -178,7 +163,8 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
             return 1;
         }
         /* without it: own buffers that stayed the same for long are checked every few submits, big ones sampled in
-           between */
+           between. A CPU write in between shows that many submits late; writes of the GPU front end always show at
+           once (gpu_mem_dirty_since above) */
         if (w < 0 && e->own && e->stable >= 16 && len >= (64u << 10) && g_vk_epoch - e->chk_epoch < 8) {
             e->epoch = g_vk_epoch;
             use(e, buf, off);
@@ -191,7 +177,7 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
         }
         if (w < 0 && e->own && e->stable >= 64 && len >= 4096 &&
             g_vk_epoch - e->chk_epoch < (e->stable >= 256 ? 240u : 64u)) {
-            if (g_vk_epoch - e->schk < 4 || sample_hash(gva, len) == e->shash) {
+            if (g_vk_epoch - e->schk < 4 || vk_sample_hash(gva, len) == e->shash) {
                 if (g_vk_epoch - e->schk >= 4) e->schk = g_vk_epoch;
                 e->epoch = g_vk_epoch;
                 use(e, buf, off);
@@ -205,6 +191,7 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
     u64 h = vk_hash(src, len);
     if (!e) {
         e = calloc(1, sizeof *e);
+        if (!e) return 0;
         e->start = gva;
         e->len = len;
         e->hash = h ^ 1;
@@ -222,7 +209,7 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) {
     e->gw = g_gw_gen;
     e->wseen = wnow;
     if (e->stable >= 63 && len >= 4096) {
-        e->shash = sample_hash(gva, len);
+        e->shash = vk_sample_hash(gva, len);
         e->schk = g_vk_epoch;
     }
     if (!e->own && !(e->stable >= 2 && make_own(e, src))) {

@@ -6,7 +6,7 @@ tools: Bash, Read, Grep, Glob
 ---
 
 You reverse-engineer one function or one interaction of a Switch game's SDK code, for SwitchRecomp's runtime. You
-change nothing in the repository; scratch files go in `/tmp`.
+change nothing in the repository; scratch files go in the session's scratchpad directory, never `/tmp` or the repository.
 
 Read `CLAUDE.md` and `.claude/skills/swr-service/SKILL.md` first.
 

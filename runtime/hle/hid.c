@@ -14,7 +14,12 @@ static KShmem* g_hid_shm;
 PadState g_pad;
 static u64 g_samp;
 static u32 g_style_supported = 0x7F;
-static KEvent* g_style_ev[10];
+static KEvent* g_style_ev[10]; /* AcquireNpadStyleSetUpdateEventHandle, per npad index */
+/* the legacy lifos (GetJoyXpadLifoHandle, GetSixAxisSensorLifoHandle, GetJoySixAxisSensorLifoHandle): one shared
+   memory each, as the console gives the same one on every call. Nothing writes them */
+static KShmem* g_xpad_shm;
+static KShmem* g_six_shm;
+static KShmem* g_joysix_shm;
 
 static void lifo_push(u8* lifo, u32 esize, const void* state, u32 ssize, u64 samp) {
     /* lifo header: unused, buffer_count, tail, count. entries: {u64 sampling_number; state} */
@@ -32,26 +37,28 @@ static void lifo_push(u8* lifo, u32 esize, const void* state, u32 ssize, u64 sam
     memcpy(lifo + 0x18, &count, 8);
 }
 
-/* npad index: 0..7 = No1..No8, 8 = Handheld (0x20), 9 = Other (0x10) */
-static void npad_setup(u8* base, int idx, u32 style, u32 devtype) {
+/* npad index: 0..7 = No1..No8, 8 = Handheld (0x20), 9 = Other (0x10). footer: AppletFooterUiType */
+static void npad_setup(u8* base, int idx, u32 style, u32 devtype, u8 footer) {
     u8* e = base + HO_HidSharedMemory_npad + idx * HS_HidNpadSharedMemoryEntry;
     memcpy(e + HO_HidNpadInternalState_style_set, &style, 4);
     u32 jam = 0;
     memcpy(e + HO_HidNpadInternalState_joy_assignment_mode, &jam, 4);
-    u32 col[3] = {1, 0xFF323232u, 0xFF0A0A0A};
+    /* color attribute 0 = Ok (1 is ReadError) */
+    u32 col[3] = {0, 0xFF323232u, 0xFF0A0A0A};
     memcpy(e + HO_HidNpadInternalState_full_key_color, col, 12);
-    u32 jc[5] = {1, 0xFF3C3C3Cu, 0xFF0A0A0A, 0xFF3C3C3Cu, 0xFF0A0A0A};
+    u32 jc[5] = {0, 0xFF3C3C3Cu, 0xFF0A0A0A, 0xFF3C3C3Cu, 0xFF0A0A0A};
     memcpy(e + HO_HidNpadInternalState_joy_color, jc, 20);
     memcpy(e + HO_HidNpadInternalState_device_type, &devtype, 4);
-    u64 props = (1ull << 0) | (1ull << 1) | (1ull << 2) | (1ull << 3) | (1ull << 11) |
-                (1ull << 12); /* charging, powered, dual joy... + abxy + plus/minus */
+    /* IsCharging JoyDual/Left/Right, IsPowered JoyDual, IsAbxyButtonOriented, IsSlSrButtonOriented,
+       IsPlusAvailable, IsMinusAvailable */
+    u64 props = (1ull << 0) | (1ull << 1) | (1ull << 2) | (1ull << 3) | (1ull << 11) | (1ull << 12) | (1ull << 13) |
+                (1ull << 14);
     memcpy(e + HO_HidNpadInternalState_system_properties, &props, 8);
     u32 bat[3] = {4, 4, 4};
     memcpy(e + HO_HidNpadInternalState_battery_level, bat, 12);
     u32 fattr = 0;
     memcpy(e + HO_HidNpadInternalState_applet_footer_ui_attribute, &fattr, 4);
-    u8 ftype = idx == 8 ? 4 : 3;
-    e[HO_HidNpadInternalState_applet_footer_ui_type] = ftype; /* handheld / pro controller */
+    e[HO_HidNpadInternalState_applet_footer_ui_type] = footer;
 }
 
 void hid_update(void) {
@@ -94,9 +101,8 @@ void hid_update(void) {
         lifo_push(e + HO_HidNpadInternalState_full_key_lifo, HS_HidNpadCommonStateAtomicStorage, z, 0x28, g_samp);
     }
     /* six-axis: at rest, gravity down */
-    u8 six[HS_HidSixAxisSensorState];
+    u8 six[HS_HidSixAxisSensorState]; /* {u64 delta_time; u64 sampling_number; ...}: no motion, so no delta */
     memset(six, 0, sizeof six);
-    memcpy(six, &g_samp, 8);
     memcpy(six + 8, &g_samp, 8);
     float acc[3] = {0, 0, -1};
     memcpy(six + HO_HidSixAxisSensorState_acceleration, acc, 12);
@@ -112,22 +118,10 @@ void hid_update(void) {
               six, sizeof six, g_samp);
     lifo_push(eh + HO_HidNpadInternalState_handheld_six_axis_sensor_lifo, HS_HidSixAxisSensorStateAtomicStorage, six,
               sizeof six, g_samp);
-    /* touch */
+    /* touch screen: no touches, only the counters */
     u8 ts[HS_HidTouchScreenState];
     memset(ts, 0, sizeof ts);
     memcpy(ts, &g_samp, 8);
-    if (g_pad.touch) {
-        u32 cnt = 1;
-        memcpy(ts + HO_HidTouchScreenState_count, &cnt, 4);
-        u8* t = ts + HO_HidTouchScreenState_touches;
-        u64 dt = 0;
-        memcpy(t, &dt, 8);
-        u32 attr2 = 0, fid = 0;
-        memcpy(t + 8, &attr2, 4);
-        memcpy(t + 12, &fid, 4);
-        u32 xy[4] = {(u32)g_pad.tx, (u32)g_pad.ty, 20, 20};
-        memcpy(t + 16, xy, 16);
-    }
     lifo_push(b + HO_HidSharedMemory_touchscreen + HO_HidTouchScreenSharedMemoryFormat_lifo,
               HS_HidTouchScreenStateAtomicStorage, ts, sizeof ts, g_samp);
     /* keyboard/mouse/debug pad: only bump the counters */
@@ -159,75 +153,68 @@ static int hid_vibration_list(SvcObj* o, IpcCtx* c) {
 } /* IActiveVibrationDeviceList: 0 ActivateVibrationDevice */
 static u64 g_hold_type = 0, g_comm_mode = 0, g_handheld_mode = 0;
 /* No1 reports ONE style like real hardware (the SDK asserts on multi-style sets, e.g. in GetVibrationDeviceHandles):
-   Pro Controller if the game supports it, else dual Joy-Con. Input goes to every lifo, so either one reads the pad */
+   Pro Controller if the game supports it, else dual Joy-Con, else nothing (a game that takes only the handheld
+   style finds No1 disconnected). Input goes to every lifo, so either one reads the pad */
 static void npad1_setup(void) {
     u8* b = kshmem_ptr(g_hid_shm);
-    if ((g_style_supported & 1u) || !(g_style_supported & (1u << 2)))
-        npad_setup(b, 0, 1u << 0, 1u << 0); /* FullKey */
+    if (g_style_supported & 1u)
+        npad_setup(b, 0, 1u << 0, 1u << 0, 12); /* FullKey, footer SwitchProController */
+    else if (g_style_supported & (1u << 2))
+        npad_setup(b, 0, 1u << 2, (1u << 4) | (1u << 5), 5); /* JoyDual: JoyLeft + JoyRight, footer JoyDual */
     else
-        npad_setup(b, 0, 1u << 2, (1u << 4) | (1u << 5)); /* JoyDual: JoyLeft + JoyRight */
+        npad_setup(b, 0, 0, 0, 0);
 }
 static int hid_disp(SvcObj* o, IpcCtx* c) {
     switch (c->cmd) {
         case 0: out_obj(c, svcobj_new("IAppletResource", hid_applet_res, 0)); return 0;
         case 40: out_copy_h(c, h_new(&kevent_new("xpad id", 0)->o)); return 0; /* AcquireXpadIdEventHandle */
         case 55:
-        case 59: out64(c, 0); return 0; /* GetXpadIds: none */
-        case 58:
-        case 62: out_copy_h(c, h_new(&kshmem_new(0x1000, "hid lifo")->o)); return 0;
+        case 59: out64(c, 0); return 0;                            /* GetXpadIds: none */
+        case 58: out_copy_h(c, h_new(&g_xpad_shm->o)); return 0;   /* GetJoyXpadLifoHandle */
+        case 62: out_copy_h(c, h_new(&g_six_shm->o)); return 0;    /* GetSixAxisSensorLifoHandle */
+        case 65: out_copy_h(c, h_new(&g_joysix_shm->o)); return 0; /* GetJoySixAxisSensorLifoHandle */
         case 68:
         case 82: out8(c, 1); return 0; /* IsSixAxisSensorFusionEnabled / AtRest */
+        case 71:                       /* GetSixAxisSensorFusionParameters */
+        case 74:                       /* GetAccelerometerParameters */
+            out32(c, 0);
+            out32(c, 0);
+            return 0;
+        case 77:                        /* GetAccelerometerPlayMode */
+        case 80: out32(c, 0); return 0; /* GetGyroscopeZeroDriftMode */
+        case 83: out8(c, 0); return 0;  /* IsFirmwareUpdateAvailableForSixAxisSensor */
         case 69:
         case 70:
-        case 71:
         case 72:
         case 73:
-        case 74:
         case 75:
         case 76:
-        case 77:
         case 78:
         case 79:
-        case 80:
-        case 81:
-        case 83:
-        case 84:
-        case 85:
-        case 86:
-        case 87:
-        case 88:
-        case 89:
-            if (c->cmd == 71 || c->cmd == 73 || c->cmd == 79 || c->cmd == 84 || c->cmd == 86 || c->cmd == 88) {
-                out32(c, 0);
-                out32(c, 0);
-            }
-            return 0;
-        case 100:
+        case 81: return 0;
+        case 100: /* SetSupportedNpadStyleSet: No1's style can change, which its style event tells */
             g_style_supported = in32(c, 0);
             npad1_setup();
-            return 0; /* SetSupportedNpadStyleSet */
+            kevent_signal(g_style_ev[0]);
+            return 0;
         case 101: out32(c, g_style_supported); return 0;
-        case 106: {
+        case 106: { /* AcquireNpadStyleSetUpdateEventHandle */
             u32 id = in32(c, 0);
             int i = id == 0x20 ? 8 : id == 0x10 ? 9 : (int)(id & 7);
-            if (!g_style_ev[i]) {
-                g_style_ev[i] = kevent_new("npad style", 0);
-                kevent_signal(g_style_ev[i]);
-            }
             out_copy_h(c, h_new(&g_style_ev[i]->o));
             return 0;
         }
-        case 108: {
+        case 108: { /* GetPlayerLedPattern: the LEDs of players 1 to 8 */
+            static const u8 led[8] = {0x1, 0x3, 0x7, 0xF, 0x9, 0x5, 0xD, 0x6};
             u32 id = in32(c, 0);
-            u64 led = id < 8 ? (1ull << id) : 0;
-            out64(c, led);
+            out64(c, id < 8 ? led[id] : 0);
             return 0;
-        } /* GetPlayerLedPattern */
+        }
         case 120: g_hold_type = in64(c, 8); return 0;
-        case 121: out64(c, g_hold_type); return 0; /* GetNpadJoyHoldType */
-        case 127: g_handheld_mode = in64(c, 8); return 0;
-        case 128: out64(c, g_handheld_mode); return 0; /* GetNpadHandheldActivationMode */
-        case 129: out32(c, 0); return 0;               /* GetNpadFullKeyGripColor... */
+        case 121: out64(c, g_hold_type); return 0;        /* GetNpadJoyHoldType */
+        case 127: return 0;                               /* StopLrAssignmentMode */
+        case 128: g_handheld_mode = in64(c, 8); return 0; /* SetNpadHandheldActivationMode(aruid, i64 mode) */
+        case 129: out64(c, g_handheld_mode); return 0;    /* GetNpadHandheldActivationMode */
         case 133:
         case 134:
         case 135:
@@ -298,7 +285,6 @@ static int hid_disp(SvcObj* o, IpcCtx* c) {
         case 61:
         case 63:
         case 64:
-        case 65:
         case 66:
         case 67:
         case 91:
@@ -313,18 +299,29 @@ static int hid_disp(SvcObj* o, IpcCtx* c) {
     return stub_ok(o, c);
 }
 static SvcObj* new_hid(void) { return svcobj_new("hid", hid_disp, 0); }
-static int hidsys_disp(SvcObj* o, IpcCtx* c) {
-    (void)o;
-    (void)c;
-    return 0;
-}
+static int hidsys_disp(SvcObj* o, IpcCtx* c) { return stub_ok(o, c); }
 static SvcObj* new_hidsys(void) { return svcobj_new("hid:sys", hidsys_disp, 0); }
 
+/* the service keeps these for the whole run: its reference keeps them alive when the game closes its handles */
+static KShmem* owned_shm(u64 size, const char* name) {
+    KShmem* s = kshmem_new(size, name);
+    kobj_ref(&s->o);
+    return s;
+}
 void svc_hid_init(void) {
-    g_hid_shm = kshmem_new(0x40000, "hid");
+    g_hid_shm = owned_shm(0x40000, "hid");
+    g_xpad_shm = owned_shm(0x1000, "hid xpad lifo");
+    g_six_shm = owned_shm(0x1000, "hid six-axis lifo");
+    g_joysix_shm = owned_shm(0x1000, "hid joy six-axis lifo");
+    /* the style events start signaled, so the game reads the styles the first time it waits */
+    for (int i = 0; i < 10; i++) {
+        g_style_ev[i] = kevent_new("npad style", 0);
+        kobj_ref(&g_style_ev[i]->o);
+        kevent_signal(g_style_ev[i]);
+    }
     u8* b = kshmem_ptr(g_hid_shm);
     npad1_setup();
-    npad_setup(b, 8, 1u << 1, (1u << 2) | (1u << 3)); /* Handheld */
+    npad_setup(b, 8, 1u << 1, (1u << 2) | (1u << 3), 4); /* Handheld, footer HandheldJoyConLeftJoyConRight */
     hid_update();
     hid_update();
     svc_register("hid", new_hid);

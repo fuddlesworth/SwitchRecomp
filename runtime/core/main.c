@@ -56,20 +56,24 @@ static int load_code(void) {
     char p[1200];
 #if defined(_WIN32)
     snprintf(p, sizeof p, "%s%s_code.dll", g_exedir, g_exename);
-#elif defined(__ANDROID__)
-    snprintf(p, sizeof p, "lib%s_code.so", g_exename); /* lives in the apk's lib dir */
 #else
     snprintf(p, sizeof p, "%s%s_code.so", g_exedir, g_exename);
 #endif
-    void* h = plat_dl_open(p);
-    if (!h) {
-#if !defined(_WIN32)
-        WARN("dlopen: %s\n", dlerror());
-#endif
+    FILE* probe = fopen(p, "rb");
+    if (!probe) {
         WARN("Cannot find the recompiled code: %s\n", p);
         WARN("The runtime runs the game it is named after, from the game's folder: a copy named Game next to "
              "Game_code.so runs that game. Or name the game with --game=PATH, for example "
              "--game=games/Game.\n");
+        return -1;
+    }
+    fclose(probe);
+    void* h = plat_dl_open(p);
+    if (!h) { /* it's there but doesn't load: a library it needs is missing, or it was built for another system */
+#if !defined(_WIN32)
+        WARN("dlopen: %s\n", dlerror());
+#endif
+        WARN("Cannot load the recompiled code: %s\n", p);
         return -1;
     }
     ModFn f = (ModFn)plat_dl_sym(h, "swr_module");
@@ -92,7 +96,7 @@ static int load_code(void) {
     }
 #endif
     g_mod = f();
-    return 0;
+    return g_mod ? 0 : -1;
 }
 
 static void build_dispatch(void) {
@@ -120,6 +124,8 @@ static void split_path(const char* argv0) {
     char p[1024];
     strncpy(p, argv0 ? argv0 : "", 1023);
     p[1023] = 0;
+    /* --game=games/Catherine/ names games/Catherine */
+    for (size_t n = strlen(p); n > 1 && (p[n - 1] == '/' || p[n - 1] == '\\'); n--) p[n - 1] = 0;
     char *s1 = strrchr(p, '/'), *s2 = strrchr(p, '\\'), *s = s1 > s2 ? s1 : s2;
     const char* base = s ? s + 1 : p;
     strncpy(g_exename, base, 255);
@@ -132,12 +138,56 @@ static void split_path(const char* argv0) {
     if (s) {
         s[1] = 0;
         strncpy(g_exedir, p, 1023);
-    } else
+    } else {
+#if defined(_WIN32)
         g_exedir[0] = 0;
+#else
+        strcpy(g_exedir, "./"); /* a bare file name would make dlopen search the library path, not this folder */
+#endif
+    }
 }
 
 /* players point --game at the dump itself (--game=ARMS.xci), and the runtime then looks for ARMS.xci_code.so. It only
    runs recompiled code, so name what is missing instead of the .so it would have looked for */
+/* main.npdm: the SystemResourceSize (newer SDKs only init their VM allocator when > 0), and the cores and
+   priorities the kernel capabilities of its ACI0 give the process */
+static void read_npdm(void) {
+    char q[1200];
+    snprintf(q, sizeof q, "%sexefs/main.npdm", g_datadir);
+    FILE* f = fopen(q, "rb");
+    u8 h[0x4000];
+    size_t n = 0;
+    if (f) {
+        n = fread(h, 1, sizeof h, f);
+        fclose(f);
+    }
+    if (n >= 0x80 && !memcmp(h, "META", 4)) {
+        u32 v, aci, acisz;
+        memcpy(&v, h + 0x14, 4);
+        g_sysres_size = v;
+        memcpy(&aci, h + 0x70, 4);
+        memcpy(&acisz, h + 0x74, 4);
+        u32 ko = 0, ks = 0;
+        if (acisz >= 0x38 && aci <= n && acisz <= n - aci && !memcmp(h + aci, "ACI0", 4)) {
+            memcpy(&ko, h + aci + 0x30, 4);
+            memcpy(&ks, h + aci + 0x34, 4);
+        }
+        for (u32 o = 0; ks <= acisz && ko <= acisz - ks && o + 4 <= ks; o += 4) {
+            u32 cap;
+            memcpy(&cap, h + aci + ko + o, 4);
+            if ((cap & 0xF) != 0x7) continue; /* ThreadInfo: the lowest and highest priority and core */
+            u32 lo_prio = (cap >> 4) & 63, hi_prio = (cap >> 10) & 63, min_core = (cap >> 16) & 255,
+                max_core = (cap >> 24) & 255;
+            if (hi_prio > lo_prio || min_core > max_core || max_core > 63) break;
+            g_core_mask = (~0ull >> (63 - max_core)) & (~0ull << min_core);
+            g_prio_mask = (~0ull >> (63 - lo_prio)) & (~0ull << hi_prio);
+            break;
+        }
+    }
+    LOG("npdm: system resource %.1f MB, cores %llx, priorities %llx\n", g_sysres_size / 1048576.0,
+        (unsigned long long)g_core_mask, (unsigned long long)g_prio_mask);
+}
+
 static int is_dump(const char* path) {
     static const char* const ext[] = {".xci", ".xcz", ".nsp", ".nsz", ".nca", ".nro", ".nso"};
     const char* dot = strrchr(path, '.');
@@ -159,70 +209,65 @@ int swr_main(int argc, char** argv) {
         appimage && *appimage && appdir && *appdir && argv[0] && !strncmp(argv[0], appdir, strlen(appdir));
     /* --game=PATH names the game the way the runtime's own name does (games/Catherine runs games/Catherine_code.so
        with games/Catherine_data/), so one runtime or AppImage runs any game without a copy named after it */
-    const char* game = NULL;
+    /* the dump can be named with --game or on its own */
+    const char *game = NULL, *dump = NULL;
     for (int i = 1; i < argc; i++)
-        if (!strncmp(argv[i], "--game=", 7) && argv[i][7]) game = argv[i] + 7;
-    if (game && is_dump(game))
+        if (!strncmp(argv[i], "--game=", 7) && argv[i][7])
+            game = argv[i] + 7;
+        else if (argv[i][0] != '-' && is_dump(argv[i]))
+            dump = argv[i];
+    if (game && is_dump(game)) dump = game;
+    /* named after the runtime when it's a dump, so the log the fatal error writes lands next to the runtime */
+    split_path(game && !dump ? game : in_appimage ? appimage : argv[0]);
+    if (dump)
         fatal("%s is a game dump. SwitchRecomp does not run dumps: it runs a game recompiled from one. Extract and "
               "recompile it first with a clone of the repository (scripts/extract.py, then scripts/recomp.py, as "
               "the README describes), then point --game at the result, for example --game=games/Game.",
-              game);
-    split_path(game ? game : in_appimage ? appimage : argv[0]);
+              dump);
+    /* loaded before the .ini is opened, which writes one: a mistyped --game leaves no stray settings file */
+    if (load_code()) fatal("Could not load the game's recompiled code.");
+    if (g_mod->abi != SWR_ABI) fatal("The recompiled code is from another SwitchRecomp version.");
+    /* --key=value sets a setting for this run, over the .ini. The value is used where it is, so a long --script
+       isn't cut */
+    for (int i = 1; i < argc; i++) {
+        const char* e = strchr(argv[i], '=');
+        if (!strcmp(argv[i], "-v"))
+            ini_override("log", "2");
+        else if (!strncmp(argv[i], "--", 2) && e && e - argv[i] - 2 < 64) {
+            char k[64];
+            memcpy(k, argv[i] + 2, (size_t)(e - argv[i] - 2));
+            k[e - argv[i] - 2] = 0;
+            ini_override(k, e + 1);
+        }
+    }
     char ini[1400];
     snprintf(ini, sizeof ini, "%s%s.ini", g_exedir, g_exename);
     ini_open(ini);
-    for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-v"))
-            g_verbose = 2;
-        else if (!strncmp(argv[i], "--", 2) && strchr(argv[i], '=')) {
-            char k[256];
-            strncpy(k, argv[i] + 2, 255);
-            char* e = strchr(k, '=');
-            *e = 0;
-            backend_ini(k, e + 1);
-            if (!strcmp(k, "docked")) g_opt_docked = atoi(e + 1);
-            if (!strcmp(k, "fps_limit")) g_opt_fps = atoi(e + 1);
-        }
-    }
     snprintf(g_datadir, sizeof g_datadir, "%s%s_data/", g_exedir, g_exename);
     hints_init();
     present_init();
     plat_install_crash_handler();
     clock_start();
     LOG("SwitchRecomp - %s\n", g_exename);
-    if (load_code()) fatal("Could not load the game's recompiled code.");
-    if (g_mod->abi != SWR_ABI) fatal("The recompiled code is from another SwitchRecomp version.");
     g_title_id = g_mod->title_id;
     mem_init();
     kernel_init();
     build_dispatch();
-    if (g_mod->init) g_mod->init(&g_rtapi);
     load_hints();
     if (loader_load()) fatal("Could not load the game executables from %sexefs/", g_datadir);
-    { /* npdm SystemResourceSize; newer SDKs only init their VM allocator when > 0 */
-        char q[1200];
-        snprintf(q, sizeof q, "%sexefs/main.npdm", g_datadir);
-        FILE* f = fopen(q, "rb");
-        if (f) {
-            u8 h[0x20];
-            if (fread(h, 1, 0x20, f) == 0x20 && !memcmp(h, "META", 4)) {
-                u32 v;
-                memcpy(&v, h + 0x14, 4);
-                g_sysres_size = v;
-            }
-            fclose(f);
-        }
-        LOG("npdm: system resource %.1f MB\n", g_sysres_size / 1048576.0);
-    }
+    kernel_load_symbols();
+    read_npdm();
     services_init();
     romfs_init();
     gpu_init();
     video_init(g_mod->title ? g_mod->title : g_exename);
-    {
-        if (g_opt_prof) {
-            plat_prof_start(0);
-            LOG("profile: active (profile.txt every 10 s)\n");
-        }
+    if (g_opt_prof) {
+#if defined(_WIN32)
+        plat_prof_start();
+        LOG("profile: active (profile.txt every 10 s)\n");
+#else
+        LOG("profile: the CPU profiler is Windows only, profile=1 does nothing here\n");
+#endif
     }
     kernel_run_main(g_mod->mods[0].base + g_mod->mods[0].text_off, g_mod->main_stack ? g_mod->main_stack : 0x100000,
                     (int)g_mod->main_prio, (int)g_mod->main_core);
@@ -234,7 +279,6 @@ int swr_main(int argc, char** argv) {
         hid_update();
         vi_vsync_tick();
         if (tick % 60 == 0) ini_poll();
-        { kernel_heal_mutexes(); }
         frontend_frame();
         if (++tick % 300 == 0) save_hints();
         /* dump thread states to threads.txt every 15s, useful when something hangs */
@@ -244,9 +288,9 @@ int swr_main(int argc, char** argv) {
             FILE* f = fopen(p, "w");
             if (f) {
                 fprintf(f, "second %d, frames %d\n", tick / 60, g_frames);
-                g_log_redirect = f;
+                tls_log_redirect = f;
                 kernel_dump_threads();
-                g_log_redirect = NULL;
+                tls_log_redirect = NULL;
                 fclose(f);
             }
         }

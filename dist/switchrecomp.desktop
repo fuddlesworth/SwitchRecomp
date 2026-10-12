@@ -3,6 +3,6 @@ Type=Application
 Name=SwitchRecomp
 Comment=Runs Switch games recompiled to native code
 Exec=swr-runtime
-Icon=switchrecomp
+Icon=wimsy
 Categories=Game;Emulator;
 Terminal=false

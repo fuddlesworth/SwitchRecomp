@@ -1,21 +1,20 @@
 # ScarletNX
 
-<h1 align="center">
-  <br>
-  <img src="./wimsy.svg" alt="Eden" width="200">
+<p align="center">
+  <img src="./dist/wimsy.svg" alt="Wimsy, the mascot" width="200">
   <br>
   <b>Wimsy, the ScarletNX mascot</b>
-  <br>
-</h1>
+</p>
 
-A fork of **SwitchRecomp by MZ Labs**, a static recompiler for Nintendo Switch games, for Linux and Windows. The
-game's ARM64 code is translated to C once and compiled into a native program. The runtime stands in for the Switch's
-operating system, and its GPU emulation draws with Vulkan. The game's data is read as it is from the extracted dump.
+A fork of **SwitchRecomp by MZ Labs**, a static recompiler for Nintendo Switch games, for Linux, FreeBSD and
+Windows. The game's ARM64 code is translated to C once and compiled into a native program. The runtime stands in for
+the Switch's operating system, and its GPU emulation draws with Vulkan. The game's data is read as it is from the
+extracted dump.
 
-This fork adds a CMake build, source builds of every third-party library, scripts for the whole pipeline, CI on both
-systems, and fixes to the runtime. [ROADMAP.md](ROADMAP.md) has the plan and the current state, and the history of
-`main` has every fix with the reason for it. The MZ Labs release this fork started from (v142) is the tag
-`upstream-v142`.
+This fork adds a CMake build that compiles the third-party libraries from source, scripts for the whole pipeline,
+CI on Linux, FreeBSD and Windows, and fixes to the runtime. [ROADMAP.md](ROADMAP.md) has the plan and the current
+state, and the history of `main` has every fix with the reason for it. The MZ Labs release this fork started from
+(v142) is the tag `upstream-v142`.
 
 Use only games and keys dumped from your own console. None are included, and none may be committed here.
 
@@ -65,8 +64,9 @@ python3 scripts/recomp.py work/Game Game            # -> games/Game
 cd games && ./Game
 ```
 
-The runtime draws with Vulkan, so the GPU needs Vulkan 1.3. The first recompile of a big game takes several minutes. After that, a runtime
-change only needs a runtime build, which copies the new runtime next to every game in `games/`:
+The runtime draws with Vulkan, so the GPU needs Vulkan 1.3. The first recompile of a big game takes several
+minutes. After that, a runtime change only needs a runtime build, which copies the new runtime next to every game in
+`games/`:
 
 ```bash
 cmake --build --preset default
@@ -90,14 +90,16 @@ In PowerShell:
 git clone https://github.com/fuddlesworth/SwitchRecomp.git
 cd SwitchRecomp
 powershell -ExecutionPolicy Bypass -File scripts\bootstrap.ps1
+Set-ExecutionPolicy -Scope Process Bypass
 . scripts\env.ps1
 cmake --preset default; cmake --build --preset default
 ```
 
 `scripts\bootstrap.ps1` downloads llvm-mingw (Clang), CMake, Ninja, NASM, Python and w64devkit (for the shell and
-make that FFmpeg's build uses) into `deps\tools` and checks each
-download against its pinned SHA-256. Nothing is installed on the system. The CMake build fetches and builds the
-libraries, as on Linux. In every new PowerShell window, run `. scripts\env.ps1` first to put those tools on PATH.
+make that FFmpeg's build uses) into `deps\tools` and checks each download against its pinned SHA-256. Nothing is
+installed on the system. The CMake build fetches and builds the libraries, as on Linux. In every new PowerShell
+window, run `Set-ExecutionPolicy -Scope Process Bypass` and then `. scripts\env.ps1` to put those tools on PATH.
+Windows runs no PowerShell scripts by default, and the first command allows them in that window only.
 
 ### Recompiling a game
 
@@ -118,8 +120,8 @@ WASD for the left stick, IJKL for the right stick, X or Space for A, Z for B, C 
 FPS limit, F5 writes the state of every game thread to the log, F11 or Alt+Enter toggles fullscreen, and Escape
 quits.
 
-The window and input go through SDL3 on Windows too (the CMake build fetches SDL3 and links it statically), with the
-same two renderers as on Linux.
+The window and input go through SDL3 on Windows too (the CMake build fetches SDL3 and links it statically), and the
+game draws with Vulkan as on Linux.
 
 ## Settings and logs
 
@@ -137,8 +139,8 @@ starts. The ones you are most likely to change:
 | `language=1` | The system language the game sees |
 | `log=2` | Log everything, for bug reports |
 
-When something goes wrong, `games/<Game>.log` has the details, `games/threads.txt` the state of every game thread
-(rewritten every 15 seconds), and `games/performance.txt` a summary of slow frames.
+When something goes wrong, `games/<Game>.log` has the details, and `games/threads.txt` has the state of every game
+thread (rewritten every 15 seconds).
 
 ## Development
 
@@ -151,21 +153,25 @@ frame gets from the game to the screen.
 | Name game addresses from a crash report | `tools/symbols.py work/Game cf34380 ...` |
 | Disassemble game code | `tools/disasm.py work/Game NvRmStreamFlushSync` |
 | Run the game for a set time with scripted input and a screenshot | `./Game --seconds=60 --script=15000:400,16000:1 --shot=out` |
-| Import a new MZ Labs release | `scripts/import-upstream.sh SwitchRecomp_v143.zip v143`, then `git merge upstream` |
-| Record the shaders a run translates, then check them for Vulkan | `SWR_SHADER_CORPUS=dir ./Game`, then `build/default/swr-shaderc dir --validate` |
+| Run it unattended several times and sum up each run (exit, crash site, frames) | `tools/run_game.py Game --runs 5 --dump work/Game` |
+| Import a new MZ Labs release | `scripts/import-upstream.sh SwitchRecomp_v143.zip v143`, then port its changes by hand |
+| Record the shaders a run translates, then check them for Vulkan (needs `spirv-val`) | `SWR_SHADER_CORPUS=dir ./Game`, then `build/default/swr-shaderc dir --validate` |
+| Translate a game's own shader files into the SPIR-V cache ahead of time (`scripts/recomp.py` does it) | `build/default/swr-shaderc --nvn DIR --cache games/shader_cache/spirv` |
 
 The `upstream` branch holds the MZ Labs releases: each one as released (tagged `upstream-vN`) and then formatted like
-`main`, so merging a release into `main` only shows what it changed.
+`main`, so the diff between two releases only shows what changed. This fork's code is laid out differently, so a
+release's changes are ported into `main` by hand rather than merged.
 
 | Folder | What it holds |
 | --- | --- |
 | `switchrecomp/` | The recompiler (`python3 -m switchrecomp`): loading, analysis, ARM64 to C, building the game module |
 | `runtime/` | The runtime: kernel, services, GPU, video, platform backends |
-| `scripts/` | The Windows toolchain download, extraction, recompiling, formatting, upstream imports |
+| `scripts/` | The Windows toolchain download, extraction, recompiling, formatting, upstream imports, the AppImage |
 | `docs/` | How the parts fit together |
 | `tools/` | Debugging tools |
 | `cmake/` | The third-party libraries (`dependencies.cmake`, fetched with CPM.cmake) and the deploy step |
-| `.github/workflows/` | CI: formatting, and Clang builds on Linux, FreeBSD and Windows, natively and cross-built from Linux |
+| `.github/workflows/` | CI: formatting, Clang builds on Linux, FreeBSD and Windows (natively and cross-built from Linux), the AppImage and the nightly release |
+| `dist/` | The desktop entry and the icon (Wimsy) that the install and the AppImage use |
 | `.cache/`, `deps/`, `build/`, `work/`, `games/` | Downloaded libraries, the Windows toolchain, build trees, extracted dumps and recompiled games, none of them in git |
 
 ## License and credits
@@ -181,17 +187,21 @@ here. Files the fork wrote start with `SPDX-License-Identifier: GPL-3.0-or-later
 The game modules the recompiler builds include the runtime's `runtime/abi/` code, which is under the GPL like the rest.
 Games, keys and firmware are not part of this project.
 
-Third-party components keep their own licenses, found in each package CPM.cmake downloads (`.cache/cpm/<name>/`, from the URLs in `cmake/dependencies.cmake`):
+Third-party components keep their own licenses, found in each package CPM.cmake downloads (`.cache/cpm/<name>/`,
+from the URLs in `cmake/dependencies.cmake`):
 
 | Component | Used for | License |
 | --- | --- | --- |
 | FFmpeg (libavcodec, libavutil) | Game videos (H.264, with VP8 and VP9 built in) | LGPL 2.1 or later |
-| hactool (SciresM) | Extracting dumps | ISC |
+| hactool (SciresM), with the mbedtls 2, cJSON and ConvertUTF copies it bundles | Extracting dumps | ISC (mbedtls: Apache 2.0, cJSON: MIT, ConvertUTF: Unicode, Inc.'s license) |
 | glslang (Khronos) | Vulkan shaders to SPIR-V | BSD 3-Clause, MIT and Apache 2.0, and a parser under GPL 3 with the Bison exception |
 | Vulkan-Headers (Khronos) | Vulkan definitions | Apache 2.0 |
 | volk (Arseny Kapoulkine) | Loading Vulkan | MIT |
 | Vulkan Memory Allocator (AMD) | GPU memory for the Vulkan renderer | MIT |
 | SDL3 | Window and input (the sdl3 backend): the system's on Linux and FreeBSD, built with the runtime on Windows | zlib |
+
+The nightly AppImage also carries the libraries the runtime loads on the machine that built it, among them SDL3, the
+Vulkan loader (Apache 2.0) and Mesa's Vulkan drivers (mostly MIT), each under its own license.
 
 This project builds on the work of the Switch emulation and homebrew community, whose projects showed how the
 console and its operating system behave:
@@ -201,5 +211,7 @@ console and its operating system behave:
   emulators
 - [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere), the reimplementation of Horizon OS
 - LibHac, the library for the Switch's file systems and content formats
+- [Switchbrew](https://switchbrew.org), the wiki that documents the console's services and file formats
 
-Wimsy, the mascot in `wimsy.svg`, was drawn by Madeline_Dev, © 2025 Eden Emulator Project, under the GPL 3.
+Wimsy, the mascot and the runtime's icon (`dist/wimsy.svg`), was drawn by Madeline_Dev, © 2025 Eden Emulator
+Project, under the GPL 3.

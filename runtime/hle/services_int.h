@@ -18,6 +18,9 @@
 
 /* services.c */
 u32 ev_handle(KEvent* e);
+/* the docked and language options as they were at startup: the .ini says they apply on restart, and ini_poll
+   reloads the globals while the game runs */
+extern int g_hle_docked, g_hle_lang;
 
 /* sm.c */
 SvcObj* new_sm(void);
@@ -28,17 +31,19 @@ SvcObj* quiet(const char* name);
 extern KEvent* g_msg_event;
 extern KEvent* g_launch_ev;
 extern KEvent* g_res_ev;
-extern KEvent* g_opmode_ev;
+extern KEvent* g_sleep_ev;
 extern u64 g_user_id[2];
 void am_push_msg(u32 m);
 SvcObj* new_appletoe(void);
 SvcObj* new_appletae(void);
 
 /* set.c */
+u64 set_language_code(int lang); /* the LanguageCode of a language index, en-US for one out of range */
 SvcObj* new_set(void);
 SvcObj* new_setsys(void);
 
 /* time.c */
+void time_init(void);
 SvcObj* new_time(void);
 
 /* acc.c */
@@ -74,6 +79,7 @@ SvcObj* new_mii(void);
 SvcObj* new_ldn(void);
 SvcObj* new_ectx(void);
 SvcObj* new_spl(void);
+SvcObj* new_audin(void);
 
 /* audren.c */
 int audren_update(SvcObj* o, IpcCtx* c);

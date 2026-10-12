@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the SwitchRecomp fork contributors
 name: Build
 
 on:
@@ -6,13 +8,20 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Jobs only read the repository; the release job asks for more on its own
+permissions:
+  contents: read
+
 # Linux jobs run in Arch Linux, which has the same Clang 23 and clang-format 23 as development. The Windows job starts
 # from a bare runner and gets every tool from scripts/bootstrap.ps1, the way a Windows user does. The third-party
-# libraries come from CPM.cmake at configure time; their downloads are cached between runs (.cache/cpm).
+# libraries come from CPM.cmake at configure time; their downloads are cached between runs (.cache/cpm), one cache per
+# job since each job fetches a different set. The artifacts are what `cmake --install` puts in place: the binaries
+# with the licenses that go with them.
 jobs:
   format:
     name: Formatting
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
     container: archlinux:latest
     steps:
       - name: Install tools
@@ -26,6 +35,7 @@ jobs:
   linux:
     name: Linux
     runs-on: ubuntu-26.04
+    timeout-minutes: 60
     container: archlinux:latest
     steps:
       - name: Install tools
@@ -34,15 +44,19 @@ jobs:
       - uses: actions/cache@v5
         with:
           path: .cache/cpm
-          key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
+          key: cpm-${{ github.job }}-${{ hashFiles('cmake/dependencies.cmake') }}
       - name: Build the runtime
         run: |
           cmake --preset default
           cmake --build --preset default
+          cmake --install build/default --prefix stage
       - name: Build the headless backend too
         run: |
           cmake --preset default -B build/headless -DSWR_BACKEND=headless -DSWR_DEPLOY=OFF
           cmake --build build/headless
+      # The game modules compile runtime/abi/cpu_helpers.c, which no CMake target does
+      - name: Check the ABI helpers compile
+        run: clang -fsyntax-only -Wall -fno-strict-aliasing -fwrapv -I runtime/abi runtime/abi/cpu_helpers.c
       - name: Check the Python scripts
         run: |
           python -m compileall -q switchrecomp scripts tools
@@ -53,23 +67,41 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: swr-runtime-linux
-          path: build/default/swr-runtime
+          path: stage
 
   appimage:
     name: Linux AppImage
     runs-on: ubuntu-26.04
+    timeout-minutes: 60
     # pkgforge's Arch image and tools (https://github.com/pkgforge-dev/Anylinux-AppImages), see scripts/make-appimage.sh
     container: ghcr.io/pkgforge-dev/archlinux:latest
     steps:
+      # Before the checkout: without git, actions/checkout downloads the files without the history, and the AppImage's
+      # version (git describe) is unknown
+      - name: Install git
+        run: pacman -Syu --noconfirm --needed git
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/cache@v5
         with:
           path: .cache/cpm
-          key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
+          key: cpm-${{ github.job }}-${{ hashFiles('cmake/dependencies.cmake') }}
+      # The action pins its own setup script only: the tools that script downloads are pinned here to a commit of
+      # Anylinux-AppImages, and checked against their SHA-256 below
       - name: Install the packaging tools
         uses: pkgforge-dev/anylinux-setup-action@b2d1ce4216f71162e00ae58fa11ee9aeb723d0d5 # v5
+        env:
+          QUICK_SHARUN: https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/d4262a9978e7b5d88e3799b389b138eb244e3936/useful-tools/quick-sharun.sh
+          DEBLOATED_PACKAGES: https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/d4262a9978e7b5d88e3799b389b138eb244e3936/useful-tools/get-debloated-pkgs.sh
+          MAKE_AUR_PACKAGE: https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/d4262a9978e7b5d88e3799b389b138eb244e3936/useful-tools/make-aur-package.sh
+      - name: Check the packaging tools
+        run: |
+          sha256sum -c <<'EOF'
+          b38ac233f0b56a03bb10565f6b074a43ce016939faee44ae8bb23d6e66c2d553  /usr/local/bin/quick-sharun
+          217ff68aafe085d2d4ab34a50e267805af43736ad8ef880c01ef88e52db8589f  /usr/local/bin/get-debloated-pkgs
+          86afbf5045b78020c93fcd35bf0f642765a8dc339bb2dce534a0461ce3d3508d  /usr/local/bin/make-aur-package
+          EOF
       - name: Install the build tools and the debloated Mesa
         run: |
           pacman -Syu --noconfirm --needed cmake ninja make nasm python clang sdl3 libx11 mesa vulkan-icd-loader
@@ -80,25 +112,29 @@ jobs:
           cmake --preset default -DSWR_DEPLOY=OFF -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build --preset default
           cmake --install build/default
+      # The script names the AppImage after `git describe`
       - name: Make the AppImage
-        run: |
-          VERSION=$(git describe --always) scripts/make-appimage.sh
+        run: scripts/make-appimage.sh
+      # Only what the script made: dist/ also holds the tracked desktop entry and icon
       - uses: actions/upload-artifact@v7
         with:
           name: AppImage-x86_64
-          path: dist
+          path: |
+            dist/*.AppImage*
+            dist/appinfo
 
   freebsd:
     name: FreeBSD
     runs-on: ubuntu-26.04
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: actions/cache@v5
         with:
           path: .cache/cpm
-          key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
+          key: cpm-${{ github.job }}-${{ hashFiles('cmake/dependencies.cmake') }}
       - name: Build the runtime
-        uses: vmactions/freebsd-vm@v1.5.9
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
         with:
           release: '15.1'
           usesh: true
@@ -112,6 +148,7 @@ jobs:
   windows-cross:
     name: Windows, cross-built on Linux
     runs-on: ubuntu-26.04
+    timeout-minutes: 60
     container: archlinux:latest
     steps:
       - name: Install tools
@@ -120,7 +157,8 @@ jobs:
       - uses: actions/cache@v5
         with:
           path: .cache/cpm
-          key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
+          key: cpm-${{ github.job }}-${{ hashFiles('cmake/dependencies.cmake') }}
+      # The same llvm-mingw release as scripts/bootstrap.ps1, in its build for Linux
       - name: Install llvm-mingw
         run: |
           curl -sSLf -o /tmp/llvm-mingw.tar.xz \
@@ -132,10 +170,19 @@ jobs:
         run: |
           cmake --preset windows-cross
           cmake --build --preset windows-cross
+      - name: Build the headless backend too
+        run: |
+          cmake --preset windows-cross -B build/windows-headless -DSWR_BACKEND=headless -DSWR_DEPLOY=OFF
+          cmake --build build/windows-headless
+      - name: Check the ABI helpers compile for Windows
+        run: |
+          x86_64-w64-mingw32-clang -fsyntax-only -Wall -fno-strict-aliasing -fwrapv -I runtime/abi \
+            runtime/abi/cpu_helpers.c
 
   windows:
     name: Windows
     runs-on: windows-2025-vs2026
+    timeout-minutes: 90
     defaults:
       run:
         shell: pwsh
@@ -144,7 +191,14 @@ jobs:
       - uses: actions/cache@v5
         with:
           path: .cache/cpm
-          key: cpm-${{ hashFiles('cmake/dependencies.cmake') }}
+          key: cpm-${{ github.job }}-${{ hashFiles('cmake/dependencies.cmake') }}
+      # bootstrap.ps1 skips every tool already unpacked at its pinned hash
+      - uses: actions/cache@v5
+        with:
+          path: |
+            deps/tools
+            !deps/tools/downloads
+          key: tools-${{ hashFiles('scripts/bootstrap.ps1') }}
       - name: Install the toolchain
         run: .\scripts\bootstrap.ps1
       - name: Build the runtime
@@ -154,9 +208,13 @@ jobs:
           if ($LASTEXITCODE) { exit 1 }
           cmake --build --preset default
           if ($LASTEXITCODE) { exit 1 }
+          cmake --install build/default --prefix stage
+          if ($LASTEXITCODE) { exit 1 }
       - name: Check the Python scripts
         run: |
           . .\scripts\env.ps1 -Isolated
+          python -m switchrecomp --help > $null
+          if ($LASTEXITCODE) { exit 1 }
           python scripts\extract.py --help > $null
           if ($LASTEXITCODE) { exit 1 }
           python scripts\recomp.py --help > $null
@@ -164,14 +222,19 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: swr-runtime-windows
-          path: build/default/swr-runtime.exe
+          path: stage
 
-  # Every push to main that builds everywhere replaces the rolling "nightly" prerelease with that commit's AppImage
+  # Every push to main that builds everywhere replaces the rolling "nightly" prerelease with that commit's AppImage.
+  # A newer push cancels a release still running, so an older commit never publishes last
   release:
     name: Nightly release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [format, linux, appimage, freebsd, windows-cross, windows]
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    concurrency:
+      group: nightly-release
+      cancel-in-progress: true
     permissions:
       contents: write
     steps:
@@ -182,3 +245,11 @@ jobs:
         uses: pkgforge-dev/make-nightly-appimage-release@17cbe90fc0796286e424619a54a82a3a880efe4c # v1.1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+      # The GPL asks for the way to the source next to the binary
+      - name: Say where the source is
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit nightly --repo "$GITHUB_REPOSITORY" --notes "Built from commit $GITHUB_SHA, whose source is at $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA.
+
+          The third-party libraries built into the runtime are fetched from the release archives that cmake/dependencies.cmake lists at that commit, each checked against the SHA-256 written next to it. The AppImage also bundles libraries from Arch Linux packages. The licenses of everything it holds are in its share/licenses folder, with the list of those packages in share/licenses/bundled-packages.txt."

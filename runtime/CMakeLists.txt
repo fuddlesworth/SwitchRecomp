@@ -35,15 +35,15 @@ swr_component(core core/main.c core/entry.c core/loader.c core/rtapi.c core/cloc
               core/present.c)
 swr_component(kernel kernel/kernel.c kernel/thread.c kernel/sync.c kernel/svc.c kernel/svc_mem.c kernel/debug.c
               kernel/mem.c kernel/ipc.c)
-swr_component(hle hle/services.c hle/audren.c hle/pl.c hle/sm.c hle/am.c hle/set.c hle/time.c hle/acc.c hle/audio.c hle/misc.c hle/fs.c
-              hle/hid.c hle/vi.c hle/nvdrv.c)
+swr_component(hle hle/services.c hle/audren.c hle/pl.c hle/sm.c hle/am.c hle/set.c hle/time.c hle/acc.c hle/audio.c
+              hle/misc.c hle/fs.c hle/hid.c hle/vi.c hle/nvdrv.c)
 swr_component(video video/host1x.c video/nvdec.c video/vic.c)
 if(SWR_H264)
     target_link_libraries(swr_video PRIVATE FFmpeg::avcodec)
 endif()
 swr_component(gpu gpu/gpu.c gpu/engines.c gpu/mme.c gpu/compute.c gpu/fermi2d.c gpu/dma.c gpu/maxwell3d.c gpu/renderer.c)
 
-set(platform platform/plat.c platform/backend/${SWR_BACKEND}.c)
+set(platform platform/plat.c platform/unattended.c platform/backend/${SWR_BACKEND}.c)
 if(WIN32)
     list(APPEND platform platform/plat_win32.c platform/profiler_win32.c)
 else()
@@ -66,9 +66,9 @@ if(SWR_VULKAN)
                   gpu/vk/buffer.c gpu/vk/pipeline.c gpu/vk/render.c gpu/vk/compute.c gpu/vk/vma.cpp
                   "${volk_SOURCE_DIR}/volk.c")
     list(APPEND components shader spirv vk)
+    # third-party code (vma.cpp is VMA's implementation)
+    set_source_files_properties("${volk_SOURCE_DIR}/volk.c" gpu/vk/vma.cpp PROPERTIES COMPILE_OPTIONS -w)
 endif()
-# third-party code (vma.cpp is VMA's implementation)
-set_source_files_properties("${volk_SOURCE_DIR}/volk.c" gpu/vk/vma.cpp PROPERTIES COMPILE_OPTIONS -w)
 
 add_executable(swr-runtime)
 list(TRANSFORM components PREPEND swr_)
@@ -77,8 +77,12 @@ target_link_libraries(swr-runtime PRIVATE ${components})
 # scripts/recomp.py and CI look for it
 set_target_properties(swr-runtime PROPERTIES LINKER_LANGUAGE CXX RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 if(WIN32)
-    # Static, so the runtime runs without the MinGW DLLs next to it
-    target_link_libraries(swr-runtime PRIVATE gdi32 winmm user32 comdlg32 shell32)
+    # Static, so the runtime runs without the MinGW DLLs next to it. user32 has the backends' message boxes:
+    # winmm is loaded at run time, and the static SDL3 brings the libraries it needs
+    target_link_libraries(swr-runtime PRIVATE user32)
+    # The application manifest (platform/runtime.manifest): UTF-8 as the process's code page, long paths
+    enable_language(RC)
+    target_sources(swr-runtime PRIVATE platform/runtime.rc)
     target_link_options(swr-runtime PRIVATE -static)
     if(SWR_BACKEND STREQUAL "sdl3")
         target_link_options(swr-runtime PRIVATE -mwindows)

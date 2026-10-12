@@ -21,18 +21,6 @@ typedef int64_t i64;
 typedef float f32;
 typedef double f64;
 
-/* prologue of every generated function. On gcc/clang guest memory comes in as a restrict param so stores
-   through it can't alias c->x (restrict on a local doesn't buy anything). tcc gets the plain version */
-#if defined(__TINYC__)
-#define SWR_FN(n)                                                                                                      \
-    void n(CPU* c, u64 e) {                                                                                            \
-        u8* const M = c->mem;
-#else
-#define SWR_FN(n)                                                                                                      \
-    static void n##_b(CPU* __restrict__ c, u8* __restrict__ M, u64 e);                                                 \
-    void n(CPU* __restrict__ c, u64 e) { n##_b(c, c->mem, e); }                                                        \
-    static void n##_b(CPU* __restrict__ c, u8* __restrict__ M, u64 e) {
-#endif
 #if defined(__TINYC__)
 #define RESTRICT
 #define LIKELY(x)   (x)
@@ -47,7 +35,7 @@ typedef double f64;
 
 /* the version of the contract between a game module and the runtime (this header, cpu_helpers.c, RtAPI and the
    module descriptor). The recompiler stamps it into each module, the runtime refuses a module with another one */
-#define SWR_ABI 1
+#define SWR_ABI 2
 
 #if defined(_WIN32)
 #define SWR_EXPORT __declspec(dllexport)
@@ -98,10 +86,31 @@ typedef struct CPU {
     u64 code_lo, code_hi;
     const RtAPI* rt;
     void* thread; /* owning HLE thread */
-    int depth;
-    u32 pad_;
-    u64 user[8];
 } CPU;
+
+/* the module descriptor: what swr_module() in the game module's module.c (written by switchrecomp/module.py) hands
+   the runtime's loader. abi stays the first field so a module from another version is recognized before anything
+   else is read */
+typedef struct SwrModInfo {
+    const char* name;
+    u64 base, size;
+    u8 build_id[32];
+    u32 text_off, text_size, ro_off, ro_size, data_off, data_size, bss_size;
+    u32 is_nro;
+} SwrModInfo;
+typedef struct SwrModule {
+    u32 abi;
+    u32 nmods;
+    const SwrModInfo* mods;
+    u32 nentries;
+    const u64* entry_addr;
+    const GuestFn* entry_fn;
+    GuestFn interp;
+    u64 code_lo, code_hi;
+    const char* title;
+    u64 title_id;
+    u32 main_stack, main_prio, main_core;
+} SwrModule;
 
 /* ---- memory: base + addr, no page tables ---- */
 #define MP(a)       (M + (u64)(a))
@@ -116,8 +125,6 @@ typedef struct CPU {
 #define WR16(a, v)  (*(u16*)MP(a) = (u16)(v))
 #define WR32(a, v)  (*(u32*)MP(a) = (u32)(v))
 #define WR64(a, v)  (*(u64*)MP(a) = (u64)(v))
-#define RDF32(a)    (*(f32*)MP(a))
-#define RDF64(a)    (*(f64*)MP(a))
 #define RDQ(dst, a) memcpy(&(dst), MP(a), 16)
 #define WRQ(a, src) memcpy(MP(a), &(src), 16)
 
@@ -368,7 +375,12 @@ u64 swr_decode_bitmask(u32 N, u32 imms, u32 immr, u32 ds); /* cpu_helpers.c */
 /* ---- CRC32 ---- */
 u32 swr_crc32(u32 acc, u64 val, int bytes, int castagnoli);
 
-/* ---- fp (cpu_helpers.c) ---- */
+/* ---- fp (cpu_helpers.c) ----
+   rm, for fp_round and fcvt_*: 0 RNE, 1 +inf, 2 -inf, 3 zero, 4 RNA (ties away); FPRM is the guest's FPCR mode.
+   The helpers assume what games run with: no flush to zero, NaN propagation, IEEE half precision (the runtime warns
+   when a game sets FPCR otherwise). Arithmetic emitted inline (+ - * /) gives x86's NaNs: a NaN made from non-NaN
+   operands comes out negative where ARM's default NaN is positive, and with two NaN operands x86 returns the first
+   rather than the first signalling one. Checking every operation for that would cost more than it is worth */
 f32 fp_max32(f32, f32);
 f32 fp_min32(f32, f32);
 f64 fp_max64(f64, f64);
@@ -398,18 +410,10 @@ u32 urecpe32(u32 x);
 u32 ursqrte32(u32 x);
 f32 fp_mulx32(f32 a, f32 b);
 f64 fp_mulx64(f64 a, f64 b);
-void fp_cmp32(CPU* c, f32 a, f32 b);
-void fp_cmp64(CPU* c, f64 a, f64 b);
 f32 fp_sqrt32(f32 x);
 f64 fp_sqrt64(f64 x);
 f32 fp_fma32(f32 a, f32 b, f32 c);
 f64 fp_fma64(f64 a, f64 b, f64 c);
-f32 fp_nan32(f32 r, f32 a, f32 b);
-f64 fp_nan64(f64 r, f64 a, f64 b);
-f32 fp_abd32(f32 a, f32 b);
-f32 fp_frintx32(f32 x);
-f64 fp_frintx64(f64 x);
-/* rm: 0 RNE, 1 +inf, 2 -inf, 3 zero, 4 RNA, 5 use FPCR */
 
 /* ---- saturation ---- */
 SWR_INLINE i64 sat_s(i64 v, int bits) {
@@ -427,12 +431,16 @@ void v_aes(V128* d, const V128* k, int dec);
 void v_aesmc(V128* d, const V128* s, int inv);
 void v_sha1(CPU* c, u32 op, u32 d, u32 n, u32 m);
 void v_sha256(CPU* c, u32 op, u32 d, u32 n, u32 m);
-void v_pmull(V128* d, const V128* a, const V128* b, int size, int hi);
+void v_pmull(V128* d, const V128* a, const V128* b, int hi);
 u64 v_expand_imm(u32 op, u32 cmode, u32 imm8);
 
 SWR_INLINE void dc_zva(u8* M, u64 a) { memset(MP(a & ~63ull), 0, 64); }
 
-/* ---- LDXR/STXR: value-based monitor using CAS ---- */
+/* ---- LDXR/STXR: value-based monitor using CAS ----
+   Memory ordering relies on the host being x86-64, whose TSO model already gives plain loads acquire and plain
+   stores release order: LDXR and LDAR are plain loads, DMB/DSB LD and ST and ISB are only compiler barriers, and the
+   full barriers are mfence (a64.py BARRIER, SWR_FENCE). A weaker host (AArch64) would need real acquire and release
+   operations here and in a64.py */
 #if defined(__TINYC__)
 u32 swr_cas64(u64* p, u64 o, u64 n);
 u32 swr_cas32(u32* p, u32 o, u32 n);
@@ -560,7 +568,29 @@ void swr_msr(CPU* c, u32 sysreg, u64 v);
         p__->d[0] = t__;                                                                                               \
     } while (0)
 #define SETHB(d, e) SETH(d, e)
-#define FPRM        ((int)((c->fpcr >> 22) & 3))
+/* FNMUL: the product with its sign flipped, NaN included. The empty asm hides the product from the optimizer, which
+   would otherwise compute -(a*b) as (-a)*b or a*(-b), leaving a NaN from the other operand unflipped */
+#if defined(__TINYC__)
+SWR_INLINE f32 fnmul32(f32 a, f32 b) { return -(a * b); }
+SWR_INLINE f64 fnmul64(f64 a, f64 b) { return -(a * b); }
+#else
+#if defined(__x86_64__)
+#define SWR_FPREG "+x"
+#else
+#define SWR_FPREG "+w"
+#endif
+SWR_INLINE f32 fnmul32(f32 a, f32 b) {
+    f32 p = a * b;
+    __asm__("" : SWR_FPREG(p));
+    return -p;
+}
+SWR_INLINE f64 fnmul64(f64 a, f64 b) {
+    f64 p = a * b;
+    __asm__("" : SWR_FPREG(p));
+    return -p;
+}
+#endif
+#define FPRM ((int)((c->fpcr >> 22) & 3))
 #if defined(__TINYC__)
 #define CBAR()                                                                                                         \
     do {                                                                                                               \
@@ -568,15 +598,21 @@ void swr_msr(CPU* c, u32 sysreg, u64 v);
 #else
 #define CBAR() __asm__ __volatile__("" ::: "memory")
 #endif
-#define YIELD()                                                                                                        \
-    do {                                                                                                               \
-    } while (0)
-#if defined(__FMA__) && !defined(__TINYC__)
+/* YIELD sits in spin-wait loops: the compiler barrier makes the loop reload guest memory, which the compiler could
+   otherwise hoist out of a loop that makes no call */
+#define YIELD() CBAR()
+/* fused multiply-add (also fp_fma32/fp_fma64, which must give the same results). The product of two floats is exact in
+   double, so for f32 one double add and the narrowing give the fused result, apart from rare double-rounding cases.
+   f64 has no wider type: __builtin_fma is one instruction with -mfma and a libm call without it */
+#if defined(__TINYC__)
+#define FMLA32(d, a, b) ((f32)((f64)(a) * (f64)(b) + (f64)(d)))
+#define FMLA64(d, a, b) ((d) + (a) * (b))
+#elif defined(__FMA__)
 #define FMLA32(d, a, b) __builtin_fmaf((a), (b), (d))
 #define FMLA64(d, a, b) __builtin_fma((a), (b), (d))
 #else
 #define FMLA32(d, a, b) ((f32)((f64)(a) * (f64)(b) + (f64)(d)))
-#define FMLA64(d, a, b) ((d) + (a) * (b))
+#define FMLA64(d, a, b) __builtin_fma((a), (b), (d))
 #endif
 SWR_INLINE void fcmp_(CPU* c, f64 a, f64 b) {
     if (a < b) {

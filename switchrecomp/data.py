@@ -4,6 +4,7 @@
 # This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE).
 """The game's data folder next to the runtime: exefs (always refreshed) and romfs (copied once), and a first .ini."""
 
+import filecmp
 import os
 import shutil
 
@@ -16,13 +17,15 @@ def copy_data(mods, npdm, romfs, entry, datadir, say):
     if os.path.isfile(entry) and entry.lower().endswith('.nro'):
         shutil.copyfile(entry, os.path.join(ex, 'main.nro'))
         if isinstance(romfs, (bytes, bytearray)):
-            open(os.path.join(datadir, 'romfs.bin'), 'wb').write(romfs)
+            with open(os.path.join(datadir, 'romfs.bin'), 'wb') as f:
+                f.write(romfs)
         return
     src = nxloader.find_exefs(entry)
     for n in os.listdir(src):
         s = os.path.join(src, n)
         d = os.path.join(ex, n)
-        if os.path.isfile(s) and not (os.path.exists(d) and os.path.getsize(d) == os.path.getsize(s)):
+        # by content: an update can change a file (main.npdm) without changing its size
+        if os.path.isfile(s) and not (os.path.isfile(d) and filecmp.cmp(s, d, shallow=False)):
             shutil.copyfile(s, d)
     if isinstance(romfs, str):
         dst = os.path.join(datadir, 'romfs')
@@ -31,7 +34,7 @@ def copy_data(mods, npdm, romfs, entry, datadir, say):
             shutil.copytree(romfs, dst)
 
 
-INI = """; %(title)s - SwitchRecomp settings
+INI = """; SwitchRecomp settings for %(title)s
 ; This file is rewritten (organized, with every option explained) the first time the game starts.
 [Display]
 language=1
