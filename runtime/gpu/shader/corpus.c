@@ -20,7 +20,7 @@ int shader_corpus_save(const char* dir, const u8* code, u32 len, u32 max_bytes, 
     }
     f = fopen(path, "wb");
     if (!f) return 0;
-    CorpusHeader h = {{'S', 'W', 'R', 'S'}, 1, (u32)sizeof(ShaderInfo), (u32)stage, len, max_bytes};
+    CorpusHeader h = {{'S', 'N', 'X', 'S'}, 1, (u32)sizeof(ShaderInfo), (u32)stage, len, max_bytes};
     int ok = fwrite(&h, sizeof h, 1, f) == 1 && fwrite(si, sizeof *si, 1, f) == 1 && fwrite(code, 1, len, f) == len;
     ok = fclose(f) == 0 && ok;
     if (!ok) remove(path); /* a cut-off file would stay and stop the next save */
