@@ -66,6 +66,10 @@ void kthread_start(KThread* t);
 void svc_exit_thread(KThread* t);
 extern KThread* g_main;
 void process_exit(int code);
+extern int g_default_core; /* the main thread's core, which core -2 means in svcCreateThread and svcSetThreadCoreMask */
+void core_preempt(KThread* t); /* gives the core to a waiting thread of higher priority, then waits for it again */
+void core_yield(KThread* t);   /* gives the core to a waiting thread of any priority, then waits for it again */
+void core_set_prio(KThread* t, int prio); /* svcSetThreadPriority: the core waiting lists pick by it */
 
 /* sync.c */
 u32 svc_arbitrate_lock(KThread* t, u32 owner, u64 addr, u32 tag);

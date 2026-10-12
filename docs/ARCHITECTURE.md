@@ -54,6 +54,12 @@ Every guest thread is a host thread. The kernel creates it with `plat_thread`, s
 the module's function for the thread's entry point. Synchronization (mutexes, condition variables, events, address
 arbitration) is implemented in the kernel with host locks and condition variables.
 
+A console core runs one thread at a time, and games keep per-core state without locks. So a guest thread holds one of
+the four guest cores while it runs (`core_enter` in `kernel/thread.c`) and lets go of it where a console thread leaves
+the CPU: when it blocks in the kernel, sleeps or yields, makes an IPC call, or waits in WFE. A free core goes to its
+waiting thread of highest priority, and a thread holding a core gives it up at its next SVC when one of higher
+priority waits for it.
+
 The guest's whole address space is one host reservation (`g_mem`, `kernel/mem.c`), so a guest address is an offset
 into it (`GP(addr)`). The generated code reads and writes guest memory directly. The kernel tracks which ranges are
 mapped, with what state and permissions, the way the console's memory manager does.
@@ -71,26 +77,30 @@ the console would, since the game's SDK code checks the replies and asserts when
    memory, exactly as on the console.
 2. It submits them through nvdrv: an ioctl on `/dev/nvhost-gpu` reaches `hle/nvdrv.c`, which hands the GPFIFO entries
    to `gpu_submit` (`gpu/gpu.c`).
-3. `gpu_submit` runs the submission at once on the thread that submitted it, under one lock for every channel. It
-   asks the renderer first (`async_submit`), which could take the submission to a thread of its own, but neither
-   does: Vulkan only notes that guest memory may have changed since the last submission. `gpu.c` reads the command
-   stream and sends each method to its engine: the 3D engine (`engines.c`, `maxwell3d.c`), the macro engine
-   (`mme.c`), compute (`compute.c`), the 2D blitter (`fermi2d.c`), DMA copies (`dma.c`).
+3. `gpu_submit` copies the entries and queues them for the GPU thread, which runs every channel's submissions in the
+   order they were made, and returns. A fence the submission waits for is waited for there when it belongs to a GPU
+   channel and submissions already queued will reach it, and on the submitting thread otherwise (a host1x engine's
+   fence, or one the CPU increments). The GPU thread reads the command stream and sends each method to
+   its engine: the 3D engine (`engines.c`, `maxwell3d.c`), the macro engine (`mme.c`), compute (`compute.c`), the 2D
+   blitter (`fermi2d.c`), DMA copies (`dma.c`).
 4. When the 3D engine sees a draw, it calls the active renderer through `g_renderer` (`gpu/renderer.h`). The renderer
    reads the GPU's state registers, finds or translates the shaders (`gpu/shader/`, Maxwell SASS to GLSL, then
    SPIR-V with glslang), finds or uploads the textures and buffers from guest memory, and draws.
 5. Syncpoint increments in the stream tell the game the GPU got past a point. They go through the renderer
    (`stream_incr`), so that results the game can observe, like compute output, are in guest memory first.
-6. The game presents by queuing a buffer to vi (`hle/vi.c`), which calls the renderer's `present_buffer`. The
-   renderer shows the render target that holds that buffer, or converts the buffer from guest memory when no render
-   target does.
+6. The game presents by queuing a buffer to vi (`hle/vi.c`). vi waits for any fence of the frame that no queued
+   submission promised (a host1x engine's, or one the CPU increments), queues the present for the GPU thread and
+   returns. After the submissions before it, the GPU thread checks the frame's remaining fences and calls
+   the renderer's `present_buffer`, which shows the part of the buffer vi's crop names: from the render target that
+   holds it, or converted from guest memory when no render target does.
 
 ### The renderers
 
 `Renderer` in `gpu/renderer.h` is the table of operations the front end calls: draws, clears, blits, compute
 dispatches, render target flushes and reloads, syncpoints, presenting. Each renderer fills in all of them, with a
 no-op where it has nothing to do, except `save`: it writes what should outlive the process (Vulkan's pipeline
-cache), and is NULL when the renderer keeps nothing. The runtime never shuts the renderer down. Each normal exit (the
+cache), and is NULL when the renderer keeps nothing. The frontend loop calls it every 5 seconds, so a cache that grew is
+written off the GPU thread. The runtime never shuts the renderer down. Each normal exit (the
 window closing, the game calling `svcExitProcess`, the end of an unattended run) calls `save` and then ends the
 process with the guest threads still running.
 
@@ -102,7 +112,8 @@ behind it when it starts, and Vulkan treats those ranges as written the next tim
 - **Vulkan** (`gpu/vk/`): dynamic rendering, pipelines keyed by state, guest memory mirrored in buffers with write
   tracking, and compute on its own queue, with results landing in guest memory before anything the game can observe.
   It needs Vulkan 1.3, and the runtime stops with a message when the GPU or driver doesn't have it.
-- **null** (`gpu/null/`), for the headless build: draws nothing, and finishes each submission at once.
+- **null** (`gpu/null/`), for the headless build: draws nothing. The GPU thread still reads every command stream, so
+  syncpoints and semaphores advance as the game expects.
 
 The release's OpenGL renderer was removed on 2026-10-11, with what only it had: LSFG frame generation, the F7
 recorder, the F5 frame trace, F8 full-resolution screenshots and dynamic resolution.

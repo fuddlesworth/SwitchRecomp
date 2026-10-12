@@ -238,17 +238,16 @@ underneath. What can change is how much of the hardware is emulated and how well
         agree on object state.
         With the register-level Vulkan renderer now matching OpenGL, this stays a possible later rewrite rather
         than a next step: the cost is large and it fixes nothing that is broken today.
-- [ ] A GPU architecture rewrite. The command stream runs on the thread that submitted it, under one lock for every
-      channel, so a semaphore acquire or syncpoint wait in the stream holds up every other channel's submissions, and
-      a wait for another channel's work can't end. The waits give up after 2 seconds and log it rather than hang. A
-      GPU thread (or a lock per channel) with the waits outside the submit lock is the fix, and it touches most of the
-      front end.
+- [ ] A GPU architecture rewrite. Since 2026-10-11 every submission runs on one GPU thread in the order it was made,
+      and the game's threads go on while it works. A semaphore acquire or syncpoint wait in a command stream still
+      holds up every other channel, and a wait for work queued behind it can't end until it gives up after 2 seconds
+      and logs it. A queue per channel, run in turn, is the next step.
 - [x] The OpenGL renderer removed (2026-10-11). Vulkan had drawn by default since step 4, matched OpenGL from boot to
       the New Game cutscene, and doesn't have the title-screen crash. A GPU or driver without Vulkan 1.3 now stops
       the runtime at startup with a message. Gone with OpenGL, and not on Vulkan yet: LSFG frame generation (and
       SPIRV-Cross, which only it needed), the F7 recorder with its smooth recording clock, the F5 frame trace, F8
-      full-resolution screenshots, dynamic resolution, applying vi's crop and transform to a presented buffer (now
-      logged as "not applied"), and BCn decoding on the CPU for GPUs without BCn.
+      full-resolution screenshots, dynamic resolution, applying vi's transform to a presented buffer (logged as "not
+      applied") and BCn decoding on the CPU for GPUs without BCn. vi's crop is applied again since 2026-10-11.
 
 ## Phase 7: polish and games
 

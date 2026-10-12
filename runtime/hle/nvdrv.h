@@ -17,5 +17,9 @@ void syncpt_free(u32 id); /* the id can be handed out again */
 u32 syncpt_read(u32 id);
 void syncpt_incr(u32 id);
 int syncpt_wait(u32 id, u32 thresh, i64 timeout_ns);
+/* queues fn(arg) on the GPU thread after every submission made before it, for vi's presents. A fence a queued
+   submission promised is reached by then unless a stream fell short (fn checks it). Any other fence is waited for here,
+   1 s at most, and its id set to ~0 (none) so fn doesn't wait for it again */
+void nv_gpu_call_after(u32 n, u32* id, const u32* val, void (*fn)(void*), void* arg);
 
 #endif

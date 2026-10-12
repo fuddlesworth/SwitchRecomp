@@ -87,7 +87,11 @@ def main():
         return
     cc = toolchain.find_cc(a.cc, target_win)
     if not cc:
-        raise SystemExit('C compiler not found: %s' % a.cc if a.cc else 'No C compiler found (clang).')
+        raise SystemExit(
+            'C compiler not found: %s' % a.cc
+            if a.cc
+            else 'No C compiler found (%s).' % ' or '.join(toolchain.cc_candidates(target_win))
+        )
     say('Compiling with %s (-O%s, %d at a time)...' % (os.path.basename(cc), a.O, a.jobs))
     extra = []
     if a.native:

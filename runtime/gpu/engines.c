@@ -57,7 +57,7 @@ void query_get(GpuChannel* ch, u32* r, int base, u32 v) {
             u32 cur = gmem_r32(addr);
             if (ge ? (i32)(cur - seq) >= 0 : cur == seq) break;
             if (plat_ns() >= end) {
-                /* the stream runs on the submitting thread under g_gpulock: a release that has to come from another
+                /* every channel's stream runs on the one GPU thread: a release that has to come from another
                    channel's submission can't happen while this waits */
                 WARN("gpu: channel %u waited 1 s for report semaphore %llx to %s %x (it has %x), and goes on\n", ch->id,
                      (unsigned long long)addr, ge ? "reach" : "equal", seq, cur);

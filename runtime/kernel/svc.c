@@ -39,8 +39,12 @@ static void svc_enter(KThread* t) {
         pm_unlock(&g_klock);
     }
 }
+/* on the way out the thread takes its core back (if the SVC let go of it) while still inside the SVC, where
+   svcSetThreadActivity doesn't wait for it: a thread pausing it from the same core would otherwise wait for it to run */
 static void svc_leave(KThread* t) {
     for (;;) {
+        core_enter(t);
+        core_preempt(t);
         __atomic_store_n(&t->in_svc, 0, __ATOMIC_SEQ_CST);
         if (LIKELY(!__atomic_load_n(&t->suspended, __ATOMIC_SEQ_CST))) return;
         pm_lock(&g_klock);
@@ -115,7 +119,6 @@ void snx_svc(CPU* c, u32 imm) {
         WARN("SVC 0x%x with invalid handle (args %llx %llx %llx) pc=%llx\n", imm, (unsigned long long)a0,
              (unsigned long long)a1, (unsigned long long)a2, (unsigned long long)c->pc);
     svc_leave(t);
-    core_enter(t); /* if the SVC let go of the core */
 }
 static void snx_svc_(CPU* c, u32 imm) {
     KThread* t = kthread_cur();
@@ -142,7 +145,7 @@ static void snx_svc_(CPU* c, u32 imm) {
         case 0x07: process_exit(0); return;
         case 0x08: {
             int prio = (int)(u32)x[4], core = (int)(i32)(u32)x[5];
-            if (core == -2) core = 0;
+            if (core == -2) core = g_default_core;
             /* the console's checks: a core and a priority the npdm gives the process */
             if (core < 0 || core >= 64 || !((g_core_mask >> core) & 1)) {
                 x[0] = R_BADCORE;
@@ -180,9 +183,10 @@ static void snx_svc_(CPU* c, u32 imm) {
                 /* a yield (0, -1, -2). On the console it returns at once when nothing else waits for the core, and
                    Tears of the Kingdom's frame tasks yield between every work item. sched_yield can give up the
                    rest of a time slice to any thread sharing the host CPU, about 2 ms each here, which made its
-                   loading take minutes. Guest threads run in parallel on the host, so a yield returns at once, with
-                   every 64th in a row still a real one so a spin loop can't starve a thread on its host CPU */
-                core_leave(t); /* threads waiting for this core go first */
+                   loading take minutes. A yield here hands the guest core to a waiting thread, if one waits, and
+                   returns once it has the core back. Every 64th yield of a thread is still a host one, so a spin loop
+                   can't starve a thread on its host CPU */
+                core_yield(t); /* threads waiting for this core go first */
                 if (!(++t->yields & 63)) plat_yield();
             } else {
                 core_leave(t);
@@ -212,7 +216,7 @@ static void snx_svc_(CPU* c, u32 imm) {
                 return;
             }
             pm_lock(&g_klock); /* the waiter lists pick by priority under it */
-            n->prio = (int)prio;
+            core_set_prio(n, (int)prio);
             pm_unlock(&g_klock);
             x[0] = 0;
             return;
@@ -235,26 +239,39 @@ static void snx_svc_(CPU* c, u32 imm) {
                 return;
             }
             i32 core = (i32)(u32)x[1];
-            u64 mask = x[2] & 0xF;
-            if (core == -2) { /* the NPDM's default core, 0 as CreateThread assumes */
-                core = 0;
-                mask = 1;
-            } else if (core == -3)
-                core = n->ideal_core;
-            if (!mask || (core >= 0 && !((mask >> core) & 1))) {
+            u64 mask = x[2];
+            /* the console's checks: a mask within the process's cores, and a core in it */
+            if (core == -2) {
+                core = g_default_core;
+                mask = 1ull << core;
+            } else if ((mask | g_core_mask) != g_core_mask) {
+                x[0] = R_BADCORE;
+                return;
+            } else if (!mask) {
+                x[0] = R_BADCOMBO;
+                return;
+            } else if (core >= NCORES || core < -3) {
+                x[0] = R_BADCORE;
+                return;
+            }
+            pm_lock(&g_klock); /* n may be another thread, changing its own mask */
+            if (core == -3) core = n->ideal_core;
+            if (core >= 0 && !((mask >> core) & 1)) {
+                pm_unlock(&g_klock);
                 x[0] = R_BADCOMBO;
                 return;
             }
             n->ideal_core = core;
             n->affinity = mask;
-            /* a thread the new mask leaves out moves to its ideal core, or with no ideal core to the highest core the
-               mask allows. Tears of the Kingdom moves its render workers with (-1, mask 4) and keeps per-core command
-               memory, indexed by svcGetCurrentProcessorNumber: a worker still reporting core 0 there records over the
-               commands of the thread on core 0 */
+            /* the thread moves to its ideal core, or with no ideal core and a mask that leaves its core out, to the
+               highest core the mask allows. Tears of the Kingdom moves its render workers with (-1, mask 4) and keeps
+               per-core command memory, indexed by svcGetCurrentProcessorNumber: a worker still reporting core 0 there
+               records over the commands of the thread on core 0 */
             if (core >= 0)
                 n->core = core;
             else if (!((mask >> n->core) & 1))
                 n->core = 63 - __builtin_clzll(mask);
+            pm_unlock(&g_klock);
             if (n == t && t->on_core >= 0 && t->on_core != n->core) core_leave(t); /* moves on the way out */
             x[0] = 0;
             return;

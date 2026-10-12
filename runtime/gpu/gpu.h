@@ -68,8 +68,9 @@ u32 gpu_color_bpp(u32 format); /* bytes per pixel of a color format (render targ
 /* gpu.c: GPFIFO submission */
 void gpu_init(void);
 /* queues GPFIFO entries for the GPU thread, which waits for the fence (wait_id ~0: none), runs them on channel (the
-   channel's syncpoint id), then increments the syncpoint incs times */
-void gpu_submit(u64* entries, u32 n, u32 channel, u32 incs, u32 wait_id, u32 wait_val);
+   channel's syncpoint id), then increments the syncpoint incs times, after which it should be at expect (the fence
+   nvdrv promised) */
+void gpu_submit(u64* entries, u32 n, u32 channel, u32 incs, u32 wait_id, u32 wait_val, u32 expect);
 /* calls fn(arg) on the GPU thread once everything submitted before it has run */
 void gpu_call(void (*fn)(void*), void* arg);
 void gpu_channel_close(u32 channel); /* nvdrv closed the channel: a new one with the same id starts from reset */

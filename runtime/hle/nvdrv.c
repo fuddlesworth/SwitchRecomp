@@ -75,6 +75,9 @@ static struct {
     PCond sync_cv;
     PMutex sync_lk;
     u8 syncpt_used[SYNCPT_N];
+    u8 syncpt_gpu[SYNCPT_N]; /* a GPU channel's: submissions promise its increments (syncpt_max), the GPU thread makes
+                                them (sync_lk) */
+    PMutex submit_lk;        /* a submission's promise and its place in the GPU queue, in the same order */
     NvEvent nvev[64];
     /* arming (game thread) races with nv_events_check (GPU/video threads after an incr).
        clear the event BEFORE arming and keep both under one lock, otherwise an incr in between
@@ -103,7 +106,7 @@ u64 nvmap_addr_by_id(u32 id) {
 }
 
 /* ============================================================ GPU VA space (40 bit) */
-/* two level table, gva -> guest address, 4K granularity. The GPU reads it on the submitting threads while ioctl_as
+/* two level table, gva -> guest address, 4K granularity. The GPU thread reads it while ioctl_as
    changes it on others: an L2 table is installed with a CAS and loaded with acquire, entries are relaxed atomics */
 #define GPAGE_BITS 12
 #define GL1        (1u << 16) /* 40-12 = 28 bits, split 16 + 12 */
@@ -311,7 +314,48 @@ void syncpt_free(u32 id) {
     if (id >= SYNCPT_N) return;
     pm_lock(&nv.sync_lk);
     nv.syncpt_used[id] = 0;
+    nv.syncpt_gpu[id] = 0;
     pm_unlock(&nv.sync_lk);
+}
+/* whether a job queued now can wait for a fence on the GPU thread: a GPU channel's value that submissions already
+   promised is reached by the jobs queued ahead of it (a promise and its job are queued in one hold of submit_lk, which
+   the caller takes after this). Any other fence (a host1x engine's, one the CPU increments, or one nothing promised
+   yet) is waited for here, on the calling thread: the GPU thread waiting on it would hold up every channel and
+   present, and work it needs may be queued behind it */
+static int fence_on_gpu_thread(u32 id, u32 val, const char* who, i64 timeout_ns) {
+    if (id == ~0u) return 0;
+    pm_lock(&nv.sync_lk);
+    int gpu = id < SYNCPT_N && nv.syncpt_gpu[id] && (i32)(val - nv.syncpt_max[id]) <= 0;
+    pm_unlock(&nv.sync_lk);
+    if (gpu) return 1;
+    if (!syncpt_wait(id, val, timeout_ns))
+        WARN_LIMIT(8,
+                   "gpu: %s waited %lld ms on its own thread for syncpoint %u to reach %u (it is at %u), and goes on\n",
+                   who, (long long)(timeout_ns / 1000000), id, val, syncpt_read(id));
+    return 0;
+}
+void nv_gpu_call_after(u32 n, u32* id, const u32* val, void (*fn)(void*), void* arg) {
+    for (u32 i = 0; i < n; i++)
+        if (!fence_on_gpu_thread(id[i], val[i], "a present", 1000000000)) id[i] = ~0u; /* done with here */
+    pm_lock(&nv.submit_lk); /* after the submissions promising the fences left to the GPU thread */
+    gpu_call(fn, arg);
+    pm_unlock(&nv.submit_lk);
+}
+/* a GPU channel's syncpoint, allocated on first use. Read once per ioctl: a close of the fd clears it */
+static u32 gpu_channel_syncpt(NvFile* f) {
+    if (f->syncpt) return f->syncpt;
+    u32 sp = syncpt_alloc();
+    pm_lock(&nv.sync_lk);
+    nv.syncpt_gpu[sp] = 1;
+    pm_unlock(&nv.sync_lk);
+    f->syncpt = sp;
+    return sp;
+}
+/* on the GPU thread, after the jobs queued on the channel before its fd closed */
+static void gpu_channel_retire(void* p) {
+    u32 id = (u32)(uintptr_t)p;
+    gpu_channel_close(id);
+    syncpt_free(id);
 }
 
 static void nvev_lock(void) { pm_lock(&nv.nvev_lk); }
@@ -827,8 +871,8 @@ static u32 ioctl_gpu(NvFile* f, u32 cmd, u8* d, u32 n, u8* extra, u32 nextra) {
             return 0;
         }
         case 0x1A: { /* ALLOC_GPFIFO_EX2 {u32 num_entries, num_jobs, flags, NvFence fence, u32 reserved[3]} */
-            if (!f->syncpt) f->syncpt = syncpt_alloc();
-            u32 fence[2] = {f->syncpt, syncpt_read(f->syncpt)};
+            u32 sp = gpu_channel_syncpt(f);
+            u32 fence[2] = {sp, syncpt_read(sp)};
             memcpy(d + 12, fence, 8);
             return 0;
         }
@@ -851,21 +895,23 @@ static u32 ioctl_gpu(NvFile* f, u32 cmd, u8* d, u32 n, u8* extra, u32 nextra) {
                 entries = (u64*)extra;
                 if ((u64)num * 8 > nextra) num = nextra / 8;
             }
-            if (!f->syncpt) f->syncpt = syncpt_alloc();
+            u32 sp = gpu_channel_syncpt(f);
+            /* flags bit 0: wait for the fence passed in before running these */
+            u32 wait_id = (flags & 1) && fence_on_gpu_thread(fid, fval, "a GPU submission", 2000000000) ? fid : ~0u;
             /* the fence promises every increment of this submission. With IncrementWithValue (0x100) the stream
                increments the syncpoint fval times itself; the host adds 2 after it only for FenceIncrement (2), as
                Ryujinx's SubmitGpfifo does */
             u32 host = (flags & 2) ? 2 : 0;
             u32 incs = host + ((flags & 0x100) ? fval : 0);
+            pm_lock(&nv.submit_lk);
             pm_lock(&nv.sync_lk);
-            if ((i32)(nv.syncpt_max[f->syncpt] - nv.syncpt[f->syncpt]) < 0)
-                nv.syncpt_max[f->syncpt] = nv.syncpt[f->syncpt];
-            nv.syncpt_max[f->syncpt] += incs;
-            u32 promised = nv.syncpt_max[f->syncpt];
+            if ((i32)(nv.syncpt_max[sp] - nv.syncpt[sp]) < 0) nv.syncpt_max[sp] = nv.syncpt[sp];
+            nv.syncpt_max[sp] += incs;
+            u32 promised = nv.syncpt_max[sp];
             pm_unlock(&nv.sync_lk);
-            /* flags bit 0: the GPU thread waits for the fence passed in before running these */
-            gpu_submit(entries, num, f->syncpt, host, (flags & 1) ? fid : ~0u, fval);
-            fid = f->syncpt;
+            gpu_submit(entries, num, sp, host, wait_id, fval, promised);
+            pm_unlock(&nv.submit_lk);
+            fid = sp;
             fval = promised;
             memcpy(d + 16, &fid, 4);
             memcpy(d + 20, &fval, 4);
@@ -976,10 +1022,9 @@ static int nvdrv_disp(SvcObj* o, IpcCtx* c) {
                 memset(&nv.nvf[fd], 0, sizeof nv.nvf[fd]);
             }
             pm_unlock(&nv.lock);
-            if (old.dev == DEV_GPU && old.syncpt) { /* the channel and its syncpoint go with the fd */
-                gpu_channel_close(old.syncpt);
-                syncpt_free(old.syncpt);
-            }
+            /* the channel and its syncpoint go with the fd, once the GPU thread has run the jobs queued on it: freed now,
+               the id could go to a new channel those jobs would then increment */
+            if (old.dev == DEV_GPU && old.syncpt) gpu_call(gpu_channel_retire, (void*)(uintptr_t)old.syncpt);
             host1x_close(old.h1x); /* NVDEC, VIC: the channel, its decoder and syncpoints go with the fd */
             for (int k = 0; k < 4; k++)
                 if (old.ev[k]) kobj_unref(&old.ev[k]->o);
@@ -1029,6 +1074,7 @@ void nv_init(void) {
     pm_init(&nv.aslock);
     pm_init(&nv.nvev_lk);
     pm_init(&nv.sync_lk);
+    pm_init(&nv.submit_lk);
     pc_init(&nv.sync_cv);
     nv.gmmu = calloc(GL1, sizeof(u64*));
     svc_register("nvdrv", new_nvdrv);

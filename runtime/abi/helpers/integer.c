@@ -2,7 +2,7 @@
    Licensed under the Apache License 2.0. See LICENSE.apache and NOTICE;
    any copy or derived work must keep the credit to SwitchRecomp by MZ Labs.
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
-/* Part of cpu_helpers.c, which includes it: bitmask immediates, CRC32, compare-and-swap, fences, and the system registers (MRS, MSR). Not compiled on its own. */
+/* Part of cpu_helpers.c, which includes it: bitmask immediates, CRC32, the 16-byte compare-and-swap, and the system registers (MRS, MSR). Not compiled on its own. */
 /* ================================================================ integer */
 u64 snx_decode_bitmask(u32 N, u32 imms, u32 immr, u32 ds) {
     u32 v = (N << 6) | (~imms & 0x3F);
@@ -37,6 +37,9 @@ u32 snx_crc32(u32 acc, u64 val, int bytes, int castagnoli) {
    Tears of the Kingdom's lock-free lists (102 such pairs, a pointer and a counter) got a pointer from one thread and a
    counter from another. Every x86-64 CPU that runs the game has cmpxchg16b, so this function enables it for itself.
    Clang still warns that 16 bytes is past its lock-free size, though it emits the one instruction */
+#ifndef __clang__
+#error "game modules are built with Clang: GCC makes the 16-byte compare-and-swap a call into libatomic"
+#endif
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Watomic-alignment"
 #if defined(__x86_64__)

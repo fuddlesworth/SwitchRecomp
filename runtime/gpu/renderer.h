@@ -12,9 +12,9 @@
 typedef struct Renderer {
     const char* name;
     int (*start)(void); /* 0 when it can't run here */
-    /* called first for every GPFIFO submission, on the submitting thread. 1 would mean the renderer took it to run on a
-       thread of its own; both renderers return 0, and gpu_submit runs it then and there (Vulkan only notes that guest
-       memory may have changed) */
+    /* called first for every GPFIFO submission, on the submitting thread before gpu_submit queues it. 1 would mean the
+       renderer took it, skipping the GPU thread with its order and fence wait; both renderers return 0 (Vulkan only
+       notes that guest memory may have changed) */
     int (*async_submit)(u64* e, u32 n, u32 syncpt, u32 incs);
     /* the 3D engine (maxwell3d.c) */
     void (*clear)(GpuChannel* ch, u32 v);
@@ -35,8 +35,8 @@ typedef struct Renderer {
     /* crop: the part shown (left, top, right, bottom), all 0 for the whole buffer */
     void (*present_buffer)(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, const i32 crop[4]);
     u64 (*screenshot)(const char* path); /* the hash of the frame it saved */
-    /* writes what should outlive the process (the pipeline cache), before an exit that skips the normal shutdown.
-       Any thread, while the others still run. NULL when the renderer keeps nothing */
+    /* writes what should outlive the process (the pipeline cache): every 5 s from the frontend loop, and before an exit
+       that skips the normal shutdown. Any thread, while the others still run. NULL when the renderer keeps nothing */
     void (*save)(void);
 } Renderer;
 

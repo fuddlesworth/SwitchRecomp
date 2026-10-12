@@ -150,7 +150,7 @@ static void read_npdm(void) {
             if ((cap & 0xF) != 0x7) continue; /* ThreadInfo: the lowest and highest priority and core */
             u32 lo_prio = (cap >> 4) & 63, hi_prio = (cap >> 10) & 63, min_core = (cap >> 16) & 255,
                 max_core = (cap >> 24) & 255;
-            if (hi_prio > lo_prio || min_core > max_core || max_core > 63) break;
+            if (hi_prio > lo_prio || min_core > max_core || max_core >= NCORES) break;
             g_core_mask = (~0ull >> (63 - max_core)) & (~0ull << min_core);
             g_prio_mask = (~0ull >> (63 - lo_prio)) & (~0ull << hi_prio);
             break;
@@ -255,7 +255,11 @@ int snx_main(int argc, char** argv) {
         vi_vsync_tick();
         if (tick % 60 == 0) ini_poll();
         frontend_frame();
-        if (++tick % 300 == 0) save_hints();
+        if (++tick % 300 == 0) {
+            save_hints();
+            /* the pipeline cache, when it grew: here, as a file write on the GPU thread would hold up every channel */
+            if (g_renderer && g_renderer->save) g_renderer->save();
+        }
         /* dump thread states to threads.txt every 15s, useful when something hangs */
         if (tick % 900 == 0) {
             char p[1200];

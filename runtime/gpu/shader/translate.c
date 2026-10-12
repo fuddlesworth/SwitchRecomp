@@ -897,11 +897,12 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
         case O_IADD_R:
         case O_IADD_C:
         case O_IADD_I: {
-            if (d != 255) {
+            if (d != 255) { /* a pointer plus an offset, not negated (AvgMode 1 negates B, 2 negates A) */
+                u32 avg = B(w, 48, 2);
                 u8 tg = 0;
-                if (id == O_IADD_C) tg = gbuf_tag(c, w);
-                if (!tg) tg = c->gtag[a];
-                if (!tg && id == O_IADD_R) tg = c->gtag[B(w, 20, 8)];
+                if (id == O_IADD_C && avg != 1) tg = gbuf_tag(c, w);
+                if (!tg && avg != 2) tg = c->gtag[a];
+                if (!tg && id == O_IADD_R && avg != 1) tg = c->gtag[B(w, 20, 8)];
                 c->gtag[d] = tg;
             }
             /* AvgMode 48-49, X 43, CC 47 (Ryujinx InstIaddR) */
@@ -1651,7 +1652,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                     setr(c, d, v);
                 } else {
                     u32 n = sz == 5 ? 2 : sz >= 6 ? 4 : 1;
-                    for (u32 k = 0; k < n && d != 255; k++) setr(c, d + k, T("g%d.d[(o_>>2u)+%uu]", gi, k));
+                    for (u32 k = 0; k < n; k++) setr(c, d + k, T("g%d.d[(o_>>2u)+%uu]", gi, k));
                 }
                 c->indent--;
                 emitl(c, "}");
@@ -1676,9 +1677,7 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                         gi, m, gi, R(c, d), m);
                 } else {
                     u32 n = sz == 5 ? 2 : sz >= 6 ? 4 : 1;
-                    /* RZ as the data of a wide store stores zeros in every word */
-                    for (u32 k = 0; k < n; k++)
-                        emitl(c, "g%d.d[(o_>>2u)+%uu] = %s;", gi, k, R(c, d == 255 ? 255 : d + k));
+                    for (u32 k = 0; k < n; k++) emitl(c, "g%d.d[(o_>>2u)+%uu] = %s;", gi, k, R(c, d + k));
                 }
                 c->indent--;
                 emitl(c, "}");
@@ -2590,7 +2589,6 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 case O_DMNMX_C:
                 case O_DMNMX_I: n = 2; break;
                 case O_TXA: n = (u32)__builtin_popcount(B(w, 31, 4)); break;
-                case O_ATOM:
                 case O_ATOMS:
                 case O_ATOM_CAS:
                 case O_ATOMS_CAS:
@@ -2602,7 +2600,6 @@ static void inst(Ctx* c, u32 idx, u64 w, const Op* op) {
                 case O_HSET2_R:
                 case O_HSET2_C:
                 case O_HSET2_I:
-                case O_VMNMX:
                 case O_VMAD:
                 case O_VADD:
                 case O_ISBERD:

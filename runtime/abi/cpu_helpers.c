@@ -4,8 +4,9 @@
    This fork's changes are under GPL-3.0-or-later, the license of the fork as a whole (LICENSE). */
 /* Helpers that get compiled into the game code module: FP with exact arm semantics (saturation, NaN
    handling, min/max, recip estimates), the AdvSIMD ops we don't emit inline, crypto (AES/SHA/CRC/PMULL)
-   and sysregs. Builds with Clang. The only libm function used is fma, for f64 fused multiply-add when the target
-   has no FMA instruction (FMLA64 in cpu.h). */
+   and sysregs. Builds with Clang. The libm functions it can call are fma, for f64 fused multiply-add when the target
+   has no FMA instruction (FMLA64 in cpu.h), and sqrt and sqrtf, which the square root builtins call to set errno
+   (here only for a NaN, since a negative input returns before them). */
 #include "cpu.h"
 
 /* The helpers by topic, in the order they depend on each other (the module compiles this as one file) */

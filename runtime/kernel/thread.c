@@ -65,27 +65,87 @@ KThread* kthread_create(u64 entry, u64 arg, u64 stack_top, int prio, int core) {
 
 /* A console core runs one thread at a time, and games build on it: Tears of the Kingdom keeps per-core state (command
    memory cursors, heap caches) without locks, indexed by svcGetCurrentProcessorNumber, and every thread created on the
-   default core shares core 0. Guest threads run on host threads in parallel, so a thread holds its core while it runs
-   and lets go only where a console thread is off the CPU too: when it blocks in the kernel, sleeps or yields, makes an
-   IPC call, or waits in WFE. A ticket per core keeps the order fair. */
+   process's default core shares it. Guest threads run on host threads in parallel, so a thread holds its core while it
+   runs and lets go only where a console thread is off the CPU too: when it blocks in the kernel, sleeps or yields,
+   makes an IPC call, or waits in WFE. A thread letting go hands the core to its waiting thread of highest priority, the
+   earliest among equals. The console also preempts a running thread as soon as one of higher priority becomes ready:
+   here the holder can only be stopped at its next SVC (core_preempt), so a thread spinning without SVCs or WFE keeps its
+   core until it blocks. A yield hands the core to any waiting thread, even one of lower priority: the console would run
+   that one on an idle core, and threads don't move between cores here */
 static PMutex g_core_lk;
-static PCond g_core_cv;
-static u64 g_core_next[4], g_core_serving[4];
+static PCond g_core_cv[NCORES];
+static KThread* g_core_owner[NCORES];
+static KThread* g_core_wait[NCORES]; /* the threads waiting for each core, linked by core_next */
+static int g_core_best[NCORES]; /* the best (lowest) priority waiting, 64 when none: core_preempt and core_yield read it
+                                   unlocked */
+static u64 g_core_ticket;
+static KThread* core_first_nl(int k) {
+    KThread* b = NULL;
+    for (KThread* w = g_core_wait[k]; w; w = w->core_next)
+        if (!b || w->prio < b->prio || (w->prio == b->prio && w->core_ticket < b->core_ticket)) b = w;
+    __atomic_store_n(&g_core_best[k], b ? b->prio : 64, __ATOMIC_RELAXED);
+    return b;
+}
+/* core k to w, a thread waiting for it */
+static void core_grant_nl(KThread* w, int k) {
+    KThread** pp = &g_core_wait[k];
+    while (*pp != w) pp = &(*pp)->core_next;
+    *pp = w->core_next;
+    core_first_nl(k);
+    g_core_owner[k] = w;
+    w->on_core = k;
+    pc_broadcast(&g_core_cv[k]);
+}
+static void core_release_nl(KThread* t) {
+    int k = t->on_core;
+    g_core_owner[k] = NULL;
+    t->on_core = -1;
+    KThread* w = core_first_nl(k);
+    if (w) core_grant_nl(w, k);
+}
+static void core_wait_nl(KThread* t) {
+    int k = t->core;
+    t->core_ticket = g_core_ticket++;
+    t->on_core = -2;
+    t->core_next = g_core_wait[k];
+    g_core_wait[k] = t;
+    KThread* w = core_first_nl(k); /* core_preempt sees the new waiter while the core is held */
+    if (!g_core_owner[k]) core_grant_nl(w, k);
+    while (t->on_core != k) pc_wait(&g_core_cv[k], &g_core_lk, -1);
+}
 void core_enter(KThread* t) {
-    if (t->on_core >= 0) return;
-    int k = t->core & 3;
+    if (!t || t->on_core >= 0) return;
     pm_lock(&g_core_lk);
-    u64 my = g_core_next[k]++;
-    while (g_core_serving[k] != my) pc_wait(&g_core_cv, &g_core_lk, -1);
-    t->on_core = k;
+    core_wait_nl(t);
     pm_unlock(&g_core_lk);
 }
 void core_leave(KThread* t) {
     if (!t || t->on_core < 0) return;
     pm_lock(&g_core_lk);
-    g_core_serving[t->on_core]++;
-    t->on_core = -1;
-    pc_broadcast(&g_core_cv);
+    core_release_nl(t);
+    pm_unlock(&g_core_lk);
+}
+void core_preempt(KThread* t) {
+    int k = t->on_core;
+    if (k < 0 || __atomic_load_n(&g_core_best[k], __ATOMIC_RELAXED) >= t->prio) return;
+    pm_lock(&g_core_lk);
+    core_release_nl(t);
+    core_wait_nl(t);
+    pm_unlock(&g_core_lk);
+}
+void core_yield(KThread* t) {
+    int k = t->on_core;
+    /* nobody waits, and svcSetThreadCoreMask didn't move it meanwhile */
+    if (k < 0 || (__atomic_load_n(&g_core_best[k], __ATOMIC_RELAXED) == 64 && t->core == k)) return;
+    pm_lock(&g_core_lk);
+    core_release_nl(t);
+    core_wait_nl(t);
+    pm_unlock(&g_core_lk);
+}
+void core_set_prio(KThread* t, int prio) {
+    pm_lock(&g_core_lk);
+    t->prio = prio;
+    for (int k = 0; k < NCORES; k++) core_first_nl(k);
     pm_unlock(&g_core_lk);
 }
 static void thread_body(void* p) {
@@ -128,12 +188,19 @@ void svc_exit_thread(KThread* t) {
 void kernel_init(void) {
     pm_init(&g_klock);
     pm_init(&g_core_lk);
-    pc_init(&g_core_cv);
+    for (int k = 0; k < NCORES; k++) {
+        pc_init(&g_core_cv[k]);
+        g_core_best[k] = 64;
+    }
 }
 
 /* main thread: stack size from npdm, x0=0, x1=own handle */
 KThread* g_main;
+int g_default_core;
 void kernel_run_main(u64 entry, u64 stack_size, int prio, int core) {
+    if (core < 0 || core >= NCORES || !((g_core_mask >> core) & 1))
+        fatal("The game's main thread asks for CPU core %d, which its own settings don't allow", core);
+    g_default_core = core;
     stack_size = (stack_size + 0xFFF) & ~0xFFFull;
     u64 st = mem_find_free(STACK_BASE, STACK_BASE + STACK_SIZE, stack_size + 0x2000, 0x1000);
     if (!st || mem_map(st + 0x1000, stack_size, MS_STACK, PERM_RW))

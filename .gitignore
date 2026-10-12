@@ -40,6 +40,7 @@ __pycache__/
 # The Windows toolchains and prebuilt binaries bundled in the MZ Labs zip, in case one is unpacked over the checkout
 # (scripts/import-upstream.sh leaves them out of the upstream branch)
 /python/
+/tcc/
 /gcc/
 /w64devkit/
 /bin/

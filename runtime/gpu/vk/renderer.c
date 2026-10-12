@@ -4,8 +4,8 @@
 
    Render targets, clears, draws (gpu/vk/render.c), compute (gpu/vk/compute.c), write-backs to and reloads from
    guest memory, and presenting the game's framebuffer from its render target (or from memory, converted on the CPU,
-   when no render target holds it). Everything that records runs under vk_lock(), which is reentrant: submits on the
-   GPU channel thread that makes them, presents and screenshots on theirs, and compute results landing on whichever
+   when no render target holds it). Everything that records runs under vk_lock(), which is reentrant: submissions and
+   presents on the GPU thread (gpu/gpu.c), screenshots on the thread asking, and compute results landing on whichever
    thread reads their memory first. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,7 +46,7 @@ static int vkr_async_submit(u64* e, u32 n, u32 syncpt, u32 incs) {
     (void)syncpt;
     (void)incs;
     __atomic_add_fetch(&g_vk_epoch, 1, __ATOMIC_RELAXED); /* memory may have changed since the last submit */
-    return 0;                                             /* processed now, on the submitting thread */
+    return 0;                                             /* gpu_submit queues it for the GPU thread */
 }
 static void vkr_clear(GpuChannel* ch, u32 v) {
     vk_lock();
@@ -175,10 +175,17 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
         x1 = (u32)crop[2] < w ? (u32)crop[2] : w;
         y1 = (u32)crop[3] < h ? (u32)crop[3] : h;
     }
-    u32 fw = x1 - x0, fh = y1 - y0;
-    if (src) { /* in its pixels: targets are scaled */
+    if (src) { /* the render target found for the buffer can be smaller than it: a crop outside it shows all of it */
         if (x1 > src->w) x1 = src->w;
         if (y1 > src->h) y1 = src->h;
+        if (x1 <= x0 || y1 <= y0) {
+            x0 = y0 = 0;
+            x1 = w < src->w ? w : src->w;
+            y1 = h < src->h ? h : src->h;
+        }
+    }
+    u32 fw = x1 - x0, fh = y1 - y0;
+    if (src) { /* in its pixels: targets are scaled */
         g_last = src;
         g_last_x = (u32)((u64)src->sw * x0 / src->w);
         g_last_y = (u32)((u64)src->sh * y0 / src->h);
@@ -242,7 +249,6 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
     if (g_last) g_last->last_used = g_vk_present; /* what screenshots read stays */
     vk_tex_frame();
     vk_buf_frame();
-    int save = g_vk_present % 300 == 0;
     if (g_vk_present % 600 == 0) {
         LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped\n",
             (unsigned long long)g_vk_drawn, (unsigned long long)g_vk_skipped, (unsigned long long)g_vk_dispatches,
@@ -268,7 +274,6 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
         vk_swapchain_create(srgb);
     }
     vk_unlock();
-    if (save) vk_pipeline_save(); /* writes a file: not while holding up the GPU threads */
 }
 
 /* a part of a surface, blitted to RGBA8 and read back: its hash, and a .ppm at path if given */

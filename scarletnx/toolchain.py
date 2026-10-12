@@ -17,16 +17,18 @@ from concurrent.futures import ThreadPoolExecutor
 from . import ABI_DIR, REPO
 
 
-def find_cc(pref=None, target_win=False):
-    if pref:
-        cands = [pref]  # the compiler asked for or none: never a different one in its place
-    elif target_win and sys.platform.startswith('win'):
-        cands = ['x86_64-w64-mingw32-clang', 'clang']
-    elif target_win:
+def cc_candidates(target_win=False):
+    if target_win and sys.platform.startswith('win'):
+        return ['x86_64-w64-mingw32-clang', 'clang']
+    if target_win:
         # cross: only llvm-mingw makes a Windows DLL here, the host's clang would make an ELF named .dll
-        cands = ['x86_64-w64-mingw32-clang']
-    else:
-        cands = ['clang']
+        return ['x86_64-w64-mingw32-clang']
+    return ['clang']
+
+
+def find_cc(pref=None, target_win=False):
+    # the compiler asked for or none: never a different one in its place
+    cands = [pref] if pref else cc_candidates(target_win)
     for c in cands:
         p = shutil.which(c) or (c if os.path.isfile(c) else None)
         if p:

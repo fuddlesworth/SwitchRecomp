@@ -254,8 +254,9 @@ void kernel_dump_threads(void) {
         if (!t || t->state == 2) continue;
         int k = t->wait_kind;
         if (k < 0 || k > 5) k = 0;
-        LOG("thread %llu '%s' prio %d: %s", (unsigned long long)t->id, t->name, t->prio,
+        LOG("thread %llu '%s' prio %d core %d: %s", (unsigned long long)t->id, t->name, t->prio, t->core,
             t->state == 0 ? "not started" : kinds[k]);
+        if (t->on_core == -2) LOG(" (waiting for its core)");
         if (t->suspended) LOG(" (paused by svcSetThreadActivity)");
         if (k == 1) LOG(" [%s%s]", t->wait_name ? t->wait_name : "?", t->wait_timeout < 0 ? "" : " with timeout");
         if (k >= 2 && k <= 4) {
@@ -266,8 +267,12 @@ void kernel_dump_threads(void) {
                     mapped(t->wait_key, 4) ? gr32(t->wait_key) : 0u);
             LOG("]");
             if (k == 2 && mapped(a, 4)) { /* the mutex's owner, from the handle in its tag */
-                KObj* o = h_get(gr32(a) & ~HANDLE_WAIT);
-                if (o && o->type == KO_THREAD) LOG(" owned by thread %llu", (unsigned long long)((KThread*)o)->id);
+                u32 h = gr32(a) & ~HANDLE_WAIT;
+                KObj* o = h != H_CUR_THREAD ? h_get_ref(h, KO_THREAD) : NULL;
+                if (o) {
+                    LOG(" owned by thread %llu", (unsigned long long)((KThread*)o)->id);
+                    kobj_unref(o);
+                }
             }
         }
         LOG("  lr=%llx pc=%llx sp=%llx\n", (unsigned long long)t->cpu.x[30], (unsigned long long)t->cpu.pc,

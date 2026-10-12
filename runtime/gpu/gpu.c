@@ -14,7 +14,7 @@
 #include "gpu/gpu.h"
 
 GpuState g_gpu;
-static PMutex g_gpulock;
+static PMutex g_gpulock; /* everything below runs on the GPU thread, which takes it anyway for any future caller */
 
 /* ============================================================ GPU memory */
 int gmem_read(u64 gva, void* dst, u64 size) {
@@ -43,14 +43,18 @@ void gpu_mem_changed(u64 cpu_addr, u64 len) {
    Kingdom's compute programs end close to an uncommitted alias page) would fault a fixed-size read, so the read stops
    at the first page with no guest memory behind it and the rest is zeros */
 void gmem_read_code(u64 gva, void* dst, u64 size) {
-    u64 n = 0;
+    u64 n = 0, lo = 0, hi = 0; /* [lo, hi): the committed block the last page was in */
     while (n < size) {
         u64 cpu = gmmu_translate(gva + n);
         if (!cpu) break;
-        MemBlock b;
-        mem_query(cpu, &b);
-        if (b.state == MS_FREE || b.state == MS_INACCESSIBLE) break;
-        u64 run = b.addr + b.size - cpu; /* committed from here */
+        if (cpu < lo || cpu >= hi) {
+            MemBlock b;
+            mem_query(cpu, &b);
+            if (b.state == MS_FREE || b.state == MS_INACCESSIBLE) break;
+            lo = b.addr;
+            hi = b.addr + b.size;
+        }
+        u64 run = hi - cpu; /* committed from here */
         u64 page = 0x1000 - ((gva + n) & 0xFFF);
         n += run < page ? run : page;
     }
@@ -191,8 +195,8 @@ static void puller_method(GpuChannel* ch, u32 m, u32 v) {
                 g_renderer->stream_incr(id);
             } else {
                 g_renderer->before_syncwait();
-                /* the stream runs on the submitting thread under g_gpulock: an increment that has to come from
-                   another channel's submission can't happen while this waits */
+                /* every channel's stream runs on the one GPU thread: an increment that has to come from another
+                   channel's submission can't happen while this waits */
                 if (!syncpt_wait(id, r[0x1C], 2000000000))
                     WARN("gpu: channel %u waited 2 s for syncpoint %u to reach %u (it is at %u), and goes on\n", ch->id,
                          id, r[0x1C], syncpt_read(id));
@@ -425,6 +429,7 @@ typedef struct {
     u64* e;
     u32 n, channel, incs;
     u32 wait_id, wait_val; /* a fence to wait for first (wait_id ~0: none) */
+    u32 expect;            /* the syncpoint value the job's fence promised */
     void (*fn)(void*);     /* or a call made in order with the submissions (vi's presents) */
     void* arg;
 } GpuJob;
@@ -441,11 +446,16 @@ static void gpu_run(GpuJob* j) {
         return;
     }
     if (j->wait_id != ~0u && !syncpt_wait(j->wait_id, j->wait_val, 2000000000))
-        WARN("gpu: a submission waited 2 s for syncpoint %u to reach %u (it is at %u), and runs anyway\n", j->wait_id,
-             j->wait_val, syncpt_read(j->wait_id));
+        WARN(
+            "gpu: a submission waited 2 s on the GPU thread for syncpoint %u to reach %u (it is at %u), and runs anyway\n",
+            j->wait_id, j->wait_val, syncpt_read(j->wait_id));
     gpu_submit_now(j->e, j->n, j->channel);
     gpu_signal_point();
     for (u32 i = 0; i < j->incs; i++) syncpt_incr(j->channel);
+    /* a stream that increments less than its fence promised leaves whoever waits for the fence waiting 2 s */
+    if ((i32)(syncpt_read(j->channel) - j->expect) < 0)
+        WARN_LIMIT(16, "gpu: channel %u's submission left its syncpoint at %u, short of the %u its fence promised\n",
+                   j->channel, syncpt_read(j->channel), j->expect);
 }
 static void gpu_thread(void* p) {
     (void)p;
@@ -481,14 +491,15 @@ static void gpu_queue(GpuJob j) {
     pm_unlock(&g_qlock);
 }
 volatile u64 g_gpu_submits;
-void gpu_submit(u64* e, u32 n, u32 channel, u32 incs, u32 wait_id, u32 wait_val) {
+void gpu_submit(u64* e, u32 n, u32 channel, u32 incs, u32 wait_id, u32 wait_val, u32 expect) {
     g_gpu_submits++;
     if (g_renderer->async_submit(e, n, channel, incs)) return;
-    GpuJob j = {malloc((u64)n * 8 + 8), n, channel, incs, wait_id, wait_val, NULL, NULL};
+    GpuJob j = {malloc((u64)n * 8 + 8), n, channel, incs, wait_id, wait_val, expect, NULL, NULL};
+    if (!j.e) fatal("Out of memory queueing a GPU submission");
     memcpy(j.e, e, (u64)n * 8);
     gpu_queue(j);
 }
 void gpu_call(void (*fn)(void*), void* arg) {
-    GpuJob j = {NULL, 0, 0, 0, ~0u, 0, fn, arg};
+    GpuJob j = {NULL, 0, 0, 0, ~0u, 0, 0, fn, arg};
     gpu_queue(j);
 }

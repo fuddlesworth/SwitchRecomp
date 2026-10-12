@@ -28,7 +28,7 @@ typedef double f64;
 
 /* the version of the contract between a game module and the runtime (this header, cpu_helpers.c, RtAPI and the
    module descriptor). The recompiler stamps it into each module, the runtime refuses a module with another one */
-#define SNX_ABI 2
+#define SNX_ABI 3
 
 #if defined(_WIN32)
 #define SNX_EXPORT __declspec(dllexport)
@@ -283,16 +283,7 @@ SNX_INLINE i32 sdiv32(i32 a, i32 b) {
 }
 
 /* ---- 64x64 high multiply ---- */
-SNX_INLINE u64 umulh64(u64 a, u64 b) {
-#if defined(__SIZEOF_INT128__)
-    return (u64)(((unsigned __int128)a * b) >> 64);
-#else
-    u64 al = (u32)a, ah = a >> 32, bl = (u32)b, bh = b >> 32;
-    u64 ll = al * bl, lh = al * bh, hl = ah * bl, hh = ah * bh;
-    u64 mid = (ll >> 32) + (u32)lh + (u32)hl;
-    return hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
-#endif
-}
+SNX_INLINE u64 umulh64(u64 a, u64 b) { return (u64)(((unsigned __int128)a * b) >> 64); }
 SNX_INLINE i64 smulh64(i64 a, i64 b) {
     u64 r = umulh64((u64)a, (u64)b);
     if (a < 0) r -= (u64)b;
@@ -401,9 +392,11 @@ SNX_INLINE void dc_zva(u8* M, u64 a) { memset(MP(a & ~63ull), 0, 64); }
 
 /* ---- LDXR/STXR: value-based monitor using CAS ----
    Memory ordering relies on the host being x86-64 (TSO). Exclusive and acquire loads and release stores are seq_cst
-   atomics (LDACQ, STREL below), so the compiler keeps other accesses on their side of them; DMB/DSB LD and ST and ISB
-   are compiler barriers, and the full barriers are mfence (a64.py BARRIER, SNX_FENCE). A weaker host (AArch64) would
-   need real acquire and release operations for plain accesses too */
+   atomics (LDACQ, STREL below), so later accesses stay after an acquire load and earlier ones before a release store, as
+   on ARM (and an STLR stays before a later LDAR); DMB/DSB LD and ST and ISB
+   are compiler barriers, and the full barriers are seq_cst fences (a64.py BARRIER, SNX_FENCE), which Clang emits as a
+   locked or. Plain guest loads and stores are plain host ones, so a host that reorders them (AArch64) would get weaker
+   ordering than the game's barriers ask for */
 SNX_INLINE u32 snx_cas64(u64* p, u64 o, u64 n) {
     return __atomic_compare_exchange_n(p, &o, n, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 }
@@ -418,9 +411,9 @@ SNX_INLINE u32 snx_cas8(u8* p, u8 o, u8 n) {
 }
 u32 snx_cas128(u64* p, u64 o0, u64 o1, u64 n0, u64 n1);
 #define SNX_FENCE()    __atomic_thread_fence(__ATOMIC_SEQ_CST)
-/* LDAR/LDAXR/LDXR and STLR: guest accesses are plain C loads and stores, which the compiler may move across a volatile
-   access or past a fence that comes after the store. Seq_cst atomics keep the ordering ARM gives them (on x86 the load
-   is a mov, the store an xchg) */
+/* LDAR/LDAXR/LDXR and STLR as seq_cst atomics: the compiler keeps later accesses after the load and earlier ones before
+   the store, which it doesn't for plain loads and stores, as ARM orders them (on x86 the load is a mov, the store an
+   xchg). ABI 3: they and the 16-byte compare-and-swap (snx_cas128) became atomic, so older modules are refused */
 #define LDACQ(T, a)    __atomic_load_n((T*)MP(a), __ATOMIC_SEQ_CST)
 #define STREL(T, a, v) __atomic_store_n((T*)MP(a), (T)(v), __ATOMIC_SEQ_CST)
 SNX_INLINE u64 ldx(CPU* c, u8* M, u64 a, u32 sz) {
@@ -543,11 +536,20 @@ SNX_INLINE f64 fnmul64(f64 a, f64 b) {
     __asm__("" : SNX_FPREG(p));
     return -p;
 }
-#define FPRM    ((int)((c->fpcr >> 22) & 3))
-#define CBAR()  __asm__ __volatile__("" ::: "memory")
+#define FPRM   ((int)((c->fpcr >> 22) & 3))
+#define CBAR() __asm__ __volatile__("" ::: "memory")
 /* YIELD sits in spin-wait loops: the compiler barrier makes the loop reload guest memory, which the compiler could
-   otherwise hoist out of a loop that makes no call */
+   otherwise hoist out of a loop that makes no call, and pause tells the CPU the loop spins (it frees the core's other
+   hyperthread, and leaving the loop doesn't flush the pipeline) */
+#if defined(__x86_64__)
+#define YIELD()                                                                                                        \
+    do {                                                                                                               \
+        __builtin_ia32_pause();                                                                                        \
+        CBAR();                                                                                                        \
+    } while (0)
+#else
 #define YIELD() CBAR()
+#endif
 /* fused multiply-add (also fp_fma32/fp_fma64, which must give the same results). The product of two floats is exact in
    double, but the double sum is rounded twice (to double, then to f32), which goes wrong when the double sum lands on an
    f32 halfway point without being exact. Only a double whose low 28 bits are zero can be one: then the sum is rounded to
