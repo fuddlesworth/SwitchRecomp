@@ -398,6 +398,11 @@ int vk_swapchain_create(int srgb) {
     VkCompositeAlphaFlagBitsKHR alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     if (!(caps.supportedCompositeAlpha & alpha)) /* the lowest one it has */
         alpha = (VkCompositeAlphaFlagBitsKHR)(caps.supportedCompositeAlpha & -caps.supportedCompositeAlpha);
+    /* frames are drawn upright: a display held other than its own way (a phone held wide) has its compositor turn
+       them, where its current transform would say they come turned already */
+    VkSurfaceTransformFlagBitsKHR transform = caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                                                  ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                                                  : caps.currentTransform;
     VkSwapchainKHR old = g_vk.swapchain;
     if (old) vkDeviceWaitIdle(g_vk.dev);
     VkSwapchainCreateInfoKHR ci = {.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -409,7 +414,7 @@ int vk_swapchain_create(int srgb) {
                                    .imageArrayLayers = 1,
                                    .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                    .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                                   .preTransform = caps.currentTransform,
+                                   .preTransform = transform,
                                    .compositeAlpha = alpha,
                                    .presentMode = mode,
                                    .clipped = VK_TRUE,
