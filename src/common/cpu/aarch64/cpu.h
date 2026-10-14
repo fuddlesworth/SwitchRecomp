@@ -346,12 +346,10 @@ u64 v_expand_imm(u32 op, u32 cmode, u32 imm8);
 SNX_INLINE void dc_zva(u8* M, u64 a) { memset(MP(a & ~63ull), 0, 64); }
 
 /* ---- LDXR/STXR: value-based monitor using CAS ----
-   Memory ordering relies on the host being x86-64 (TSO). Exclusive and acquire loads and release stores are seq_cst
-   atomics (LDACQ, STREL below), so later accesses stay after an acquire load and earlier ones before a release store, as
-   on ARM (and an STLR stays before a later LDAR); DMB/DSB LD and ST and ISB
-   are compiler barriers, and the full barriers are seq_cst fences (a64_templates.inc BARRIER, SNX_FENCE), which Clang emits as a
-   locked or. Plain guest loads and stores are plain host ones, so a host that reorders them (AArch64) would get weaker
-   ordering than the game's barriers ask for */
+   Exclusive and acquire loads and release stores are seq_cst atomics (LDACQ, STREL below), so later accesses stay after
+   an acquire load and earlier ones before a release store, as on ARM (and an STLR stays before a later LDAR); every DMB,
+   DSB and ISB is a seq_cst fence (a64_templates.inc BARRIER, SNX_FENCE). That is all the ordering the guest asks for,
+   so its plain loads and stores are plain host ones, on x86-64 and on AArch64 alike */
 SNX_INLINE u32 snx_cas64(u64* p, u64 o, u64 n) {
     return __atomic_compare_exchange_n(p, &o, n, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 }

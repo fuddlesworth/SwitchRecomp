@@ -16,7 +16,7 @@ int snx_link(const SnxLinkInput* inputs, size_t count, const char* const* export
         return snx_link_elf(inputs, count, exports, export_count, soname, output, error, error_size);
     if (inputs[0].size >= 2 && inputs[0].data[0] == 0x64 && inputs[0].data[1] == 0x86)
         return snx_link_coff(inputs, count, exports, export_count, soname, output, error, error_size);
-    snprintf(error, error_size, "%s: not an x86-64 ELF or COFF object", inputs[0].name);
+    snprintf(error, error_size, "%s: not an ELF or COFF object", inputs[0].name);
     return -1;
 }
 

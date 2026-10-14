@@ -24,22 +24,23 @@ recompiles on the phone, then the game opens.
   menu keeps on every system) and the newest game log to `/sdcard/ScarletNX/scarletnx-log.txt`, then opens the
   share sheet with them.
 
-Limits: the recompiler makes x86-64 code only, so the app runs on x86_64 Android (the emulator, some tablets and
-Chromebooks) until it makes arm64 code. A game needs a gamepad: there are no on-screen controls yet. Vulkan 1.3
-is required.
+The app runs on arm64 phones and on x86_64 Android (the emulator, some tablets and Chromebooks): the recompiler makes
+the code of the device it runs on. A game needs a gamepad: there are no on-screen controls yet. Vulkan 1.3 is
+required.
 
 ## Building
 
-LLVM's libraries for each ABI, once (about 10 minutes on 12 cores):
+LLVM's libraries for each ABI, once (about 10 minutes each on 12 cores):
 
 ```sh
+scripts/android-llvm.sh arm64-v8a ~/android-llvm/arm64-v8a
 scripts/android-llvm.sh x86_64 ~/android-llvm/x86_64
 ```
 
-Then the APK, from the native build of each ABI given:
+Then the APK, from the native build of each ABI given (one APK holds them all; Android installs the device's):
 
 ```sh
-scripts/android-apk.sh ~/android-build ~/android-llvm x86_64
+scripts/android-apk.sh ~/android-build ~/android-llvm arm64-v8a x86_64
 adb install -r ~/android-build/stage/gradle/outputs/apk/debug/ScarletNX-debug.apk
 ```
 
@@ -48,4 +49,5 @@ Gradle 9 (`GRADLE`, default `gradle`) and a JDK 17 or newer (`JAVA_HOME`). Extra
 `android-apk.sh` installs each build into `<out>/stage` (the libraries, SDL's Java classes and the icon), which
 `dist/android/build.gradle` packs with the two activities; Gradle's own output goes there too.
 
-The Android emulator runs it on an x86_64 image; `-gpu swiftshader_indirect` gives it SwiftShader's Vulkan 1.3.
+The Android emulator runs it on an x86_64 image; `-gpu swiftshader_indirect` gives it SwiftShader's Vulkan 1.3. Its
+ARM translation runs the arm64 build too (an APK with arm64 alone, or an arm64 program from `adb shell`), slowly.

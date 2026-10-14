@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
    Copyright 2026 the ScarletNX contributors */
-/* The LLVM backend's linker: relocatable x86-64 objects (as LLVM and Clang write them, ELF on Unix, COFF on
-   Windows) into the game module the runtime loads, an ELF shared object or a PE DLL. The module defines everything it
-   uses (rtlib.c), so the linker resolves every symbol itself and writes no imports: only the relocations position-
-   independent code needs (ELF R_X86_64_RELATIVE, PE base relocations) and an export table */
+/* The LLVM backend's linker: relocatable objects (as LLVM and Clang write them: x86-64 or AArch64 ELF on Unix and
+   Android, x86-64 COFF on Windows) into the game module the runtime loads, an ELF shared object or a PE DLL. The
+   module defines everything it uses (rtlib.c), so the linker resolves every symbol itself and writes no imports: only
+   the relocations position-independent code needs (ELF R_*_RELATIVE, PE base relocations) and an export table */
 #ifndef SNX_RECOMPILER_LLVM_LINK_H
 #define SNX_RECOMPILER_LLVM_LINK_H
 #include <stddef.h>

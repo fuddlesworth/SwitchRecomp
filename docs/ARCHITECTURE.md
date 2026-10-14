@@ -48,7 +48,8 @@ NX tooling under `src/nx/runtime/driver/` and `src/nx/loader/`:
   `a64_templates.inc` case as the IR of the C it holds, `ir_codegen.c` the functions of `codegen.c`, and
   `src/nx/loader/module_llvm.c` the chunks and `SnxModule` of `module.c`. It links the objects itself (`link_elf.c`,
   `link_coff.c`) with `rtlib.c`, the helpers and interpreter compiled when the recompiler is built, into a module
-  with no imports, for the host it runs on. `tests/llvm_differential.c` runs both backends' step functions on random
+  with no imports, for the host it runs on: x86-64 (ELF or COFF) or AArch64 (ELF, with a veneer for a branch past
+  128 MiB). `tests/llvm_differential.c` runs both backends' step functions on random
   states (every pattern, failing if any instruction falls back to the interpreter's `snx_step`), `tests/llvm_module.c`
   a whole program built by both, `tests/llvm_bench.c` times both on assembly kernels. `gcc` (libgccjit,
   optional, built when libgccjit is found: `cmake/gccjit.cmake`, `SNX_GCCJIT_ROOT`) is for DEC Alpha EV67 hosts,

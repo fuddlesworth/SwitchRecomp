@@ -371,7 +371,7 @@ int main(int argc, char** argv) {
     TableFn table_p, table_l;
     StepFn *steps_p, *steps_l;
     RtAPI rt;
-    int quiet = 0, a, gccjit = 0;
+    int quiet = 0, a, gccjit = 0, march;
 #ifdef SNX_TEST_GCCJIT
     TableFn table_g = NULL;
 #endif
@@ -448,10 +448,15 @@ int main(int argc, char** argv) {
     args[k++] = "-O2";
     args[k++] = "-shared";
     args[k++] = "-w";
-    args[k++] = "-march=x86-64"; /* the reference: the helpers' plain C (no feature macros) */
+    march = k;
+#if defined(__aarch64__)
+    args[k++] = "-march=armv8-a"; /* the reference: the helpers' plain C (no feature macros) */
+#else
+    args[k++] = "-march=x86-64";
+    args[k++] = "-mcx16";
+#endif
     args[k++] = "-fno-strict-aliasing";
     args[k++] = "-fwrapv";
-    args[k++] = "-mcx16";
 #ifndef _WIN32
     args[k++] = "-fPIC";
 #endif
@@ -467,7 +472,7 @@ int main(int argc, char** argv) {
     if (snx_run(args, NULL, NULL, &text)) return snx_error("portable compile failed:\n%s", text ? text : "");
     free(text);
     /* again with -march=native: the helpers' paths for the host's extensions (AES-NI, PCLMULQDQ, CRC32, GFNI) */
-    args[4] = "-march=native";
+    args[march] = "-march=native";
     args[k - 1] = c_native;
     text = NULL;
     if (snx_run(args, NULL, NULL, &text)) return snx_error("native portable compile failed:\n%s", text ? text : "");

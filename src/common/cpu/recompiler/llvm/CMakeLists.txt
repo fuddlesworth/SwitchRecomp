@@ -34,6 +34,9 @@ list(APPEND snx_rtlib_flags -O2 -fvisibility=hidden -fno-strict-aliasing -fwrapv
     -foptimize-sibling-calls -fno-stack-protector)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
     list(APPEND snx_rtlib_flags -mcx16)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    # atomics inline: Clang would call libgcc's or compiler-rt's, and the module links neither
+    list(APPEND snx_rtlib_flags -mno-outline-atomics)
 endif()
 if(WIN32)
     list(APPEND snx_rtlib_flags -mno-stack-arg-probe)

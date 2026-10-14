@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
    Copyright 2026 the ScarletNX contributors */
-/* ELF: x86-64 ET_REL objects into an ET_DYN shared object for Linux and FreeBSD.
+/* ELF: x86-64 or AArch64 ET_REL objects into an ET_DYN shared object for Linux, FreeBSD and Android.
    Layout: [R: headers, .hash .dynsym .dynstr .rela.dyn, read-only data] [RX: .text] [RW: .data .got .dynamic, .bss].
-   Every symbol must be defined by one of the objects; the only dynamic relocations are R_X86_64_RELATIVE, for
-   absolute addresses in writable data and for GOT slots. */
+   Every symbol must be defined by one of the objects; the only dynamic relocations are R_*_RELATIVE, for absolute
+   addresses in writable data and for GOT slots. The two machines' relocation numbers don't overlap (AArch64's start
+   at 257), so one switch takes both. */
 #include "link.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -44,8 +45,35 @@ int snx_link_elf(const SnxLinkInput* inputs, size_t count, const char* const* ex
 #ifndef PT_GNU_STACK
 #define PT_GNU_STACK 0x6474e551
 #endif
-
-#define PAGE 0x1000
+#ifndef EM_AARCH64
+#define EM_AARCH64 183
+#endif
+/* AArch64's, by number: not every <elf.h> has them */
+enum {
+    A64_ABS64 = 257,
+    A64_PREL64 = 260,
+    A64_PREL32 = 261,
+    A64_ADR_PREL_LO21 = 274,
+    A64_ADR_PREL_PG_HI21 = 275,
+    A64_ADR_PREL_PG_HI21_NC = 276,
+    A64_ADD_ABS_LO12_NC = 277,
+    A64_LDST8_ABS_LO12_NC = 278,
+    A64_TSTBR14 = 279,
+    A64_CONDBR19 = 280,
+    A64_JUMP26 = 282,
+    A64_CALL26 = 283,
+    A64_LDST16_ABS_LO12_NC = 284,
+    A64_LDST32_ABS_LO12_NC = 285,
+    A64_LDST64_ABS_LO12_NC = 286,
+    A64_LDST128_ABS_LO12_NC = 299,
+    A64_ADR_GOT_PAGE = 311,
+    A64_LD64_GOT_LO12_NC = 312,
+    A64_RELATIVE = 1027
+};
+/* a branch out of B's reach (128 MiB) goes through a veneer, ADRP x16 + ADD x16 + BR x16: the scratch register the
+   procedure call standard gives them. Below this much code every branch reaches, and no object gets veneers */
+#define VENEER      12
+#define VENEER_TEXT (120ull << 20)
 
 enum { K_RODATA, K_TEXT, K_DATA, K_BSS, K_COUNT };
 
@@ -59,13 +87,18 @@ typedef struct {
     int* kind;          /* per section: output kind, -1 when not loaded */
     uint64_t* address;  /* per section: final virtual address */
     uint64_t* position; /* per section: offset inside its kind */
+    size_t veneers;     /* its veneers, after its code at island (an offset in the code) */
+    uint64_t island;
 } Obj;
 
 typedef struct {
     Obj* objs;
     size_t nobjs;
-    SnxLinkNames globals; /* name -> (object << 32 | symbol index) */
-    SnxLinkNames got;     /* "object:symbol" of a symbol's definition -> GOT slot */
+    SnxLinkNames globals;       /* name -> (object << 32 | symbol index) */
+    SnxLinkNames got;           /* "object:symbol" of a symbol's definition -> GOT slot */
+    SnxLinkNames veneer;        /* "caller:object:symbol" -> the caller's veneer to that definition */
+    unsigned machine, relative; /* EM_X86_64 or EM_AARCH64, and its R_*_RELATIVE */
+    uint64_t page;              /* segment alignment: AArch64 kernels may use 16 or 64 KiB pages */
     uint64_t kind_size[K_COUNT], kind_align[K_COUNT], kind_address[K_COUNT];
     uint64_t got_address;
     size_t got_count, relative_count;
@@ -89,9 +122,11 @@ static int parse(Link* l, Obj* o, const SnxLinkInput* input) {
     o->eh = (const Elf64_Ehdr*)input->data;
     if (input->size < sizeof(Elf64_Ehdr) || memcmp(o->eh->e_ident, ELFMAG, SELFMAG) ||
         o->eh->e_ident[EI_CLASS] != ELFCLASS64 || o->eh->e_ident[EI_DATA] != ELFDATA2LSB || o->eh->e_type != ET_REL ||
-        o->eh->e_machine != EM_X86_64 || o->eh->e_shentsize != sizeof(Elf64_Shdr) ||
+        (o->eh->e_machine != EM_X86_64 && o->eh->e_machine != EM_AARCH64) || o->eh->e_shentsize != sizeof(Elf64_Shdr) ||
         o->eh->e_shoff + (uint64_t)o->eh->e_shnum * sizeof(Elf64_Shdr) > input->size)
-        return fail(l, "%s: not an x86-64 ELF relocatable object%s", input->name, "");
+        return fail(l, "%s: not an x86-64 or AArch64 ELF relocatable object%s", input->name, "");
+    if (!l->machine) l->machine = o->eh->e_machine;
+    if (o->eh->e_machine != l->machine) return fail(l, "%s: another machine's object%s", input->name, "");
     o->sh = (const Elf64_Shdr*)(input->data + o->eh->e_shoff);
     /* one block, the 8-byte arrays first */
     o->address = (uint64_t*)calloc(o->eh->e_shnum, 2 * sizeof(uint64_t) + sizeof(int));
@@ -193,18 +228,32 @@ static uint64_t symbol_address(Link* l, size_t object, size_t index, int* absolu
 }
 
 static int got_reloc(unsigned type) {
-    return type == R_X86_64_GOTPCREL || type == R_X86_64_GOTPCRELX || type == R_X86_64_REX_GOTPCRELX;
+    return type == R_X86_64_GOTPCREL || type == R_X86_64_GOTPCRELX || type == R_X86_64_REX_GOTPCRELX ||
+           type == A64_ADR_GOT_PAGE || type == A64_LD64_GOT_LO12_NC;
 }
 
 static void got_key(char* key, size_t object, size_t index) {
     sprintf(key, "%lu:%lu", (unsigned long)object, (unsigned long)index);
 }
+static void veneer_key(char* key, size_t caller, size_t object, size_t index) {
+    sprintf(key, "%lu:%lu:%lu", (unsigned long)caller, (unsigned long)object, (unsigned long)index);
+}
 
-/* first pass over relocations: GOT slots and R_X86_64_RELATIVE count */
+/* text before veneers, which only a module this large needs */
+static uint64_t text_size(const Link* l) {
+    uint64_t size = 0;
+    size_t i, j;
+    for (i = 0; i < l->nobjs; ++i)
+        for (j = 0; j < l->objs[i].eh->e_shnum; ++j)
+            if (l->objs[i].kind[j] == K_TEXT) size += l->objs[i].sh[j].sh_size + l->objs[i].sh[j].sh_addralign;
+    return size;
+}
+
+/* first pass over relocations: GOT slots, the R_*_RELATIVE count and the veneers each object may need */
 static int scan_relocations(Link* l) {
     size_t i, j, k, def_object, def_index, slot;
-    int weak;
-    char key[48];
+    int weak, far = text_size(l) >= VENEER_TEXT;
+    char key[72];
     for (i = 0; i < l->nobjs; ++i) {
         Obj* o = &l->objs[i];
         for (j = 0; j < o->eh->e_shnum; ++j) {
@@ -225,7 +274,11 @@ static int scan_relocations(Link* l) {
                         snx_link_insert(&l->got, key, l->got_count++);
                         ++l->relative_count;
                     }
-                } else if (type == R_X86_64_64 && !weak) {
+                } else if ((type == A64_CALL26 || type == A64_JUMP26) && far && !weak && def_object != i &&
+                           def_object != (size_t)-1) {
+                    veneer_key(key, i, def_object, def_index);
+                    if (!snx_link_find(&l->veneer, key, &slot)) snx_link_insert(&l->veneer, key, o->veneers++);
+                } else if ((type == R_X86_64_64 || type == A64_ABS64) && !weak) {
                     if (o->kind[s->sh_info] != K_DATA)
                         return fail(l, "%s: absolute address in read-only section %s", o->input->name,
                                     (const char*)o->input->data + o->sh[o->eh->e_shstrndx].sh_offset +
@@ -252,6 +305,10 @@ static void layout_kinds(Link* l) {
                 l->kind_size[k] += o->sh[j].sh_size;
                 if (align > l->kind_align[k]) l->kind_align[k] = align;
             }
+            if (k == K_TEXT && o->veneers) { /* right after the object's code, in reach of all of it */
+                o->island = (l->kind_size[k] + 3) & ~(uint64_t)3;
+                l->kind_size[k] = o->island + VENEER * o->veneers;
+            }
         }
 }
 
@@ -270,6 +327,23 @@ static unsigned long elf_hash(const char* name) {
 
 static void put64(unsigned char* p, uint64_t v) { memcpy(p, &v, 8); }
 static void put32(unsigned char* p, uint32_t v) { memcpy(p, &v, 4); }
+/* an AArch64 instruction with value in its bits from shift, width wide */
+static void field(unsigned char* p, uint64_t value, unsigned shift, unsigned width) {
+    uint32_t insn, mask = (uint32_t)(((uint64_t)1 << width) - 1) << shift;
+    memcpy(&insn, p, 4);
+    insn = (insn & ~mask) | ((uint32_t)(value << shift) & mask);
+    memcpy(p, &insn, 4);
+}
+/* ADR and ADRP's 21-bit immediate: its low two bits at 29, the rest at 5 */
+static void adr_field(unsigned char* p, uint64_t value) {
+    field(p, value & 3, 29, 2);
+    field(p, value >> 2, 5, 19);
+}
+static uint64_t page_of(uint64_t address) { return address & ~(uint64_t)0xFFF; }
+/* whether value fits a signed field of bits */
+static int fits(int64_t value, unsigned bits) {
+    return value >= -((int64_t)1 << (bits - 1)) && value < ((int64_t)1 << (bits - 1));
+}
 
 /* the output's section headers, for tools: debuggers and objdump find the code and the symbols */
 enum {
@@ -323,6 +397,8 @@ int snx_link_elf(const SnxLinkInput* inputs, size_t count, const char* const* ex
     if (!l.objs || !export_address) goto done;
     for (i = 0; i < count; ++i)
         if (parse(&l, &l.objs[i], &inputs[i])) goto done;
+    l.relative = l.machine == EM_AARCH64 ? A64_RELATIVE : R_X86_64_RELATIVE;
+    l.page = l.machine == EM_AARCH64 ? 0x10000 : 0x1000;
     if (collect_globals(&l) || scan_relocations(&l)) goto done;
     layout_kinds(&l);
     /* dynamic symbol names */
@@ -336,8 +412,8 @@ int snx_link_elf(const SnxLinkInput* inputs, size_t count, const char* const* ex
     rela_off = align_up(dynstr_off + dynstr.size, 8);
     rodata_off = align_up(rela_off + l.relative_count * sizeof(Elf64_Rela), l.kind_align[K_RODATA]);
     end_r = rodata_off + l.kind_size[K_RODATA];
-    text_off = align_up(end_r, PAGE);
-    data_off = align_up(align_up(text_off + l.kind_size[K_TEXT], PAGE), l.kind_align[K_DATA]);
+    text_off = align_up(end_r, l.page);
+    data_off = align_up(align_up(text_off + l.kind_size[K_TEXT], l.page), l.kind_align[K_DATA]);
     got_off = align_up(data_off + l.kind_size[K_DATA], 8);
     dynamic_off = got_off + 8 * l.got_count;
     end_data = dynamic_off + sizeof(dyn);
@@ -370,7 +446,7 @@ int snx_link_elf(const SnxLinkInput* inputs, size_t count, const char* const* ex
             value = symbol_address(&l, object, index, &absolute);
             put64(out.data + slot, value);
             r.r_offset = slot;
-            r.r_info = ELF64_R_INFO((Elf64_Xword)0, R_X86_64_RELATIVE);
+            r.r_info = ELF64_R_INFO((Elf64_Xword)0, l.relative);
             r.r_addend = (int64_t)value;
             snx_link_append(&rela, &r, sizeof(r));
         }
@@ -389,8 +465,9 @@ int snx_link_elf(const SnxLinkInput* inputs, size_t count, const char* const* ex
                 uint64_t P = o->address[s->sh_info] + r[k].r_offset, S = 0, value;
                 int64_t A = r[k].r_addend, relative;
                 int weak, absolute = 1;
-                char key[48];
+                char key[72];
                 size_t slot;
+                uint64_t got;
                 if (type != R_X86_64_NONE && r[k].r_offset + 4 > o->sh[s->sh_info].sh_size) goto bad;
                 if (definition(&l, i, ELF64_R_SYM(r[k].r_info), &def_object, &def_index, &weak)) goto done;
                 if (!weak) S = symbol_address(&l, def_object, def_index, &absolute);
@@ -398,12 +475,13 @@ int snx_link_elf(const SnxLinkInput* inputs, size_t count, const char* const* ex
                 switch (type) {
                     case R_X86_64_NONE: break;
                     case R_X86_64_64:
+                    case A64_ABS64:
                         value = S + (uint64_t)A;
                         put64(p, value);
                         if (!weak && !absolute) {
                             Elf64_Rela d;
                             d.r_offset = P;
-                            d.r_info = ELF64_R_INFO((Elf64_Xword)0, R_X86_64_RELATIVE);
+                            d.r_info = ELF64_R_INFO((Elf64_Xword)0, l.relative);
                             d.r_addend = (int64_t)value;
                             snx_link_append(&rela, &d, sizeof(d));
                         }
@@ -431,13 +509,95 @@ int snx_link_elf(const SnxLinkInput* inputs, size_t count, const char* const* ex
                         put32(p, (uint32_t)relative);
                         break;
                     case R_X86_64_GOTPC64: put64(p, got_off + (uint64_t)A - P); break;
+                    case A64_PREL64: put64(p, S + (uint64_t)A - P); break;
+                    case A64_PREL32:
+                        relative = (int64_t)(S + (uint64_t)A - P);
+                        if (relative != (int32_t)relative) goto range;
+                        put32(p, (uint32_t)relative);
+                        break;
+                    case A64_ADR_PREL_LO21:
+                        relative = (int64_t)(S + (uint64_t)A - P);
+                        if (!fits(relative, 21)) goto range;
+                        adr_field(p, (uint64_t)relative);
+                        break;
+                    case A64_ADR_PREL_PG_HI21:
+                    case A64_ADR_PREL_PG_HI21_NC:
+                        relative = (int64_t)(page_of(S + (uint64_t)A) - page_of(P)) >> 12;
+                        if (type == A64_ADR_PREL_PG_HI21 && !fits(relative, 21)) goto range;
+                        adr_field(p, (uint64_t)relative);
+                        break;
+                    case A64_ADD_ABS_LO12_NC: field(p, (S + (uint64_t)A) & 0xFFF, 10, 12); break;
+                    case A64_LDST8_ABS_LO12_NC:
+                    case A64_LDST16_ABS_LO12_NC:
+                    case A64_LDST32_ABS_LO12_NC:
+                    case A64_LDST64_ABS_LO12_NC:
+                    case A64_LDST128_ABS_LO12_NC: {
+                        /* the offset is scaled by the access's size, which the address must be a multiple of */
+                        unsigned shift = type == A64_LDST8_ABS_LO12_NC    ? 0
+                                         : type == A64_LDST16_ABS_LO12_NC ? 1
+                                         : type == A64_LDST32_ABS_LO12_NC ? 2
+                                         : type == A64_LDST64_ABS_LO12_NC ? 3
+                                                                          : 4;
+                        value = (S + (uint64_t)A) & 0xFFF;
+                        if (value & ((1u << shift) - 1)) goto misaligned;
+                        field(p, value >> shift, 10, 12);
+                        break;
+                    }
+                    case A64_ADR_GOT_PAGE:
+                    case A64_LD64_GOT_LO12_NC:
+                        got_key(key, def_object, def_index);
+                        snx_link_find(&l.got, key, &slot);
+                        got = got_off + 8 * slot;
+                        if (type == A64_LD64_GOT_LO12_NC) {
+                            field(p, (got & 0xFFF) >> 3, 10, 12);
+                            break;
+                        }
+                        relative = (int64_t)(page_of(got + (uint64_t)A) - page_of(P)) >> 12;
+                        if (!fits(relative, 21)) goto range;
+                        adr_field(p, (uint64_t)relative);
+                        break;
+                    case A64_CALL26:
+                    case A64_JUMP26:
+                        relative = (int64_t)(S + (uint64_t)A - P);
+                        if (!fits(relative, 28)) {
+                            /* the caller's veneer, which it reaches, jumps there: ADRP x16, ADD x16, BR x16 */
+                            uint64_t target = S + (uint64_t)A, at;
+                            unsigned char* v;
+                            veneer_key(key, i, def_object, def_index);
+                            if (weak || !snx_link_find(&l.veneer, key, &slot)) goto range;
+                            at = l.kind_address[K_TEXT] + o->island + VENEER * slot;
+                            v = out.data + at;
+                            put32(v, 0x90000010u);
+                            adr_field(v, (uint64_t)((int64_t)(page_of(target) - page_of(at)) >> 12));
+                            put32(v + 4, 0x91000210u);
+                            field(v + 4, target & 0xFFF, 10, 12);
+                            put32(v + 8, 0xD61F0200u);
+                            relative = (int64_t)(at - P);
+                            if (!fits(relative, 28)) goto range;
+                        }
+                        field(p, (uint64_t)relative >> 2, 0, 26);
+                        break;
+                    case A64_CONDBR19:
+                        relative = (int64_t)(S + (uint64_t)A - P);
+                        if (!fits(relative, 21)) goto range;
+                        field(p, (uint64_t)relative >> 2, 5, 19);
+                        break;
+                    case A64_TSTBR14:
+                        relative = (int64_t)(S + (uint64_t)A - P);
+                        if (!fits(relative, 16)) goto range;
+                        field(p, (uint64_t)relative >> 2, 5, 14);
+                        break;
                     default:
                         snprintf(error, error_size, "%s: unsupported relocation type %u", o->input->name, type);
                         goto done;
                 }
                 continue;
             range:
-                snprintf(error, error_size, "%s: relocation out of range (the module exceeds 2 GiB)", o->input->name);
+                snprintf(error, error_size, "%s: relocation %u out of range (the module is too large)", o->input->name,
+                         type);
+                goto done;
+            misaligned:
+                snprintf(error, error_size, "%s: relocation %u to a misaligned address", o->input->name, type);
                 goto done;
             bad:
                 snprintf(error, error_size, "%s: relocation outside its section", o->input->name);
@@ -505,18 +665,18 @@ int snx_link_elf(const SnxLinkInput* inputs, size_t count, const char* const* ex
     ph[0].p_type = PT_LOAD;
     ph[0].p_flags = PF_R;
     ph[0].p_filesz = ph[0].p_memsz = end_r;
-    ph[0].p_align = PAGE;
+    ph[0].p_align = l.page;
     ph[1].p_type = PT_LOAD;
     ph[1].p_flags = PF_R | PF_X;
     ph[1].p_offset = ph[1].p_vaddr = ph[1].p_paddr = text_off;
     ph[1].p_filesz = ph[1].p_memsz = l.kind_size[K_TEXT];
-    ph[1].p_align = PAGE;
+    ph[1].p_align = l.page;
     ph[2].p_type = PT_LOAD;
     ph[2].p_flags = PF_R | PF_W;
     ph[2].p_offset = ph[2].p_vaddr = ph[2].p_paddr = data_off;
     ph[2].p_filesz = end_data - data_off;
     ph[2].p_memsz = bss_off + l.kind_size[K_BSS] - data_off;
-    ph[2].p_align = PAGE;
+    ph[2].p_align = l.page;
     ph[3].p_type = PT_DYNAMIC;
     ph[3].p_flags = PF_R | PF_W;
     ph[3].p_offset = ph[3].p_vaddr = ph[3].p_paddr = dynamic_off;
@@ -619,7 +779,7 @@ int snx_link_elf(const SnxLinkInput* inputs, size_t count, const char* const* ex
     eh.e_ident[EI_VERSION] = EV_CURRENT;
     eh.e_ident[EI_OSABI] = ELFOSABI_NONE;
     eh.e_type = ET_DYN;
-    eh.e_machine = EM_X86_64;
+    eh.e_machine = (Elf64_Half)l.machine;
     eh.e_version = EV_CURRENT;
     eh.e_phoff = sizeof(Elf64_Ehdr);
     eh.e_ehsize = sizeof(Elf64_Ehdr);
@@ -642,6 +802,7 @@ done:
     free(export_address);
     snx_link_names_free(&l.globals);
     snx_link_names_free(&l.got);
+    snx_link_names_free(&l.veneer);
     free(out.data);
     free(dynstr.data);
     free(strtab.data);
