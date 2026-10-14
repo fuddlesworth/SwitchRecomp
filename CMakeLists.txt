@@ -121,12 +121,17 @@ add_subdirectory(tools)
 # `cmake --install` puts the runtime, hactool, the desktop entry and the licenses under CMAKE_INSTALL_PREFIX, which is
 # what the AppImage and the CI artifacts are made from (.github/workflows/build.yml)
 include(GNUInstallDirs)
-install(TARGETS scarletnx RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(NOT ANDROID) # src/nx puts Android's in the app's libraries
+    install(TARGETS scarletnx RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 if(TARGET hactool)
     install(TARGETS hactool RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 if(NOT WIN32)
     install(FILES dist/scarletnx.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT desktop)
+endif()
+if(ANDROID) # the app's launcher icon (dist/android)
+    install(FILES dist/icons/hicolor/256x256/apps/wimsy.png DESTINATION res/mipmap-xxxhdpi RENAME ic_launcher.png)
 endif()
 
 # The licenses go with the binaries: the fork's (GPL-3.0), MZ Labs' (Apache 2.0, with its NOTICE), and those of the

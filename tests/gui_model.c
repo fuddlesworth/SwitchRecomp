@@ -162,6 +162,29 @@ int main(void) {
     assert(!gui_drop_path("file:///tmp/%zz", true));
     assert(!gui_drop_path("one\ntwo", true));
     assert(!gui_drop_path("", true));
+    /* what a picker gives: the Android one's documents of the device's storage and its cards, a download by path; no
+       other of its documents has a path */
+    path = gui_document_path(
+        "content://com.android.externalstorage.documents/document/primary%3ADownload%2FGame%20X.xci");
+    assert(path && !strcmp(path, "/storage/emulated/0/Download/Game X.xci"));
+    free(path);
+    path = gui_document_path("content://com.android.externalstorage.documents/document/1A2B-3C4D%3Agames%2Fa.nsp");
+    assert(path && !strcmp(path, "/storage/1A2B-3C4D/games/a.nsp"));
+    free(path);
+    path = gui_document_path("content://com.android.providers.downloads.documents/document/"
+                             "raw%3A%2Fstorage%2Femulated%2F0%2FDownload%2Fprod.keys");
+    assert(path && !strcmp(path, "/storage/emulated/0/Download/prod.keys"));
+    free(path);
+    assert(!gui_document_path("content://com.android.providers.downloads.documents/document/msf%3A1234"));
+    assert(!gui_document_path("content://com.android.providers.media.documents/document/document%3A12"));
+    assert(!gui_document_path("content://com.android.externalstorage.documents/document/primary%3A%zz"));
+    assert(!gui_document_path("content://com.android.externalstorage.documents/document/primary"));
+    path = gui_document_path("file:///tmp/a%20b.nro");
+    assert(path && !strcmp(path, "/tmp/a b.nro"));
+    free(path);
+    path = gui_document_path("/tmp/ a.nro ");
+    assert(path && !strcmp(path, "/tmp/ a.nro "));
+    free(path);
     /* the theme item asks the GUI for the next theme */
     memset(&themed, 0, sizeof themed);
     themed.selected = GUI_THEME;

@@ -14,6 +14,9 @@
 #include "window_icon.h"
 #include "build_info.h"
 #include "recent.h"
+#ifdef SDL_PLATFORM_ANDROID
+#include "android.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,9 +54,34 @@ typedef struct {
     int native;
     SDL_FingerID finger;      /* the finger on the screen, 0 for none */
     float finger_x, finger_y; /* where it went down, 0 to 1 across the window */
+    Uint32 picked;            /* the event a file from the system's picker comes back as */
 } App;
 static const char* const items[] = {"Load Switch NSP/XCI/NRO", "Load Linux ARM ELF", "Setup device keys",
                                    "Fullscreen", "Enable libgccjit", "Enable gdbstub", "Theme", "Exit"};
+/* what the screens say to press: a phone has a finger, the back button and the system's file picker, nothing to drop */
+#ifdef SDL_PLATFORM_ANDROID
+static const char* const load_labels[] = {"-> Select a file", "-> Select file from games/ instead"};
+#define SAY_MENU "Tap: select. Back: go back."
+#define SAY_LOAD "Choose a load option."
+#define SAY_DROP "Pick the file in the window that opened. Back: go back."
+#define SAY_GAMES "Tap: open. Swipe across: turn the page. Back: go back."
+#define SAY_KEYS "Setup device keys: pick prod.keys in the window that opened"
+#define SAY_KEYS_HOW "Back: go back."
+#define SAY_KEYS_WAIT "Pick prod.keys"
+#define SAY_DONE "Tap to return to menu"
+#define SAY_ABORT "Tap here to abort and return to menu"
+#else
+static const char* const load_labels[] = {"-> Select via drag and drop", "-> Select file from games/ instead"};
+#define SAY_MENU "Arrows/mouse: move. Space/Enter/click: select."
+#define SAY_LOAD "Choose a load option. ESC: back."
+#define SAY_DROP "Drop a file now. Ctrl+V: paste a path. ESC: back."
+#define SAY_GAMES "Up/Down: select. Enter/Space: open. Left/Right or PgUp/PgDown: page."
+#define SAY_KEYS "Setup device keys: drag and drop to this window"
+#define SAY_KEYS_HOW "Ctrl+V: paste a path. ESC: back."
+#define SAY_KEYS_WAIT "Drop prod.keys here"
+#define SAY_DONE "Press [ESC] to return to menu"
+#define SAY_ABORT "Press [ESC] to abort and return to menu"
+#endif
 static SDL_Color rgb(GuiRgb c) {
     SDL_Color out;
     out.r = c.r;
@@ -111,11 +139,32 @@ static void prompt(App* app, GuiPromptLine line, int x, int y, const char* value
     if (p->align == GUI_ALIGN_RIGHT) x = app->cols - 1 - width;
     text(app, SDL_max(0, x), y, framed, color);
 }
+/* the part of the window no system bar or camera covers, in the renderer's pixels: everything is drawn in it */
+static void set_area(App* app) {
+    SDL_Rect r;
+    int ww, wh, ow, oh;
+    SDL_GetWindowSize(app->window, &ww, &wh);
+    SDL_GetRenderOutputSize(app->renderer, &ow, &oh);
+    if (ww > 0 && wh > 0 && SDL_GetWindowSafeArea(app->window, &r)) {
+        r.x = r.x * ow / ww;
+        r.w = r.w * ow / ww;
+        r.y = r.y * oh / wh;
+        r.h = r.h * oh / wh;
+        SDL_SetRenderViewport(app->renderer, &r);
+    } else
+        SDL_SetRenderViewport(app->renderer, NULL);
+}
+static void area(const App* app, int* width, int* height) {
+    SDL_Rect r;
+    SDL_GetRenderViewport(app->renderer, &r);
+    *width = r.w;
+    *height = r.h;
+}
 /* rows of the whole width, as a band behind text */
 static void band(App* app, int row, int rows, GuiRgb c) {
     int width, height;
     SDL_FRect r;
-    SDL_GetRenderOutputSize(app->renderer, &width, &height);
+    area(app, &width, &height);
     r.x = 0;
     r.y = (float)(row * 16 * app->scale);
     r.w = (float)width;
@@ -197,8 +246,12 @@ static int entering(const App* app) {
 static void layout(App* app) {
     int run;
     int width, height;
-    SDL_GetRenderOutputSize(app->renderer, &width, &height);
+    set_area(app);
+    area(app, &width, &height);
     app->scale = SDL_min(width / 640, height / 400);
+    /* a phone packs its pixels tight: the display's own scale, for text and taps of a size, as far as the menu still
+       fits in 27 rows: five recent games and a submenu (render) */
+    app->scale = SDL_max(app->scale, SDL_min((int)(SDL_GetWindowDisplayScale(app->window) + 0.5f), height / (16 * 27)));
     if (app->scale < 1) app->scale = 1;
     app->cols = SDL_min(width / (8 * app->scale), GUI_MAX_COLS);
     app->rows = SDL_min(height / (16 * app->scale), GUI_MAX_ROWS);
@@ -352,7 +405,7 @@ static void render_steps(App* app) {
     const char* title;
     char name[96], head[128];
     SDL_Color ink, soft, failure;
-    SDL_GetRenderOutputSize(app->renderer, &width, &height);
+    area(app, &width, &height);
     if (theme->texture)
         for (y = 3; y < height; y += 4) fill(app, 0, (float)y, (float)width, 1, white, 14);
     ink = rgb(colors->ink); soft = rgb(colors->soft); failure = rgb(colors->failure);
@@ -468,11 +521,11 @@ static void render_steps(App* app) {
     }
     if (app->finished)
         prompt(app, app->abnormal_exit ? GUI_PROMPT_FAILED : GUI_PROMPT_DONE, 1, app->rows - 1,
-               "Press [ESC] to return to menu", soft);
+               SAY_DONE, soft);
     else if (app->aborting)
         prompt(app, GUI_PROMPT_ABORTING, 1, app->rows - 1, "Aborting process tree...", rgb(colors->warning));
     else
-        text(app, 1, app->rows - 1, "Press [ESC] to abort and return to menu", soft);
+        text(app, 1, app->rows - 1, SAY_ABORT, soft);
 }
 /* the screen fading in from black, or the menu or the run fading out to it */
 static void overlay(App* app) {
@@ -490,7 +543,7 @@ static void overlay(App* app) {
         a = 1.0f - (float)(now > app->fade_ms ? now - app->fade_ms : 0) / (float)theme->fade_in_ms;
     if (a <= 0) return;
 
-    SDL_GetRenderOutputSize(app->renderer, &width, &height);
+    area(app, &width, &height);
     fill(app, 0, 0, (float)width, (float)height, black, (Uint8)(a * 255));
 }
 static void render(App* app) {
@@ -527,7 +580,7 @@ static void render(App* app) {
     if (app->menu.view == GUI_LOAD_GAMES && idle) {
         size_t i;
         if (head) {
-            text(app, 1, 1, "Up/Down: select. Enter/Space: open. Left/Right or PgUp/PgDown: page.", ink);
+            text(app, 1, 1, SAY_GAMES, ink);
             text(app, 1, 2, app->games_dir, soft);
         }
         entry(app, 1, 3, "Back [ESC]", false, app->browser.selected == 0);
@@ -544,21 +597,20 @@ static void render(App* app) {
         text(app, 1, app->rows - 4, app->message, focus);
     } else if (app->menu.view == GUI_LOAD_KEYS && idle) {
         if (head) {
-            text(app, 1, 1, "Setup device keys: drag and drop to this window", ink);
-            text(app, 1, 2, "Ctrl+V: paste a path. ESC: back.", soft);
+            text(app, 1, 1, SAY_KEYS, ink);
+            text(app, 1, 2, SAY_KEYS_HOW, soft);
             text(app, 1, 3, app->keys_path ? app->keys_path : "Home directory unavailable.", ink);
         }
         if (app->keys_path && snx_is_file(app->keys_path))
             text(app, 1, 4, "Keys already setup. This will overwrite the previous ones", failure);
         text(app, 1, 6, app->message, focus);
         entry(app, 1, 8, "Back [ESC]", false, app->browser.selected == 0);
-        prompt(app, GUI_PROMPT_KEYS, 1, SDL_max(app->rows / 2, 10), "Drop prod.keys here", focus);
+        prompt(app, GUI_PROMPT_KEYS, 1, SDL_max(app->rows / 2, 10), SAY_KEYS_WAIT, focus);
     } else if (idle) {
         if (head) {
-            text(app, 1, 1, "Arrows/mouse: move. Space/Enter/click: select.", ink);
+            text(app, 1, 1, SAY_MENU, ink);
             text(app, 1, 2,
-                 app->menu.view == GUI_LOAD_DROP ? "Drop a file now. Ctrl+V: paste a path. ESC: back."
-                                                 : "Choose a load option. ESC: back.",
+                 app->menu.view == GUI_LOAD_DROP ? SAY_DROP : SAY_LOAD,
                  soft);
         }
         if (app->recent.count) text(app, 1, 4, "Recent games", soft);
@@ -580,10 +632,10 @@ static void render(App* app) {
             menu_label(app, i, label, sizeof(label));
             entry(app, 1, row, label, is_active, is_focused);
             if (i == app->menu.active && app->menu.view != GUI_LOAD_NONE) {
-                entry(app, 3, row + 1, "-> Select via drag and drop",
+                entry(app, 3, row + 1, load_labels[GUI_LOAD_DRAG],
                       app->menu.load_activated && app->menu.load_active == GUI_LOAD_DRAG,
                       app->menu.focus_load && app->menu.load_selected == GUI_LOAD_DRAG);
-                entry(app, 3, row + 2, "-> Select file from games/ instead",
+                entry(app, 3, row + 2, load_labels[GUI_LOAD_DIRECTORY],
                       app->menu.load_activated && app->menu.load_active == GUI_LOAD_DIRECTORY,
                       app->menu.focus_load && app->menu.load_selected == GUI_LOAD_DIRECTORY);
             }
@@ -598,12 +650,12 @@ static void render(App* app) {
              app->abnormal_exit ? failure : app->finished ? focus : active);
         text(app, 1, 2, app->file ? app->file : "", ink);
         if (app->finished)
-            prompt(app, app->abnormal_exit ? GUI_PROMPT_FAILED : GUI_PROMPT_DONE, 1, 3, "Press [ESC] to return to menu",
+            prompt(app, app->abnormal_exit ? GUI_PROMPT_FAILED : GUI_PROMPT_DONE, 1, 3, SAY_DONE,
                    failure);
         else if (app->aborting)
             prompt(app, GUI_PROMPT_ABORTING, 1, 3, "Aborting process tree...", failure);
         else
-            text(app, 1, 3, "Press [ESC] to abort and return to menu", failure);
+            text(app, 1, 3, SAY_ABORT, failure);
     }
     if (app->has_output && app->menu.view != GUI_LOAD_GAMES && app->menu.view != GUI_LOAD_KEYS && !entering(app)) {
         SDL_SetTextureColorMod(app->font, theme->ink.r, theme->ink.g, theme->ink.b);
@@ -656,6 +708,27 @@ static void leave_run(App* app) {
     app->fade_ms = app->theme.fade_in_ms ? SDL_max(now_ms(app), 1) : 0;
     layout(app);
 }
+#ifdef SDL_PLATFORM_ANDROID
+/* A game runs in the app's game activity, a process of its own: no child of this one gets a window */
+static int play(App* app, const char* game) {
+    char* option = snx_format("--game=%s", game);
+    const char* argv[2] = {option, NULL};
+    int ok = gui_android_play(argv, app->message, sizeof(app->message));
+    free(option);
+    return ok;
+}
+/* the game a run of the driver made ready: there the driver names it, as it cannot open it */
+static void ready(App* app) {
+    int i;
+    for (i = app->steps.count - 1; i >= 0; --i)
+        if (!strcmp(app->steps.step[i].label, "READY")) {
+            char* game = snx_path_join(app->games_dir, app->steps.step[i].detail);
+            play(app, game);
+            free(game);
+            return;
+        }
+}
+#endif
 static void pump(App* app) {
     if (app->menu.running) {
         char buffer[4096];
@@ -678,6 +751,9 @@ static void pump(App* app) {
             app->finished = !app->aborting;
             app->abnormal_exit = app->aborting || status != 0;
             gui_steps_finish(&app->steps, !app->abnormal_exit);
+#ifdef SDL_PLATFORM_ANDROID
+            if (!app->abnormal_exit) ready(app);
+#endif
             recent_name(app, "LAUNCH");
             recent_name(app, "RECOMPILE"); /* a run that ended before its game loaded */
             app->menu.view = GUI_LOAD_NONE;
@@ -699,7 +775,12 @@ static void pump(App* app) {
     if (app->leaving_ms && now_ms(app) - app->leaving_ms >= app->theme.fade_out_ms) leave_run(app);
 }
 static char* find_driver(App* app) {
+#ifdef SDL_PLATFORM_ANDROID
+    /* the app's libraries folder only takes lib*.so: the driver goes in as one */
+    const char* name = app->menu.selected == GUI_SWITCH ? "libscarletnx-run.so" : "libscarletnx-gnuabi.so";
+#else
     const char* name = app->menu.selected == GUI_SWITCH ? "scarletnx-mariko" : "scarletnx-gnuabi";
+#endif
 #ifdef _WIN32
     char* filename = snx_format("%s.exe", name);
 #else
@@ -725,6 +806,14 @@ static void launch(App* app, char* absolute, bool prepared) {
         free(absolute);
         return;
     }
+#ifdef SDL_PLATFORM_ANDROID
+    if (native) {
+        if (play(app, absolute) && app->recent_file && !gui_recent_add(&app->recent, absolute, GUI_SWITCH, true))
+            recent_changed(app);
+        free(absolute);
+        return;
+    }
+#endif
     const char* argv[7] = {native ? absolute : driver};
     size_t n = 1;
     if (!native) argv[n++] = absolute;
@@ -839,6 +928,21 @@ static void drop(App* app, const char* value, bool text_drop) {
         launch(app, absolute, false);
     }
 }
+#ifdef SDL_PLATFORM_ANDROID
+/* the picker answers on its own thread: the choice comes back to event() as an app->picked event */
+static void SDLCALL picker_done(void* userdata, const char* const* files, int filter) {
+    SDL_Event e;
+    (void)filter;
+    SDL_zero(e);
+    e.type = *(const Uint32*)userdata;
+    e.user.data1 = files && files[0] ? SDL_strdup(files[0]) : NULL;
+    SDL_PushEvent(&e);
+}
+static void open_picker(App* app) {
+    if (!app->picked) app->picked = SDL_RegisterEvents(1);
+    if (app->picked) SDL_ShowOpenFileDialog(picker_done, &app->picked, app->window, NULL, 0, NULL, false);
+}
+#endif
 static void menu_key(App* app, GuiKey key) {
     if (app->finished) {
         if (key == GUI_CANCEL && app->theme.fade_out_ms && !app->leaving_ms)
@@ -869,6 +973,9 @@ static void menu_key(App* app, GuiKey key) {
         return;
     }
     gui_menu_key(&app->menu, key);
+#ifdef SDL_PLATFORM_ANDROID
+    if (key == GUI_SELECT && (app->menu.view == GUI_LOAD_DROP || app->menu.view == GUI_LOAD_KEYS)) open_picker(app);
+#endif
     if (app->menu.recent_open) {
         int index = app->menu.recent_open - 1;
         app->menu.recent_open = 0;
@@ -919,9 +1026,8 @@ static void pointer(App* app, float window_x, float window_y, bool click, bool t
     }
     if (app->menu.view != GUI_LOAD_NONE) {
         int row = menu_row(app, app->menu.active);
-        const char* labels[] = {"-> Select via drag and drop", "-> Select file from games/ instead"};
         for (int i = 0; i < 2; ++i) {
-            if (!hit_text(app, x, y, 3, row + i + 1, labels[i], touch)) continue;
+            if (!hit_text(app, x, y, 3, row + i + 1, load_labels[i], touch)) continue;
             app->menu.load_selected = i;
             app->menu.focus_load = true;
             if (click) menu_key(app, GUI_SELECT);
@@ -950,6 +1056,17 @@ static void pointer(App* app, float window_x, float window_y, bool click, bool t
         if (click) menu_key(app, GUI_SELECT);
         return;
     }
+}
+/* the file the system's picker chose, as a dropped one; none (cancelled) goes back */
+static void picked(App* app, const char* uri) {
+    char* path = uri ? gui_document_path(uri) : NULL;
+    if (!uri)
+        menu_key(app, GUI_CANCEL);
+    else if (!path)
+        snprintf(app->message, sizeof(app->message), "Pick the file from the device's storage, not from an app.");
+    else
+        drop(app, path, false);
+    free(path);
 }
 /* ESC: a run is aborted, anything else goes back */
 static void cancel(App* app) {
@@ -1001,6 +1118,11 @@ static void event(App* app, const SDL_Event* e) {
         drop(app, e->drop.data, e->type == SDL_EVENT_DROP_TEXT);
         return; /* SDL3 owns the event's data, unlike SDL2. */
     }
+    if (app->picked && e->type == app->picked) {
+        picked(app, e->user.data1);
+        SDL_free(e->user.data1);
+        return;
+    }
     if (e->type == SDL_EVENT_FINGER_DOWN && !app->finger) {
         app->finger = e->tfinger.fingerID;
         app->finger_x = e->tfinger.x;
@@ -1051,7 +1173,14 @@ static void event(App* app, const SDL_Event* e) {
 }
 static bool initialize(App* app) {
     memset(app, 0, sizeof(*app));
+#ifdef SDL_PLATFORM_ANDROID
+    app->theme = *gui_theme_builtin("yorha");
+    gui_android_start();
+    /* back is ESC here: without this it would close the app */
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+#else
     app->theme = *gui_theme_builtin("default");
+#endif
     /* touch() takes the fingers: SDL would send each as a mouse too */
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     if (!SDL_Init(SDL_INIT_VIDEO)) return false;
@@ -1068,7 +1197,11 @@ static bool initialize(App* app) {
     app->cwd = SDL_GetCurrentDirectory();
     app->games_dir = snx_path_join(app->cwd ? app->cwd : ".", "games");
     app->themes_dirs[0] = snx_path_join(app->cwd ? app->cwd : ".", "themes");
+#ifdef SDL_PLATFORM_ANDROID
+    app->drivers = gui_android_libraries();
+#else
     app->drivers = SDL_GetBasePath();
+#endif
     if (app->drivers) app->themes_dirs[1] = snx_path_join(app->drivers, "themes");
     app->keys_path = device_keys_path();
     gui_console_init(&app->console, 78, 17);

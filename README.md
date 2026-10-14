@@ -63,7 +63,8 @@ Enter or hover and click, then choose drag-and-drop or the paginated `games/` br
 The GUI shows live driver/game
 output and combined CPU/RAM usage. See [GUI launcher](docs/GUI.md).
 
-For more detailed information please see: [Build + run](./docs/BUILD.md).
+For more detailed information please see: [Build + run](./docs/BUILD.md). For the Android app (x86_64 for now),
+see [Android](./docs/ANDROID.md).
 
 # Special thanks
 

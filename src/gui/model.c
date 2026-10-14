@@ -2,6 +2,7 @@
    Copyright 2026 the ScarletNX contributors */
 #include "model.h"
 #include "font.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -305,6 +306,49 @@ char* gui_drop_path(const char* text, bool text_drop) {
 invalid:
     free(result);
     return NULL;
+}
+/* text from at, percent-decoded; NULL when a % is not followed by two hex digits */
+static char* decoded(const char* at) {
+    size_t n = 0;
+    char* out = malloc(strlen(at) + 1);
+    if (!out) return NULL;
+    while (*at) {
+        if (*at != '%') {
+            out[n++] = *at++;
+            continue;
+        }
+        if (hex(at[1]) < 0 || hex(at[2]) < 0) {
+            free(out);
+            return NULL;
+        }
+        out[n++] = (char)(hex(at[1]) << 4 | hex(at[2]));
+        at += 3;
+    }
+    out[n] = 0;
+    return out;
+}
+char* gui_document_path(const char* uri) {
+    static const char storage[] = "content://com.android.externalstorage.documents/document/";
+    static const char downloads[] = "content://com.android.providers.downloads.documents/document/";
+    int download = !strncmp(uri, downloads, sizeof downloads - 1);
+    char *id, *colon, *path = NULL;
+    size_t n;
+    if (!download && strncmp(uri, storage, sizeof storage - 1)) /* other systems' pickers: a path or a file:// URI */
+        return uri[0] == '/' || !strncmp(uri, "file://", 7) ? gui_drop_path(uri, uri[0] != '/') : NULL;
+    id = decoded(uri + (download ? sizeof downloads : sizeof storage) - 1);
+    colon = id ? strchr(id, ':') : NULL;
+    if (colon && download && !strncmp(id, "raw:/", 5)) { /* a download by path; "msf:12" is by number */
+        path = malloc(strlen(colon + 1) + 1);
+        if (path) strcpy(path, colon + 1);
+    } else if (colon && !download) {
+        /* "primary:Download/x.xci" is the device's own storage (its first user's), "1234-5678:x.xci" a card */
+        *colon = 0;
+        n = strlen(id) + strlen(colon + 1) + 32;
+        path = malloc(n);
+        if (path) snprintf(path, n, "/storage/%s/%s", strcmp(id, "primary") ? id : "emulated/0", colon + 1);
+    }
+    free(id);
+    return path;
 }
 
 static const char banner_text[] = "\nScarletNX - ";

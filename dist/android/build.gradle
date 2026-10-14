@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2026 the ScarletNX contributors
+// The Android app around what CMake installs into the stage folder: the libraries, SDL's Java and the icon
+// (scripts/android-apk.sh, docs/ANDROID.md)
+plugins {
+    id 'com.android.application' version '9.4.0'
+}
+
+def stage = file(providers.gradleProperty('scarletnx.stage').get())
+layout.buildDirectory = new File(stage, 'gradle')
+
+android {
+    namespace = 'org.scarletnx'
+    compileSdk = 36
+    defaultConfig {
+        applicationId = 'org.scarletnx'
+        minSdk = 30
+        targetSdk = 36
+        versionCode = 1
+        versionName = '0.1'
+    }
+    sourceSets.main {
+        java.srcDir new File(stage, 'java')
+        jniLibs.srcDir new File(stage, 'lib')
+        res.srcDir new File(stage, 'res')
+    }
+    // extracted into the app's libraries folder, where the menu runs the driver from
+    packaging.jniLibs.useLegacyPackaging = true
+}

@@ -58,7 +58,19 @@ set(components core kernel hle video gpu platform shader vk)
 # third-party code (vma.cpp is VMA's implementation)
 set_source_files_properties("${volk_SOURCE_DIR}/volk.c" gpu/vk/vma.cpp PROPERTIES COMPILE_OPTIONS -w)
 
-add_executable(scarletnx runtime/entry.c)
+if(ANDROID)
+    # the app (dist/android): its game activity loads libscarletnx.so and calls its main; the menu runs the driver as
+    # libscarletnx-run.so, an executable named for the app's libraries folder, which takes only lib*.so
+    add_library(scarletnx SHARED runtime/entry.c)
+    # FFmpeg's assembly reaches its tables PC-relative, as its own shared libraries allow with this
+    target_link_options(scarletnx PRIVATE -Wl,-Bsymbolic)
+    add_executable(scarletnx-run runtime/platform/android_run.c)
+    set_target_properties(scarletnx-run PROPERTIES OUTPUT_NAME libscarletnx-run.so RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    target_link_libraries(scarletnx-run PRIVATE ${CMAKE_DL_LIBS})
+    install(TARGETS scarletnx scarletnx-run LIBRARY DESTINATION lib/${ANDROID_ABI} RUNTIME DESTINATION lib/${ANDROID_ABI})
+else()
+    add_executable(scarletnx runtime/entry.c)
+endif()
 list(TRANSFORM components PREPEND snx_)
 add_library(scarletnx-nx STATIC)
 set_target_properties(scarletnx-nx PROPERTIES LINKER_LANGUAGE CXX)
@@ -66,7 +78,8 @@ target_link_libraries(scarletnx-nx PUBLIC snx_nx_flags ${components} snx_driver)
 target_link_libraries(scarletnx PRIVATE scarletnx-nx)
 # VMA is C++: link with the C++ driver. It goes in the build folder itself, where
 # the native driver and CI look for it
-set_target_properties(scarletnx PROPERTIES LINKER_LANGUAGE CXX RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+set_target_properties(scarletnx PROPERTIES LINKER_LANGUAGE CXX RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 if(WIN32)
     # Prefer static toolchain/SDL libraries. LLVM may still use a DLL import library,
     # resolved by cmake/llvm.cmake and bundled by CI. user32 provides message boxes;
@@ -138,7 +151,12 @@ if(SNX_DEPLOY)
 endif()
 
 # All model names share the same Horizon/Maxwell implementation.
-foreach(model erista mariko aula)
+if(ANDROID)
+    set(snx_models "")
+else()
+    set(snx_models erista mariko aula)
+endif()
+foreach(model ${snx_models})
     if(WIN32)
         add_custom_command(TARGET scarletnx POST_BUILD
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:scarletnx>"

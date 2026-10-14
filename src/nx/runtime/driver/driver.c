@@ -151,6 +151,12 @@ static int play_dump(const char* input, const SnxPaths* paths, unsigned flags, c
         rc = 0;
         goto done;
     }
+#ifdef __ANDROID__
+    /* an app's child process has no window to play in: the app runs the game this names (docs/ANDROID.md) */
+    printf("Ready %s\n", name);
+    rc = 0;
+    goto done;
+#endif
     n = 0;
     command[n++] = game;
     if (flags & SNX_HEADLESS) command[n++] = "-H";

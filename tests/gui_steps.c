@@ -80,6 +80,13 @@ int main(void) {
     gui_steps_finish(&s, 0);
     assert(at(&s, 0)->state == GUI_STEP_FAILED);
 
+    /* on Android the driver ends naming the game it made ready, which the app then runs */
+    gui_steps_reset(&s);
+    feed(&s, "Recompiling Game (1 modules)\n  compiled block 1/4: x\nReady Game\n", 5);
+    gui_steps_finish(&s, 1);
+    assert(s.count == 2 && !strcmp(at(&s, 1)->label, "READY") && !strcmp(at(&s, 1)->detail, "Game"));
+    assert(at(&s, 1)->state == GUI_STEP_DONE && gui_steps_percent(&s) == 100);
+
     /* a native launch, no recompile: 100% from the banner; the oldest steps go past the maximum */
     gui_steps_reset(&s);
     feed(&s, "ScarletNX - Native\n", 1);

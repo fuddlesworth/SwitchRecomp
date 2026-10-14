@@ -55,6 +55,14 @@ static void swipe(App* app, int col, int row, int to_col, int to_row) {
     event(app, &e);
 }
 static void tap(App* app, int col, int row) { swipe(app, col, row, col, row); }
+/* what the system's picker answers, from its own thread */
+static void pick(App* app, const char* uri) {
+    SDL_Event e = {0};
+    e.type = app->picked;
+    e.user.data1 = uri ? SDL_strdup(uri) : NULL;
+    assert(SDL_PushEvent(&e));
+    while (SDL_PollEvent(&e)) event(app, &e);
+}
 static void colored_text_on(App* app, int col, int row, const char* prompt, SDL_Color color, SDL_Color back) {
     /* Verify the exact text, its glyph color and what is behind it in the real renderer. */
     SDL_Surface* image = SDL_RenderReadPixels(app->renderer, NULL);
@@ -978,6 +986,22 @@ int main(int argc, char** argv) {
         app.menu.view = GUI_LOAD_NONE;
         app.browser = (GuiBrowser){0};
     }
+    /* the system's picker, as the Android menu opens it for a file to load: a document with no path stays on the
+       screen, none goes back, a path loads */
+    app.picked = SDL_RegisterEvents(1);
+    assert(app.picked);
+    app.menu.selected = GUI_SWITCH;
+    key(&app, SDLK_RETURN);
+    key(&app, SDLK_RETURN);
+    assert(app.menu.view == GUI_LOAD_DROP);
+    pick(&app, "content://com.android.providers.downloads.documents/document/msf%3A12");
+    assert(app.menu.view == GUI_LOAD_DROP && !app.menu.running && app.message[0]);
+    pick(&app, NULL);
+    assert(app.menu.view == GUI_LOAD_OPTIONS);
+    key(&app, SDLK_RETURN);
+    pick(&app, input);
+    assert(app.menu.running && app.menu.selected == GUI_SWITCH);
+    finish(&app, 0);
     e.type = SDL_EVENT_QUIT;
     event(&app, &e);
     assert(app.menu.quit);
