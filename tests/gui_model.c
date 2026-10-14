@@ -185,6 +185,9 @@ int main(void) {
     path = gui_document_path("/tmp/ a.nro ");
     assert(path && !strcmp(path, "/tmp/ a.nro "));
     free(path);
+    path = gui_document_path("C:\\Games\\a.nro"); /* Windows' */
+    assert(path && !strcmp(path, "C:\\Games\\a.nro"));
+    free(path);
     /* the theme item asks the GUI for the next theme */
     memset(&themed, 0, sizeof themed);
     themed.selected = GUI_THEME;

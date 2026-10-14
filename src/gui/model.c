@@ -334,7 +334,9 @@ char* gui_document_path(const char* uri) {
     char *id, *colon, *path = NULL;
     size_t n;
     if (!download && strncmp(uri, storage, sizeof storage - 1)) /* other systems' pickers: a path or a file:// URI */
-        return uri[0] == '/' || !strncmp(uri, "file://", 7) ? gui_drop_path(uri, uri[0] != '/') : NULL;
+        return !strstr(uri, "://")           ? gui_drop_path(uri, false)
+               : !strncmp(uri, "file://", 7) ? gui_drop_path(uri, true)
+                                             : NULL;
     id = decoded(uri + (download ? sizeof downloads : sizeof storage) - 1);
     colon = id ? strchr(id, ':') : NULL;
     if (colon && download && !strncmp(id, "raw:/", 5)) { /* a download by path; "msf:12" is by number */
