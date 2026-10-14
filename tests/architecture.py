@@ -100,6 +100,48 @@ def check_graph(graph):
     return errors
 
 
+# The C runtime's, POSIX's and Windows' own headers: a project header of one of these names in a directory a target
+# puts on its include path is what a system or SDK header's #include <name> finds first (src/gui/process.h hid the
+# CRT's <process.h> from SDL_thread.h, and _beginthreadex went undeclared on Windows)
+SYSTEM_HEADERS = {
+    'assert.h', 'complex.h', 'ctype.h', 'errno.h', 'fenv.h', 'float.h', 'inttypes.h', 'iso646.h', 'limits.h',
+    'locale.h', 'math.h', 'setjmp.h', 'signal.h', 'stdalign.h', 'stdarg.h', 'stdatomic.h', 'stdbool.h', 'stddef.h',
+    'stdint.h', 'stdio.h', 'stdlib.h', 'stdnoreturn.h', 'string.h', 'tgmath.h', 'threads.h', 'time.h', 'uchar.h',
+    'wchar.h', 'wctype.h', 'dirent.h', 'dlfcn.h', 'fcntl.h', 'poll.h', 'pthread.h', 'sched.h', 'semaphore.h',
+    'termios.h', 'unistd.h', 'conio.h', 'direct.h', 'excpt.h', 'intrin.h', 'io.h', 'malloc.h', 'memory.h',
+    'process.h', 'windows.h',
+}
+
+
+def check_include_shadows(repo, build):
+    reply = build / '.cmake/api/v1/reply'
+    indexes = sorted(reply.glob('index-*.json'))
+    if not indexes:
+        return ['CMake file API did not produce a target/source snapshot']
+    index = json.loads(indexes[-1].read_text(encoding='utf-8'))
+    model = json.loads((reply / index['reply']['codemodel-v2']['jsonFile']).read_text(encoding='utf-8'))
+    repo = repo.resolve()
+    seen, errors = set(), []
+    for configuration in model['configurations']:
+        for entry in configuration['targets']:
+            target = json.loads((reply / entry['jsonFile']).read_text(encoding='utf-8'))
+            for group in target.get('compileGroups', ()):
+                for include in group.get('includes', ()):
+                    directory = Path(include['path'])
+                    if not directory.is_absolute():
+                        directory = repo / directory
+                    directory = directory.resolve()
+                    if not directory.is_relative_to(repo) or not directory.is_dir():
+                        continue
+                    for header in sorted(directory.iterdir()):
+                        if header.is_file() and header.name.lower() in SYSTEM_HEADERS and header not in seen:
+                            seen.add(header)
+                            path = header.relative_to(repo).as_posix()  # the same text on Windows
+                            errors.append(f'{path} is on {entry["name"]}\'s include path, where it hides the system '
+                                          f'<{header.name.lower()}>')
+    return errors
+
+
 def check_target_sources(repo, build):
     reply = build / '.cmake/api/v1/reply'
     indexes = sorted(reply.glob('index-*.json'))
@@ -161,6 +203,7 @@ def main():
             return result.returncode
         errors.extend(check_graph(graph))
         errors.extend(check_target_sources(args.repo.resolve(), args.build.resolve()))
+        errors.extend(check_include_shadows(args.repo.resolve(), args.build.resolve()))
     if args.graph:
         errors.extend(check_graph(args.graph))
     if errors:
