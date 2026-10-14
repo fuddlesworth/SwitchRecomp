@@ -33,6 +33,28 @@ static void mouse(App* app, int col, int row, bool click) {
     }
     event(app, &e);
 }
+/* a finger down on one cell and lifted on another, as SDL gives it: 0 to 1 across the window */
+static void swipe(App* app, int col, int row, int to_col, int to_row) {
+    SDL_Event e = {0};
+    float x, y;
+    int w, h;
+    layout(app);
+    SDL_GetWindowSize(app->window, &w, &h);
+    e.tfinger.fingerID = 7;
+    e.type = SDL_EVENT_FINGER_DOWN;
+    assert(SDL_RenderCoordinatesToWindow(app->renderer, (col + 0.5f) * 8 * app->scale, (row + 0.5f) * 16 * app->scale,
+                                        &x, &y));
+    e.tfinger.x = x / (float)w;
+    e.tfinger.y = y / (float)h;
+    event(app, &e);
+    e.type = SDL_EVENT_FINGER_UP;
+    assert(SDL_RenderCoordinatesToWindow(app->renderer, (to_col + 0.5f) * 8 * app->scale,
+                                        (to_row + 0.5f) * 16 * app->scale, &x, &y));
+    e.tfinger.x = x / (float)w;
+    e.tfinger.y = y / (float)h;
+    event(app, &e);
+}
+static void tap(App* app, int col, int row) { swipe(app, col, row, col, row); }
 static void colored_text_on(App* app, int col, int row, const char* prompt, SDL_Color color, SDL_Color back) {
     /* Verify the exact text, its glyph color and what is behind it in the real renderer. */
     SDL_Surface* image = SDL_RenderReadPixels(app->renderer, NULL);
@@ -516,6 +538,30 @@ int main(int argc, char** argv) {
     assert(!strcmp(app.message, "Program ended abnormally (force-terminated by ESC)."));
     render(&app);
     red_text(&app, app.log_top - 4, app.message);
+    /* a finger on a running run's ESC line aborts it, anywhere else it does nothing */
+    assert(!snx_write_file(hung, "", 0));
+    launch(&app, snx_strdup(hung), false);
+    for (until = SDL_GetTicks() + 5000, ready = false; !ready && SDL_GetTicks() < until; SDL_Delay(5)) {
+        unsigned char* data = snx_read_file(hung, &size);
+        ready = data && size == 5 && !memcmp(data, "ready", 5);
+        free(data);
+        pump(&app);
+    }
+    assert(ready && app.menu.running);
+    assert(escape_row(&app) == 3); /* the console's ESC line, under the head */
+    tap(&app, 20, 5);
+    assert(app.menu.running && !app.aborting);
+    app.theme = *gui_theme_builtin("yorha"); /* a loading screen's is the last row */
+    tap(&app, 20, 3);
+    assert(!app.aborting);
+    tap(&app, 20, app.rows - 1);
+    assert(app.aborting);
+    app.theme = *gui_theme_builtin("default");
+    while (app.menu.running && SDL_GetTicks() < until) {
+        pump(&app);
+        SDL_Delay(5);
+    }
+    assert(!app.menu.running && app.abnormal_exit);
     free(hung);
 
     /* Browser: missing/empty directories, filtering, page controls and both
@@ -891,6 +937,46 @@ int main(int argc, char** argv) {
         app.theme = *gui_theme_builtin("default");
         app.menu.gccjit = app.menu.gdbstub = false;
         free(steps_input);
+    }
+    /* fingers: a tap clicks anywhere on a row, which a mouse does on the label only; a drag is no tap, nor a second
+       finger; a swipe across turns the games' pages; back is ESC */
+    {
+        bool fullscreen = app.menu.fullscreen;
+        int row = menu_row(&app, GUI_FULLSCREEN);
+        SDL_Event second = {0};
+        assert(app.menu.view == GUI_LOAD_NONE && !app.menu.running && !app.finished);
+        mouse(&app, app.cols - 3, row, true);
+        assert(app.menu.fullscreen == fullscreen);
+        tap(&app, app.cols - 3, row);
+        assert(app.menu.fullscreen != fullscreen && app.menu.selected == GUI_FULLSCREEN);
+        swipe(&app, 10, row, 10, row + 4);
+        assert(app.menu.fullscreen != fullscreen);
+        second.type = SDL_EVENT_FINGER_DOWN;
+        second.tfinger.fingerID = 8;
+        event(&app, &second); /* the first finger is still down */
+        assert(app.finger == 8);
+        tap(&app, 2, row); /* finger 7: no finger of the screen's */
+        assert(app.menu.fullscreen != fullscreen);
+        second.type = SDL_EVENT_FINGER_UP;
+        second.tfinger.x = app.finger_x;
+        second.tfinger.y = app.finger_y;
+        event(&app, &second); /* finger 8 lifts where it went down, on the title: nothing there */
+        assert(!app.finger && app.menu.fullscreen != fullscreen);
+        tap(&app, 2, row);
+        assert(app.menu.fullscreen == fullscreen);
+        tap(&app, 2, menu_row(&app, GUI_SWITCH));
+        assert(app.menu.view == GUI_LOAD_OPTIONS);
+        key(&app, SDLK_AC_BACK);
+        assert(app.menu.view == GUI_LOAD_NONE);
+        app.menu.view = GUI_LOAD_GAMES;
+        app.browser = (GuiBrowser){.count = 1000};
+        layout(&app);
+        swipe(&app, 60, 10, 10, 11);
+        assert(app.browser.page == 1);
+        swipe(&app, 10, 10, 60, 10);
+        assert(app.browser.page == 0);
+        app.menu.view = GUI_LOAD_NONE;
+        app.browser = (GuiBrowser){0};
     }
     e.type = SDL_EVENT_QUIT;
     event(&app, &e);

@@ -49,6 +49,8 @@ typedef struct {
     Uint64 sampled;
     bool has_output, finished, aborting, abnormal_exit;
     int native;
+    SDL_FingerID finger;      /* the finger on the screen, 0 for none */
+    float finger_x, finger_y; /* where it went down, 0 to 1 across the window */
 } App;
 static const char* const items[] = {"Load Switch NSP/XCI/NRO", "Load Linux ARM ELF", "Setup device keys",
                                    "Fullscreen", "Enable libgccjit", "Enable gdbstub", "Theme", "Exit"};
@@ -884,11 +886,12 @@ static void menu_key(App* app, GuiKey key) {
         layout(app);
     }
 }
-static bool hit_text(const App* app, float x, float y, int col, int row, const char* label) {
-    int end = SDL_min(app->cols - 1, col + (int)SDL_utf8strlen(label));
-    return x >= col && x < end && y >= row && y < row + 1;
+/* a label's cells, or its whole row for a finger, which is wider than a mouse pointer */
+static bool hit_text(const App* app, float x, float y, int col, int row, const char* label, bool touch) {
+    int end = touch ? app->cols : SDL_min(app->cols - 1, col + (int)SDL_utf8strlen(label));
+    return x >= (touch ? 0 : col) && x < end && y >= row && y < row + 1;
 }
-static void pointer(App* app, float window_x, float window_y, bool click) {
+static void pointer(App* app, float window_x, float window_y, bool click, bool touch) {
     if (app->menu.running || app->finished) return;
     layout(app);
     float x, y;
@@ -896,18 +899,18 @@ static void pointer(App* app, float window_x, float window_y, bool click) {
     x /= 8 * app->scale;
     y /= 16 * app->scale;
     if (app->menu.view == GUI_LOAD_KEYS) {
-        if (click && hit_text(app, x, y, 1, 8, "Back [ESC]")) menu_key(app, GUI_CANCEL);
+        if (click && hit_text(app, x, y, 1, 8, "Back [ESC]", touch)) menu_key(app, GUI_CANCEL);
         return;
     }
     if (app->menu.view == GUI_LOAD_GAMES) {
-        if (hit_text(app, x, y, 1, 3, "Back [ESC]")) {
+        if (hit_text(app, x, y, 1, 3, "Back [ESC]", touch)) {
             app->browser.selected = 0;
             if (click) menu_key(app, GUI_SELECT);
             return;
         }
         size_t start = app->browser.page * app->browser.page_size;
         for (size_t i = 0; i < gui_browser_items(&app->browser); ++i) {
-            if (!hit_text(app, x, y, 1, 5 + (int)i, app->games.names[start + i])) continue;
+            if (!hit_text(app, x, y, 1, 5 + (int)i, app->games.names[start + i], touch)) continue;
             app->browser.selected = i + 1;
             if (click) menu_key(app, GUI_SELECT);
             return;
@@ -918,7 +921,7 @@ static void pointer(App* app, float window_x, float window_y, bool click) {
         int row = menu_row(app, app->menu.active);
         const char* labels[] = {"-> Select via drag and drop", "-> Select file from games/ instead"};
         for (int i = 0; i < 2; ++i) {
-            if (!hit_text(app, x, y, 3, row + i + 1, labels[i])) continue;
+            if (!hit_text(app, x, y, 3, row + i + 1, labels[i], touch)) continue;
             app->menu.load_selected = i;
             app->menu.focus_load = true;
             if (click) menu_key(app, GUI_SELECT);
@@ -930,7 +933,7 @@ static void pointer(App* app, float window_x, float window_y, bool click) {
         char label[160];
         for (game = 0; game < app->recent.count; ++game) {
             recent_label(app, game, label, sizeof label);
-            if (!hit_text(app, x, y, 1, 5 + game, label)) continue;
+            if (!hit_text(app, x, y, 1, 5 + game, label, touch)) continue;
             app->menu.recent_focus = game + 1;
             app->menu.focus_load = false;
             if (click) menu_key(app, GUI_SELECT);
@@ -940,13 +943,54 @@ static void pointer(App* app, float window_x, float window_y, bool click) {
     for (int i = 0; i < GUI_ITEM_COUNT; ++i) {
         char label[100];
         menu_label(app, i, label, sizeof(label));
-        if (!hit_text(app, x, y, 1, menu_row(app, i), label)) continue;
+        if (!hit_text(app, x, y, 1, menu_row(app, i), label, touch)) continue;
         app->menu.selected = i;
         app->menu.recent_focus = 0;
         app->menu.focus_load = false;
         if (click) menu_key(app, GUI_SELECT);
         return;
     }
+}
+/* ESC: a run is aborted, anything else goes back */
+static void cancel(App* app) {
+    if (!app->menu.running)
+        menu_key(app, GUI_CANCEL);
+    else if (!app->aborting) {
+        /* Do not ask a hung program to shut down or wait on it in the event
+           handler. Kill its tree now and let pump reap it without blocking. */
+        gui_process_terminate(app->process);
+        app->aborting = true;
+    }
+}
+/* the row of a running run's ESC line, -1 when it has none */
+static int escape_row(const App* app) {
+    if (app->theme.run == GUI_RUN_STEPS) return app->rows - 1;
+    return app->theme.head != GUI_STYLE_NONE ? 3 : -1;
+}
+/* a finger lifted at x, y (0 to 1 across the window): a swipe across turns the games' pages; a tap clicks there, is ESC
+   on a finished run and on a running one's ESC line */
+static void touch(App* app, float x, float y) {
+    float dx = x - app->finger_x, dy = y - app->finger_y, rx, ry;
+    int w, h;
+    if (SDL_fabsf(dx) > 0.1f && SDL_fabsf(dx) > 2 * SDL_fabsf(dy)) {
+        if (app->menu.view == GUI_LOAD_GAMES && !app->menu.running && !app->finished)
+            menu_key(app, dx < 0 ? GUI_PAGE_DOWN : GUI_PAGE_UP);
+        return;
+    }
+    if (SDL_fabsf(dx) > 0.03f || SDL_fabsf(dy) > 0.03f) return; /* a drag, no tap */
+    if (app->finished) {
+        menu_key(app, GUI_CANCEL);
+        return;
+    }
+    SDL_GetWindowSize(app->window, &w, &h);
+    if (app->menu.running) {
+        layout(app);
+        if (SDL_RenderCoordinatesFromWindow(app->renderer, x * (float)w, y * (float)h, &rx, &ry) &&
+            (int)(ry / (float)(16 * app->scale)) == escape_row(app))
+            cancel(app);
+        return;
+    }
+    pointer(app, x * (float)w, y * (float)h, true, true);
 }
 static void event(App* app, const SDL_Event* e) {
     if (e->type == SDL_EVENT_QUIT || e->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
@@ -957,22 +1001,28 @@ static void event(App* app, const SDL_Event* e) {
         drop(app, e->drop.data, e->type == SDL_EVENT_DROP_TEXT);
         return; /* SDL3 owns the event's data, unlike SDL2. */
     }
+    if (e->type == SDL_EVENT_FINGER_DOWN && !app->finger) {
+        app->finger = e->tfinger.fingerID;
+        app->finger_x = e->tfinger.x;
+        app->finger_y = e->tfinger.y;
+        return;
+    }
+    if ((e->type == SDL_EVENT_FINGER_UP || e->type == SDL_EVENT_FINGER_CANCELED) && e->tfinger.fingerID == app->finger) {
+        app->finger = 0;
+        if (e->type == SDL_EVENT_FINGER_UP) touch(app, e->tfinger.x, e->tfinger.y);
+        return;
+    }
     if (e->type == SDL_EVENT_MOUSE_MOTION) {
-        pointer(app, e->motion.x, e->motion.y, false);
+        pointer(app, e->motion.x, e->motion.y, false, false);
         return;
     }
     if (e->type == SDL_EVENT_MOUSE_BUTTON_DOWN && e->button.button == SDL_BUTTON_LEFT) {
-        pointer(app, e->button.x, e->button.y, true);
+        pointer(app, e->button.x, e->button.y, true, false);
         return;
     }
     if (e->type != SDL_EVENT_KEY_DOWN) return;
     if (app->menu.running) {
-        if (e->key.key == SDLK_ESCAPE && !app->aborting) {
-            /* Do not ask a hung program to shut down or wait on it in the event
-               handler. Kill its tree now and let pump reap it without blocking. */
-            gui_process_terminate(app->process);
-            app->aborting = true;
-        }
+        if (e->key.key == SDLK_ESCAPE || e->key.key == SDLK_AC_BACK) cancel(app);
         return;
     }
     if (e->key.key == SDLK_V && (e->key.mod & SDL_KMOD_CTRL) &&
@@ -994,13 +1044,16 @@ static void event(App* app, const SDL_Event* e) {
         case SDLK_SPACE:
             if (!e->key.repeat) menu_key(app, GUI_SELECT);
             break;
-        case SDLK_ESCAPE: menu_key(app, GUI_CANCEL); break;
+        case SDLK_ESCAPE:
+        case SDLK_AC_BACK: menu_key(app, GUI_CANCEL); break;
         default: break;
     }
 }
 static bool initialize(App* app) {
     memset(app, 0, sizeof(*app));
     app->theme = *gui_theme_builtin("default");
+    /* touch() takes the fingers: SDL would send each as a mouse too */
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     if (!SDL_Init(SDL_INIT_VIDEO)) return false;
     if (!SDL_CreateWindowAndRenderer(snx_build_info(), 1280, 800, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY,
                                      &app->window, &app->renderer))

@@ -20,6 +20,9 @@ build of a detached checkout outside CI says `detached`, and both read `unknown`
   pink. Activation is tracked separately from hover/focus, so the activated item
   stays pink while another item is hovered in yellow. Mouse controls also work
   on load sub-options, browser entries and Back.
+- A finger taps an item anywhere on its row, as a click does on its label; a swipe across
+  turns the pages of `games/`; a tap on a finished run returns to the menu, and one on a
+  running run's ESC line aborts it. Android's back button is ESC.
 - Moving outside a submenu (including over another main item) leaves it open
   and anchored to its activated parent. ESC goes back; explicitly activating a
   different main item replaces/closes the submenu.
