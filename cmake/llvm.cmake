@@ -2,6 +2,17 @@
 # Copyright 2026 the ScarletNX contributors
 # LLVM's C API is required by the recompiler on every platform. SNX_LLVM_CONFIG selects an llvm-config that runs
 # on the build machine and describes the LLVM development files for the target, including when cross-compiling.
+if(ANDROID)
+    # Android's LLVM (scripts/android-llvm.sh) has an llvm-config that only runs on the phone: its CMake package instead
+    find_package(LLVM REQUIRED CONFIG)
+    llvm_map_components_to_libnames(SNX_LLVM_LIBS core native passes target analysis)
+    set(SNX_LLVM_VERSION "${LLVM_PACKAGE_VERSION}")
+    set(SNX_LLVM_INCLUDE_DIR "${LLVM_INCLUDE_DIRS}")
+    set(SNX_LLVM_LIBRARY_DIR "${LLVM_LIBRARY_DIRS}")
+    set(SNX_LLVM_SYSTEM_LIBS "")
+    message(STATUS "LLVM backend: LLVM ${SNX_LLVM_VERSION} (${LLVM_DIR})")
+    return()
+endif()
 set(snx_llvm_names llvm-config)
 foreach(version RANGE 30 17 -1)
     list(APPEND snx_llvm_names llvm-config-${version} llvm-config${version})

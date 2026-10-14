@@ -65,6 +65,12 @@ if(WIN32 OR CMAKE_CROSSCOMPILING)
     endif()
     list(APPEND snx_ffmpeg_args --target-os=${snx_ffmpeg_os} --arch=${snx_ffmpeg_arch})
 endif()
+if(ANDROID)
+    # the NDK's Clang takes its target and sysroot as flags, which configure does not get from --cc; and the runtime is
+    # a shared library there (src/nx)
+    list(APPEND snx_ffmpeg_args --sysroot=${CMAKE_SYSROOT} --extra-cflags=--target=${CMAKE_C_COMPILER_TARGET}
+         --extra-ldflags=--target=${CMAKE_C_COMPILER_TARGET} --enable-pic)
+endif()
 if(CMAKE_CROSSCOMPILING)
     # configure builds a few helper programs for the machine doing the build, which needs its own C compiler
     find_program(SNX_HOST_CC NAMES clang cc)
