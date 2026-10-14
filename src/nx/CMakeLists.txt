@@ -41,7 +41,8 @@ target_link_libraries(snx_video PRIVATE FFmpeg::avcodec)
 target_link_libraries(snx_hle PRIVATE FFmpeg::avcodec)
 snx_component(gpu gpu/gpu.c gpu/maxwell/engines.c gpu/maxwell/mme.c gpu/maxwell/compute.c gpu/maxwell/fermi2d.c gpu/maxwell/dma.c gpu/maxwell/maxwell3d.c gpu/renderer.c)
 
-set(platform runtime/platform/plat.c runtime/platform/unattended.c runtime/platform/backend/sdl3.c)
+set(platform runtime/platform/plat.c runtime/platform/unattended.c runtime/platform/backend/sdl3.c
+             runtime/platform/overlay.c)
 if(WIN32)
     list(APPEND platform runtime/platform/plat_win32.c runtime/platform/profiler_win32.c)
 else()

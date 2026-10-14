@@ -130,6 +130,11 @@ add_test(NAME llvm_dependency COMMAND "${CMAKE_COMMAND}"
     "-DSNX_SOURCE_DIR=${PROJECT_SOURCE_DIR}" "-DSNX_TEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/llvm-dependency"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/llvm_dependency.cmake")
 
+add_executable(snx-test-overlay overlay.c "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/overlay.c")
+snx_test_target(snx-test-overlay 11)
+target_link_libraries(snx-test-overlay PRIVATE scarletnx-common)
+add_test(NAME overlay COMMAND snx-test-overlay)
+
 add_executable(snx-test-startup startup_options.c "${PROJECT_SOURCE_DIR}/src/nx/runtime/startup.c")
 snx_test_target(snx-test-startup 90)
 add_test(NAME startup_options COMMAND snx-test-startup)

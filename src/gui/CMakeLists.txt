@@ -7,7 +7,7 @@ elseif(CMAKE_SYSTEM_NAME MATCHES "^(Linux|FreeBSD|Android)$")
 else()
     message(FATAL_ERROR "scarletnx-gui currently supports Linux, FreeBSD and Windows")
 endif()
-add_library(snx_gui_support STATIC model.c browser.c font.c steps.c theme.c recent.c ${gui_process})
+add_library(snx_gui_support STATIC model.c browser.c steps.c theme.c recent.c ${gui_process})
 target_link_libraries(snx_gui_support PUBLIC scarletnx-common)
 # The driver configures libgccjit in its own directory scope; its target is
 # visible here even though SNX_GCCJIT_FOUND is not.

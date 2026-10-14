@@ -13,6 +13,7 @@
 #include "runtime/platform/log.h"
 #include "runtime/platform/plat.h"
 #include "runtime/platform/unattended.h"
+#include "runtime/platform/overlay.h"
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -147,6 +148,9 @@ void video_init(const char* title) {
         LOG("renderer: Vulkan headless (no window, surface or swapchain)\n");
         return;
     }
+#ifdef __ANDROID__
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1"); /* back opens the game's menu (overlay.c), not leaves */
+#endif
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) fatal("SDL could not start its video: %s", SDL_GetError());
     /* SDL subsystem initialization belongs to the main thread, before the guest can open audout sessions. */
     g_audio_ready = SDL_InitSubSystem(SDL_INIT_AUDIO);
@@ -194,7 +198,7 @@ void video_present_rgba(const u32* px, int w, int h, int stride) {
     (void)stride;
 }
 
-static const char* HELP = "Controller: like a Switch controller, buttons by position.\n\n"
+static const char* HELP = "Controller: like a Switch controller, buttons by position. Home: the game's menu.\n\n"
                           "Keyboard (keys by position, as on a US layout):\n"
                           "  Arrows = D-Pad     W A S D = left stick    I J K L = right stick\n"
                           "  X / Space = A    Z = B    C = X    V = Y\n"
@@ -327,9 +331,40 @@ static void dz(i32* x, i32* y) {
 /* SDL's Y axes point down, the Switch's up */
 static i32 up(i32 v) { return v == -32768 ? 32767 : -v; }
 
+/* the game's menu takes the keys, the buttons and the fingers while it is open */
+static void overlay_do(int action) {
+    if (action == OVERLAY_EXIT) g_quit = 1;
+    if (action == OVERLAY_CLOSE) overlay_toggle();
+}
+static int overlay_event(const SDL_Event* e) {
+    int w, h;
+    if ((e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_AC_BACK) ||
+        (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e->gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE)) {
+        overlay_toggle();
+        keys_held = 0;
+        return 1;
+    }
+    if (!overlay_shown()) return 0;
+    if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat) {
+        if (e->key.key == SDLK_UP || e->key.key == SDLK_DOWN) overlay_move(e->key.key == SDLK_UP ? -1 : 1);
+        if (e->key.key == SDLK_RETURN || e->key.key == SDLK_SPACE) overlay_do(overlay_select());
+    } else if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) { /* by position, as the game's pad: A right, B bottom */
+        if (e->gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP || e->gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN)
+            overlay_move(e->gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP ? -1 : 1);
+        if (e->gbutton.button == SDL_GAMEPAD_BUTTON_EAST) overlay_do(overlay_select());
+        if (e->gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) overlay_do(OVERLAY_CLOSE);
+    } else if (e->type == SDL_EVENT_FINGER_UP) {
+        backend_window_size(&w, &h);
+        overlay_do(overlay_tap(e->tfinger.x * (float)w, e->tfinger.y * (float)h, w, h));
+    } else if (e->type != SDL_EVENT_FINGER_DOWN && e->type != SDL_EVENT_FINGER_MOTION)
+        return 0; /* the window's events, and keys let go: the game still has them */
+    return 1;
+}
+
 void video_poll(void) {
     SDL_Event e;
     while (!g_opt_headless && SDL_PollEvent(&e)) {
+        if (overlay_event(&e)) continue;
         switch (e.type) {
             case SDL_EVENT_QUIT: g_quit = 1; break;
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
@@ -394,6 +429,7 @@ void video_poll(void) {
     }
     input_stick_clamp(&lx, &ly);
     input_stick_clamp(&rx, &ry);
+    if (overlay_shown()) b = (u64)(lx = ly = rx = ry = 0); /* the game's menu has the controls */
     g_pad.buttons = b;
     g_pad.lx = lx;
     g_pad.ly = ly;

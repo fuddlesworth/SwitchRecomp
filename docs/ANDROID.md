@@ -17,7 +17,8 @@ recompiles on the phone, then the game opens.
   `libscarletnx.so`, beside it. It cannot open a window there, so it ends at `Ready <game>` and the menu opens it.
 - **A game** runs in `GameActivity`, in a process of its own: the runtime's `main` with `--game=games/<game>`.
   Its process ends with the game. The shared storage maps nothing executable, so the runtime loads a copy of
-  `<game>_code.so` from the app's cache.
+  `<game>_code.so` from the app's cache. The back button opens the game's menu over it, in the menu's look (a
+  gamepad's Home does on every system): *Exit* for now; back again returns to the game.
 - **Share log**, in the menu, saves the message on the screen, the last run's output (`last-run.log`, which the
   menu keeps on every system) and the newest game log to `/sdcard/ScarletNX/scarletnx-log.txt`, then opens the
   share sheet with them.
