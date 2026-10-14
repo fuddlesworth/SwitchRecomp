@@ -267,7 +267,32 @@ void plat_vm_decommit(u8* p, u64 size) {
     madvise(p, size, MADV_DONTNEED);
     mprotect(p, size, PROT_NONE);
 }
+#ifdef __ANDROID__
+#include <SDL3/SDL_system.h>
+/* Android's shared storage (/sdcard, where the app keeps games/) maps nothing executable: a module there runs from a
+   copy in the app's cache */
+void* plat_dl_open(const char* path) {
+    void* h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    const char *cache = SDL_GetAndroidCachePath(), *name = strrchr(path, '/');
+    char copy[1200];
+    FILE *in, *out;
+    char buffer[1 << 16];
+    size_t n;
+    int ok;
+    if (h || !cache) return h;
+    snprintf(copy, sizeof copy, "%s/%s", cache, name ? name + 1 : path);
+    in = fopen(path, "rb");
+    out = in ? fopen(copy, "wb") : NULL;
+    ok = in && out;
+    while (ok && (n = fread(buffer, 1, sizeof buffer, in)) > 0) ok = fwrite(buffer, 1, n, out) == n;
+    ok = ok && !ferror(in);
+    if (in) fclose(in);
+    if (out && fclose(out)) ok = 0;
+    return ok ? dlopen(copy, RTLD_NOW | RTLD_LOCAL) : NULL;
+}
+#else
 void* plat_dl_open(const char* path) { return dlopen(path, RTLD_NOW | RTLD_LOCAL); }
+#endif
 void* plat_dl_sym(void* h, const char* n) { return dlsym(h, n); }
 const char* plat_dl_error(void) {
     const char* e = dlerror();

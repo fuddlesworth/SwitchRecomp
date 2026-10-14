@@ -113,7 +113,7 @@ const char* gui_setting_description(const GuiMenu* menu) {
             return "Built-in themes, then each themes/<name>/theme.ini";
 #ifdef __ANDROID__
         case GUI_LOG:
-            return "Saves the last run's output and game log to Download/ScarletNX, then shares them";
+            return "Saves the last run's output and game log to /sdcard/ScarletNX, then shares them";
 #endif
         default: return "";
     }

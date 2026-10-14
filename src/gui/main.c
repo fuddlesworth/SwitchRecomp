@@ -716,6 +716,20 @@ static void leave_run(App* app) {
     layout(app);
 }
 #ifdef SDL_PLATFORM_ANDROID
+/* the working folder moves to /sdcard/ScarletNX once the app may write there, which the user grants after it starts */
+static void android_folder(App* app) {
+    char* cwd = gui_android_folder() ? SDL_GetCurrentDirectory() : NULL;
+    if (!cwd || (app->cwd && !strcmp(cwd, app->cwd))) {
+        SDL_free(cwd);
+        return;
+    }
+    SDL_free(app->cwd);
+    app->cwd = cwd;
+    free(app->games_dir);
+    app->games_dir = snx_path_join(cwd, "games");
+    free(app->themes_dirs[0]);
+    app->themes_dirs[0] = snx_path_join(cwd, "themes");
+}
 /* A game runs in the app's game activity, a process of its own: no child of this one gets a window */
 static int play(App* app, const char* game) {
     char* option = snx_format("--game=%s", game);
@@ -806,6 +820,9 @@ static char* find_driver(App* app) {
     return found ? found : snx_find_tool(name);
 }
 static void launch(App* app, char* absolute, bool prepared) {
+#ifdef SDL_PLATFORM_ANDROID
+    android_folder(app); /* the driver works where the menu stands */
+#endif
     if (!absolute || !snx_is_file(absolute)) {
         snprintf(app->message, sizeof(app->message), "That path is not a readable file. Try again or press ESC.");
         free(absolute);
@@ -995,15 +1012,20 @@ static char* newest_log(const App* app) {
     SDL_free(names);
     return newest;
 }
-/* the message on the screen, the last run's output and the newest game log: saved to Download/ScarletNX (else the
+/* the message on the screen, the last run's output and the newest game log: saved to /sdcard/ScarletNX (else the
    app's own folder on the shared storage) and handed to the share sheet */
 static void share_log(App* app) {
-    char *game = newest_log(app), *run = log_tail(app->run_log, 128 << 10), *played = log_tail(game, 128 << 10);
-    char* text = snx_format("%s\nMessage: %s\n\n== the last run: %s ==\n%s\n\n== %s ==\n%s\n", snx_build_info(),
-                            app->message, app->run_log ? app->run_log : "", run, game ? game : "no game log", played);
-    const char* folders[2] = {"/storage/emulated/0/Download/ScarletNX", SDL_GetAndroidExternalStoragePath()};
-    char* saved = NULL;
+    char *game, *run, *played, *text, *saved = NULL;
+    const char* folders[2];
     int i;
+    android_folder(app);
+    folders[0] = gui_android_folder();
+    folders[1] = SDL_GetAndroidExternalStoragePath();
+    game = newest_log(app);
+    run = log_tail(app->run_log, 128 << 10);
+    played = log_tail(game, 128 << 10);
+    text = snx_format("%s\nMessage: %s\n\n== the last run: %s ==\n%s\n\n== %s ==\n%s\n", snx_build_info(),
+                      app->message, app->run_log ? app->run_log : "", run, game ? game : "no game log", played);
     for (i = 0; i < 2 && !saved; ++i) {
         char* path = folders[i] && !snx_mkdirs(folders[i]) ? snx_path_join(folders[i], "scarletnx-log.txt") : NULL;
         if (path && !snx_write_file(path, text, strlen(text)))
@@ -1071,6 +1093,9 @@ static void menu_key(App* app, GuiKey key) {
 #endif
     if (key == GUI_CANCEL || (key == GUI_SELECT && app->menu.view == GUI_LOAD_KEYS)) app->message[0] = 0;
     if (app->menu.view == GUI_LOAD_GAMES) {
+#ifdef SDL_PLATFORM_ANDROID
+        android_folder(app);
+#endif
         gui_games_scan(&app->games, app->games_dir, app->message, sizeof(app->message));
         app->browser = (GuiBrowser){.count = app->games.count};
         layout(app);
@@ -1143,6 +1168,9 @@ static void pointer(App* app, float window_x, float window_y, bool click, bool t
 /* the file the system's picker chose, as a dropped one; none (cancelled) goes back */
 static void picked(App* app, const char* uri) {
     char* path = uri ? gui_document_path(uri) : NULL;
+#ifdef SDL_PLATFORM_ANDROID
+    if (uri && !path) path = gui_android_document_file(uri);
+#endif
     if (!uri)
         menu_key(app, GUI_CANCEL);
     else if (!path)

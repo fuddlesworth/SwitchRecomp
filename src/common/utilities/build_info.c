@@ -15,6 +15,8 @@
 #endif
 #if defined(_WIN32)
 #define SNX_OS "Windows"
+#elif defined(__ANDROID__)
+#define SNX_OS "Android"
 #elif defined(__linux__)
 #define SNX_OS "Linux"
 #elif defined(__FreeBSD__)
