@@ -134,6 +134,7 @@ jobs:
           path: .cache/cpm
           key: cpm-${{ github.job }}-${{ hashFiles('cmake/dependencies.cmake') }}
       # llvm-mingw alone has no LLVM development libraries. Do not mix its C++ runtime with another LLVM build.
+      # patch: CPM applies cmake/hactool-decrypted.patch with it
       - name: Install Clang, LLVM development files and FFmpeg build tools
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
@@ -143,6 +144,7 @@ jobs:
           install: >-
             git
             make
+            patch
             mingw-w64-clang-x86_64-clang
             mingw-w64-clang-x86_64-llvm
             mingw-w64-clang-x86_64-lld
@@ -161,6 +163,7 @@ jobs:
           test -d "$(llvm-config --libdir)"
           llvm-config --libs core native passes target analysis
           make --version
+          patch --version
           nasm --version
           spirv-val --version
           spirv-dis --version
