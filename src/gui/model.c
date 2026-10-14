@@ -82,6 +82,10 @@ void gui_menu_key(GuiMenu* menu, GuiKey key) {
                 menu->gdbstub = !menu->gdbstub;
             else if (menu->selected == GUI_THEME)
                 menu->theme_next = 1;
+#ifdef __ANDROID__
+            else if (menu->selected == GUI_LOG)
+                menu->share_log = 1;
+#endif
             else if (menu->selected == GUI_EXIT)
                 menu->quit = true;
             else if (menu->selected == GUI_KEYS)
@@ -107,6 +111,10 @@ const char* gui_setting_description(const GuiMenu* menu) {
             return "Enables gdbstub on port 1234";
         case GUI_THEME:
             return "Built-in themes, then each themes/<name>/theme.ini";
+#ifdef __ANDROID__
+        case GUI_LOG:
+            return "Saves the last run's output and game log to Download/ScarletNX, then shares them";
+#endif
         default: return "";
     }
 }

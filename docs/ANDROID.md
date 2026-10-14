@@ -17,6 +17,9 @@ recompiles on the phone, then the game opens.
   `libscarletnx.so`, beside it. It cannot open a window there, so it ends at `Ready <game>` and the menu opens it.
 - **A game** runs in `GameActivity`, in a process of its own: the runtime's `main` with `--game=games/<game>`.
   Its process ends with the game.
+- **Share log**, in the menu, saves the message on the screen, the last run's output (`last-run.log`, which the
+  menu keeps on every system) and the newest game log to `Download/ScarletNX/scarletnx-log.txt`, then opens the
+  share sheet with them.
 
 Limits: the recompiler makes x86-64 code only, so the app runs on x86_64 Android (the emulator, some tablets and
 Chromebooks) until it makes arm64 code. A game needs a gamepad: there are no on-screen controls yet. Vulkan 1.3

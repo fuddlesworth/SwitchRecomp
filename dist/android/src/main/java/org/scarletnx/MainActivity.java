@@ -28,4 +28,10 @@ public class MainActivity extends SDLActivity {
     public void play(String[] args) {
         startActivity(new Intent(this, GameActivity.class).putExtra("args", args));
     }
+
+    /** src/gui/android.c: the logs, as text, to the app the user picks */
+    public void share(String text) {
+        Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text);
+        startActivity(Intent.createChooser(send, "ScarletNX log"));
+    }
 }

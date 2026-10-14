@@ -27,18 +27,34 @@ const char* gui_android_libraries(void) {
     return folder[0] ? folder : NULL;
 }
 
-/* MainActivity.play(String[]) */
-int gui_android_play(const char* const* argv, char* message, size_t size) {
+/* MainActivity's method, with one argument */
+static int call(const char* method, const char* signature, jobject argument, char* message, size_t size) {
     JNIEnv* env = (JNIEnv*)SDL_GetAndroidJNIEnv();
     jobject activity = (jobject)SDL_GetAndroidActivity();
-    jclass string, activity_class;
-    jmethodID play;
-    jobjectArray args;
-    int n = 0, i, ok;
+    jclass activity_class;
+    jmethodID id;
+    int ok;
     if (!env || !activity) {
-        snprintf(message, size, "No Android activity to start the game from.");
+        snprintf(message, size, "No Android activity to ask.");
         return 0;
     }
+    activity_class = (*env)->GetObjectClass(env, activity);
+    id = (*env)->GetMethodID(env, activity_class, method, signature);
+    if (id) (*env)->CallVoidMethod(env, activity, id, argument);
+    ok = id && !(*env)->ExceptionCheck(env);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->DeleteLocalRef(env, activity_class);
+    (*env)->DeleteLocalRef(env, activity);
+    if (!ok) snprintf(message, size, "MainActivity.%s did not run.", method);
+    return ok;
+}
+
+int gui_android_play(const char* const* argv, char* message, size_t size) {
+    JNIEnv* env = (JNIEnv*)SDL_GetAndroidJNIEnv();
+    jclass string;
+    jobjectArray args;
+    int n = 0, i, ok;
+    if (!env) return call("play", "", NULL, message, size);
     while (argv[n]) ++n;
     string = (*env)->FindClass(env, "java/lang/String");
     args = (*env)->NewObjectArray(env, n, string, NULL);
@@ -47,15 +63,19 @@ int gui_android_play(const char* const* argv, char* message, size_t size) {
         (*env)->SetObjectArrayElement(env, args, i, s);
         (*env)->DeleteLocalRef(env, s);
     }
-    activity_class = (*env)->GetObjectClass(env, activity);
-    play = (*env)->GetMethodID(env, activity_class, "play", "([Ljava/lang/String;)V");
-    if (play) (*env)->CallVoidMethod(env, activity, play, args);
-    ok = play && !(*env)->ExceptionCheck(env);
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    ok = call("play", "([Ljava/lang/String;)V", args, message, size);
     (*env)->DeleteLocalRef(env, args);
     (*env)->DeleteLocalRef(env, string);
-    (*env)->DeleteLocalRef(env, activity_class);
-    (*env)->DeleteLocalRef(env, activity);
-    if (!ok) snprintf(message, size, "The game activity did not start.");
+    return ok;
+}
+
+int gui_android_share(const char* text, char* message, size_t size) {
+    JNIEnv* env = (JNIEnv*)SDL_GetAndroidJNIEnv();
+    jstring s;
+    int ok;
+    if (!env) return call("share", "", NULL, message, size);
+    s = (*env)->NewStringUTF(env, text);
+    ok = call("share", "(Ljava/lang/String;)V", s, message, size);
+    (*env)->DeleteLocalRef(env, s);
     return ok;
 }

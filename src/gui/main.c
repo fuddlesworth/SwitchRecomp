@@ -40,6 +40,8 @@ typedef struct {
     GuiSteps steps;
     GuiRecent recent;
     char* recent_file;          /* where the recent games are kept; NULL keeps none */
+    char* run_log;              /* where a run's output goes as it comes, the last run's; NULL keeps none */
+    FILE* run_out;
     int recent_named;           /* the run's own name went to its recent game */
     Uint64 clock;               /* fixed time for tests; 0 is the real clock */
     Uint64 fade_ms, leaving_ms; /* a screen fading in from black since; the run fading out since */
@@ -57,7 +59,11 @@ typedef struct {
     Uint32 picked;            /* the event a file from the system's picker comes back as */
 } App;
 static const char* const items[] = {"Load Switch NSP/XCI/NRO", "Load Linux ARM ELF", "Setup device keys",
-                                   "Fullscreen", "Enable libgccjit", "Enable gdbstub", "Theme", "Exit"};
+                                   "Fullscreen", "Enable libgccjit", "Enable gdbstub", "Theme",
+#ifdef SDL_PLATFORM_ANDROID
+                                   "Share log",
+#endif
+                                   "Exit"};
 /* what the screens say to press: a phone has a finger, the back button and the system's file picker, nothing to drop */
 #ifdef SDL_PLATFORM_ANDROID
 static const char* const load_labels[] = {"-> Select a file", "-> Select file from games/ instead"};
@@ -250,8 +256,9 @@ static void layout(App* app) {
     area(app, &width, &height);
     app->scale = SDL_min(width / 640, height / 400);
     /* a phone packs its pixels tight: the display's own scale, for text and taps of a size, as far as the menu still
-       fits in 27 rows: five recent games and a submenu (render) */
-    app->scale = SDL_max(app->scale, SDL_min((int)(SDL_GetWindowDisplayScale(app->window) + 0.5f), height / (16 * 27)));
+       fits with five recent games and a submenu (render) */
+    app->scale = SDL_max(app->scale, SDL_min((int)(SDL_GetWindowDisplayScale(app->window) + 0.5f),
+                                             height / (16 * (19 + GUI_ITEM_COUNT))));
     if (app->scale < 1) app->scale = 1;
     app->cols = SDL_min(width / (8 * app->scale), GUI_MAX_COLS);
     app->rows = SDL_min(height / (16 * app->scale), GUI_MAX_ROWS);
@@ -737,6 +744,7 @@ static void pump(App* app) {
         for (int reads = 0; reads < 16; ++reads) {
             int n = gui_process_read(app->process, buffer, sizeof(buffer));
             if (n <= 0) break;
+            if (app->run_out) fwrite(buffer, 1, (size_t)n, app->run_out);
             gui_console_feed(&app->console, buffer, (size_t)n);
             gui_banner_feed(&app->banner, buffer, (size_t)n);
             gui_steps_feed(&app->steps, buffer, (size_t)n, now_ms(app));
@@ -751,6 +759,11 @@ static void pump(App* app) {
             app->finished = !app->aborting;
             app->abnormal_exit = app->aborting || status != 0;
             gui_steps_finish(&app->steps, !app->abnormal_exit);
+            if (app->run_out) {
+                fprintf(app->run_out, "\n[%s, status %d]\n", app->aborting ? "aborted" : "ended", status);
+                fclose(app->run_out);
+                app->run_out = NULL;
+            }
 #ifdef SDL_PLATFORM_ANDROID
             if (!app->abnormal_exit) ready(app);
 #endif
@@ -820,6 +833,12 @@ static void launch(App* app, char* absolute, bool prepared) {
     n += gui_launch_options(&app->menu, native, argv + n);
     argv[n] = NULL;
     bool started = gui_process_start(app->process, argv, app->message, sizeof(app->message));
+    if (started && app->run_log) {
+        if (app->run_out) fclose(app->run_out);
+        app->run_out = snx_fopen(app->run_log, "wb");
+        for (size_t k = 0; app->run_out && k < n; ++k) fprintf(app->run_out, "%s%s", k ? " " : "$ ", argv[k]);
+        if (app->run_out) fputc('\n', app->run_out);
+    }
     gui_banner_reset(&app->banner);
     gui_steps_reset(&app->steps);
     app->native = native;
@@ -943,6 +962,64 @@ static void open_picker(App* app) {
     if (app->picked) SDL_ShowOpenFileDialog(picker_done, &app->picked, app->window, NULL, 0, NULL, false);
 }
 #endif
+#ifdef SDL_PLATFORM_ANDROID
+/* the last max bytes of a file, as text with only ASCII (what Java takes as a string from any log), or "" */
+static char* log_tail(const char* path, size_t max) {
+    size_t size = 0, i;
+    unsigned char* data = path ? snx_read_file(path, &size) : NULL;
+    char* text = (char*)snx_alloc(SDL_min(size, max) + 1);
+    for (i = 0; i < SDL_min(size, max); ++i) {
+        unsigned char c = data[size - SDL_min(size, max) + i];
+        text[i] = c == '\n' || c == '\t' || (c >= 32 && c < 127) ? (char)c : '?';
+    }
+    text[i] = 0;
+    free(data);
+    return text;
+}
+/* the game log written last, games/<game>.log */
+static char* newest_log(const App* app) {
+    int count = 0, i;
+    char** names = SDL_GlobDirectory(app->games_dir, "*.log", 0, &count);
+    char* newest = NULL;
+    SDL_Time time = 0;
+    for (i = 0; names && i < count; ++i) {
+        SDL_PathInfo info;
+        char* path = snx_path_join(app->games_dir, names[i]);
+        if (SDL_GetPathInfo(path, &info) && (!newest || info.modify_time > time)) {
+            free(newest);
+            newest = path;
+            time = info.modify_time;
+        } else
+            free(path);
+    }
+    SDL_free(names);
+    return newest;
+}
+/* the message on the screen, the last run's output and the newest game log: saved to Download/ScarletNX (else the
+   app's own folder on the shared storage) and handed to the share sheet */
+static void share_log(App* app) {
+    char *game = newest_log(app), *run = log_tail(app->run_log, 128 << 10), *played = log_tail(game, 128 << 10);
+    char* text = snx_format("%s\nMessage: %s\n\n== the last run: %s ==\n%s\n\n== %s ==\n%s\n", snx_build_info(),
+                            app->message, app->run_log ? app->run_log : "", run, game ? game : "no game log", played);
+    const char* folders[2] = {"/storage/emulated/0/Download/ScarletNX", SDL_GetAndroidExternalStoragePath()};
+    char* saved = NULL;
+    int i;
+    for (i = 0; i < 2 && !saved; ++i) {
+        char* path = folders[i] && !snx_mkdirs(folders[i]) ? snx_path_join(folders[i], "scarletnx-log.txt") : NULL;
+        if (path && !snx_write_file(path, text, strlen(text)))
+            saved = path;
+        else
+            free(path);
+    }
+    if (gui_android_share(text, app->message, sizeof(app->message)))
+        snprintf(app->message, sizeof(app->message), "Log saved to %s", saved ? saved : "nowhere (no folder to write)");
+    free(saved);
+    free(text);
+    free(played);
+    free(run);
+    free(game);
+}
+#endif
 static void menu_key(App* app, GuiKey key) {
     if (app->finished) {
         if (key == GUI_CANCEL && app->theme.fade_out_ms && !app->leaving_ms)
@@ -986,6 +1063,12 @@ static void menu_key(App* app, GuiKey key) {
         app->menu.theme_next = 0;
         next_theme(app);
     }
+#ifdef SDL_PLATFORM_ANDROID
+    if (app->menu.share_log) {
+        app->menu.share_log = 0;
+        share_log(app);
+    }
+#endif
     if (key == GUI_CANCEL || (key == GUI_SELECT && app->menu.view == GUI_LOAD_KEYS)) app->message[0] = 0;
     if (app->menu.view == GUI_LOAD_GAMES) {
         gui_games_scan(&app->games, app->games_dir, app->message, sizeof(app->message));
@@ -1184,8 +1267,13 @@ static bool initialize(App* app) {
     /* touch() takes the fingers: SDL would send each as a mouse too */
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     if (!SDL_Init(SDL_INIT_VIDEO)) return false;
-    if (!SDL_CreateWindowAndRenderer(snx_build_info(), 1280, 800, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY,
-                                     &app->window, &app->renderer))
+#ifdef SDL_PLATFORM_ANDROID
+    /* the whole screen, the system's bars out of the way: a phone held wide is short */
+    SDL_WindowFlags flags = SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#else
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
+    if (!SDL_CreateWindowAndRenderer(snx_build_info(), 1280, 800, flags, &app->window, &app->renderer))
         return false;
     SDL_SetWindowMinimumSize(app->window, 800, 480);
     snx_window_icon(app->window);
@@ -1221,6 +1309,8 @@ static void cleanup(App* app) {
     gui_themes_free(&app->themes);
     free(app->keys_path);
     free(app->recent_file);
+    if (app->run_out) fclose(app->run_out);
+    free(app->run_log);
     gui_games_free(&app->games);
     SDL_free(app->cwd);
     SDL_DestroyTexture(app->font);
@@ -1244,6 +1334,7 @@ int main(int argc, char** argv) {
        it, not initialize(), so the tests keep their own */
     prefs = SDL_GetPrefPath("scarletnx", "gui");
     if (prefs) recent_open(&app, snx_path_join(prefs, "recent.txt"));
+    if (prefs) app.run_log = snx_path_join(prefs, "last-run.log");
     SDL_free(prefs);
     while (!app.menu.quit) {
         SDL_Event e;

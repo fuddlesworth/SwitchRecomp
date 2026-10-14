@@ -405,10 +405,18 @@ int main(int argc, char** argv) {
     assert(app.menu.view == GUI_LOAD_DROP && !app.menu.running);
     e.type = SDL_EVENT_DROP_FILE;
     e.drop.data = input;
+    app.run_log = snx_path_join(temporary, "last-run.log"); /* the run's output, kept as it comes */
     event(&app, &e);
     assert(app.menu.running && app.menu.selected == GUI_SWITCH);
     finish(&app, 0);
     assert(!app.native && !app.banner.seen); /* a driver that started no game stayed compiling */
+    {
+        size_t size;
+        char* kept = (char*)snx_read_file(app.run_log, &size);
+        assert(kept && !app.run_out && !strncmp(kept, "$ ", 2) && strstr(kept, "game with spaces;literal.nro -f\n"));
+        assert(strstr(kept, "driver stdout") && strstr(kept, "driver stderr") && strstr(kept, "\n[ended, status 0]\n"));
+        free(kept);
+    }
     key(&app, SDLK_DOWN);
     key(&app, SDLK_SPACE);
     assert(app.menu.selected == GUI_LINUX && app.menu.view == GUI_LOAD_OPTIONS);
