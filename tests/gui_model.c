@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
    Copyright 2026 the ScarletNX contributors */
 #include "model.h"
+#include "browser.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -185,6 +186,9 @@ int main(void) {
     path = gui_document_path("/tmp/ a.nro ");
     assert(path && !strcmp(path, "/tmp/ a.nro "));
     free(path);
+    /* the dumps the Android games/ list offers, to prepare first */
+    assert(gui_is_dump("a.NRO") && gui_is_dump("b.xci") && gui_is_dump("c.nsp") && gui_is_dump("d.dxci"));
+    assert(!gui_is_dump("e_code.so") && !gui_is_dump("nro") && !gui_is_dump("f.nro.ini"));
     path = gui_document_path("C:\\Games\\a.nro"); /* Windows' */
     assert(path && !strcmp(path, "C:\\Games\\a.nro"));
     free(path);

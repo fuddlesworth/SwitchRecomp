@@ -76,6 +76,8 @@ static const char* const load_labels[] = {"-> Select a file", "-> Select file fr
 #define SAY_KEYS_WAIT "Pick prod.keys"
 #define SAY_DONE "Tap to return to menu"
 #define SAY_ABORT "Tap here to abort and return to menu"
+#define SAY_NO_GAMES "No games in games/: put a game's .nro, .xci or .nsp there."
+#define SAY_COUNT "game(s)"
 #else
 static const char* const load_labels[] = {"-> Select via drag and drop", "-> Select file from games/ instead"};
 #define SAY_MENU "Arrows/mouse: move. Space/Enter/click: select."
@@ -87,6 +89,8 @@ static const char* const load_labels[] = {"-> Select via drag and drop", "-> Sel
 #define SAY_KEYS_WAIT "Drop prod.keys here"
 #define SAY_DONE "Press [ESC] to return to menu"
 #define SAY_ABORT "Press [ESC] to abort and return to menu"
+#define SAY_NO_GAMES "No executables found in games/."
+#define SAY_COUNT "executable(s)"
 #endif
 static SDL_Color rgb(GuiRgb c) {
     SDL_Color out;
@@ -596,9 +600,9 @@ static void render(App* app) {
         for (i = 0; i < count; ++i)
             entry(app, 1, 5 + (int)i, app->games.names[start + i],
                   app->browser.activated && app->browser.active == start + i, app->browser.selected == i + 1);
-        if (!app->games.count) text(app, 1, 5, "No executables found in games/.", soft);
+        if (!app->games.count) text(app, 1, 5, SAY_NO_GAMES, soft);
         char page[128];
-        snprintf(page, sizeof(page), "Page %zu/%zu   %zu executable(s)", app->browser.page + 1,
+        snprintf(page, sizeof(page), "Page %zu/%zu   %zu " SAY_COUNT, app->browser.page + 1,
                  gui_browser_pages(&app->browser), app->games.count);
         text(app, 1, app->rows - 5, page, soft);
         text(app, 1, app->rows - 4, app->message, focus);
@@ -733,7 +737,7 @@ static void android_folder(App* app) {
 /* A game runs in the app's game activity, a process of its own: no child of this one gets a window */
 static int play(App* app, const char* game) {
     char* option = snx_format("--game=%s", game);
-    const char* argv[2] = {option, NULL};
+    const char* argv[3] = {option, "-f", NULL}; /* the whole screen, the system's bars out of the way */
     int ok = gui_android_play(argv, app->message, sizeof(app->message));
     free(option);
     return ok;
@@ -1066,7 +1070,7 @@ static void menu_key(App* app, GuiKey key) {
                 char* path = snx_path_join(app->games_dir, app->games.names[index]);
                 char* absolute = snx_absolute(path);
                 free(path);
-                launch(app, absolute, true);
+                launch(app, absolute, !gui_is_dump(app->games.names[index]));
             }
         }
         return;
@@ -1174,7 +1178,8 @@ static void picked(App* app, const char* uri) {
     if (!uri)
         menu_key(app, GUI_CANCEL);
     else if (!path)
-        snprintf(app->message, sizeof(app->message), "Pick the file from the device's storage, not from an app.");
+        snprintf(app->message, sizeof(app->message), "Pick the file from the device's storage, not from an app (%s).",
+                 uri);
     else
         drop(app, path, false);
     free(path);

@@ -11,7 +11,8 @@ recompiles on the phone, then the game opens.
   `.switch/prod.keys`.
 - **Loading** (*Select a file*, *Setup device keys*) opens the system's file picker. A file is read by its path,
   so the app asks for access to all files when it starts: the picker's path, or for a document without one
-  (Downloads' own list, Recent) the file its descriptor opens. A cloud's document has none and is refused.
+  (Downloads' own list, Recent) the file its descriptor opens. A cloud's document has none and is refused, its
+  URI in the message. *Select file from games/* lists the games there and the dumps put there, to be prepared.
 - **The driver** runs as a child of the menu, as on a desktop, from `libscarletnx-run.so`: an executable named so
   that Android installs it with the libraries, the only files of its own an app may execute. It loads the runtime,
   `libscarletnx.so`, beside it. It cannot open a window there, so it ends at `Ready <game>` and the menu opens it.

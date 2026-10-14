@@ -17,6 +17,10 @@ static bool suffix(const char* name, const char* extension) {
         if (tolower((unsigned char)name[n - e + i]) != extension[i]) return false;
     return true;
 }
+bool gui_is_dump(const char* name) {
+    return suffix(name, ".nro") || suffix(name, ".xci") || suffix(name, ".nsp") || suffix(name, ".dxci") ||
+           suffix(name, ".dnsp");
+}
 void gui_games_free(GuiGames* games) {
     snx_free_strings(games->names, games->count);
     games->names = NULL;
@@ -43,9 +47,12 @@ bool gui_games_scan(GuiGames* games, const char* directory, char* error, size_t 
         char* name = names[i];
         if (name[0] == '.') continue;
 #ifdef __ANDROID__
-        /* the shared storage runs nothing, so nothing there is executable: a game is <name> beside <name>_code.so */
-        if (!suffix(name, "_code.so")) continue;
-        name[strlen(name) - 8] = 0;
+        /* the shared storage runs nothing, so nothing there is executable: a game is <name> beside <name>_code.so,
+           and a dump put there (to be prepared) shows with its own name */
+        if (suffix(name, "_code.so"))
+            name[strlen(name) - 8] = 0;
+        else if (!gui_is_dump(name))
+            continue;
         games->names[games->count++] = names[i];
         names[i] = NULL;
         continue;
