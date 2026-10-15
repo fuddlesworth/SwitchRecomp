@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-BOUNDARIES = {'common': {'common'}, 'nx': {'nx', 'common'}, 'gnuabi': {'gnuabi', 'common'}}
+BOUNDARIES = {'common': {'common'}, 'nx': {'nx', 'common'}, 'gnuabi': {'gnuabi', 'common'}, 'agb': {'agb', 'common'}}
 INCLUDE = re.compile(r'^\s*#\s*include\s*(["<])([^">]+)[">]', re.MULTILINE)
 
 
@@ -79,9 +79,10 @@ def check_graph(graph):
 
     errors = []
     for owner, forbidden in (
-        ('scarletnx-common', ('scarletnx-nx', 'scarletnx-gnuabi')),
-        ('scarletnx-nx', ('scarletnx-gnuabi',)),
-        ('scarletnx-gnuabi', ('scarletnx-nx',)),
+        ('scarletnx-common', ('scarletnx-nx', 'scarletnx-gnuabi', 'scarletnx-agb')),
+        ('scarletnx-nx', ('scarletnx-gnuabi', 'scarletnx-agb')),
+        ('scarletnx-gnuabi', ('scarletnx-nx', 'scarletnx-agb')),
+        ('scarletnx-agb', ('scarletnx-nx', 'scarletnx-gnuabi')),
     ):
         if owner not in by_name:
             if owner == 'scarletnx-common':
@@ -91,7 +92,7 @@ def check_graph(graph):
         for target in forbidden:
             if target in dependencies:
                 errors.append(f'{owner} transitively links forbidden target {target}')
-        if owner in ('scarletnx-common', 'scarletnx-gnuabi'):
+        if owner in ('scarletnx-common', 'scarletnx-gnuabi', 'scarletnx-agb'):
             for target in dependencies:
                 if re.search(
                     r'(?:^|[-_:])(gpu|maxwell|vulkan|volk|glslang|sdl3|ffmpeg|spirv)(?:$|[-_:])', target, re.IGNORECASE
@@ -156,6 +157,8 @@ def check_target_sources(repo, build):
                 'scarletnx-nx': 'nx',
                 'scarletnx-gnuabi': 'gnuabi',
                 'scarletnx-gnuabi-run': 'gnuabi',
+                'scarletnx-agb': 'agb',
+                'scarletnx-agb-run': 'agb',
             }.get(entry['name'])
             target = json.loads((reply / entry['jsonFile']).read_text(encoding='utf-8'))
             directory = (repo / target.get('paths', {}).get('source', '')).resolve()

@@ -69,7 +69,7 @@ flush-to-zero, default-NaN, and alternate-half-precision modes. Rounding modes R
 per lane. Reciprocal step instructions round the product before subtracting, as ARMv8-A specifies, which is
 not the same as a fused step.
 
-Thumb16 and Thumb32 are supported (see `thumb_decode.c`, `llvm_thumb.inc`): integer data processing, loads/stores (immediate, register, pre/post-indexed, unprivileged), push/pop, LDM/STM, branches (B/Bcc/BL/BLX/BX, CBZ/CBNZ, TBB/TBH), bitfield (SBFX/UBFX/BFI/BFC), extends, MOVW/MOVT/ADDW/SUBW, MUL/MLA/MLS, wide data-processing with shifted and modified-immediate operands, and IT blocks (conditions applied per instruction against current flags, as ARMv8-A specifies). Thumb32 coprocessor (VFP/NEON) shares the A32 vector emitter.
+Thumb16 and Thumb32 are supported (see `thumb_decode.c`, `llvm_thumb.inc`): integer data processing, loads/stores (immediate, literal, register, pre/post-indexed, unprivileged), push/pop, LDM/STM, branches (B/Bcc/BL/BLX/BX, CBZ/CBNZ, TBB/TBH), bitfield (SBFX/UBFX/BFI/BFC), extends, MOVW/MOVT/ADDW/SUBW, MUL/MLA/MLS, wide data-processing with shifted and modified-immediate operands, and IT blocks (conditions applied per instruction against current flags, as ARMv8-A specifies). Thumb32 coprocessor (VFP/NEON) shares the A32 vector emitter.
 
 ## Limits and memory model
 

@@ -63,6 +63,14 @@ static unsigned thumb16(uint16_t h, SnxThumb* o) {
         o->rn = o->rd;                      /* ADD reads Rd as its first source */
         return TH_F16;
     }
+    if (g == 9) { /* load literal: PC-relative word load (Thumb format 9, needed by every Thumb ROM) */
+        o->shape = TH_LOAD;
+        o->rd = (h >> 8) & 7;
+        o->rn = 15;
+        o->flags = TH_PCB | TH_UP | TH_PRE;
+        o->imm = (h & 255) * 4;
+        return TH_F16;
+    }
     if (g == 10 || g == 11) { /* load/store register offset */
         unsigned sub = (h >> 9) & 7;
         o->shape = (sub >= 3) ? TH_LOAD : TH_STORE;

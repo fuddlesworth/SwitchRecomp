@@ -50,8 +50,9 @@ typedef struct {
     bool has_output, finished, aborting, abnormal_exit;
     int native;
 } App;
-static const char* const items[] = {"Load Switch NSP/XCI/NRO", "Load Linux ARM ELF", "Setup device keys",
-                                   "Fullscreen", "Enable libgccjit", "Enable gdbstub", "Theme", "Exit"};
+static const char* const items[] = {"Load Switch NSP/XCI/NRO", "Load Linux ARM ELF", "Load GBA ROM",
+                               "Setup device keys", "Fullscreen", "Enable libgccjit",
+                               "Enable gdbstub", "Theme", "Exit"};
 static SDL_Color rgb(GuiRgb c) {
     SDL_Color out;
     out.r = c.r;
@@ -696,8 +697,12 @@ static void pump(App* app) {
     }
     if (app->leaving_ms && now_ms(app) - app->leaving_ms >= app->theme.fade_out_ms) leave_run(app);
 }
+/* the runtime a menu item launches: the Switch boards share one runtime, the other system types have their own */
+static const char* driver_name(int selected) {
+    return selected == GUI_SWITCH ? "scarletnx-mariko" : selected == GUI_GBA ? "scarletnx-agb" : "scarletnx-gnuabi";
+}
 static char* find_driver(App* app) {
-    const char* name = app->menu.selected == GUI_SWITCH ? "scarletnx-mariko" : "scarletnx-gnuabi";
+    const char* name = driver_name(app->menu.selected);
 #ifdef _WIN32
     char* filename = snx_format("%s.exe", name);
 #else
@@ -719,7 +724,7 @@ static void launch(App* app, char* absolute, bool prepared) {
     char* driver = native ? NULL : find_driver(app);
     if (!native && !driver) {
         snprintf(app->message, sizeof(app->message), "Cannot find %s beside the GUI or on PATH.",
-                 app->menu.selected == GUI_SWITCH ? "scarletnx-mariko" : "scarletnx-gnuabi");
+                 driver_name(app->menu.selected));
         free(absolute);
         return;
     }

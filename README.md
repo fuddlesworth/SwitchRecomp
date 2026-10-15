@@ -6,7 +6,7 @@
 
 Discord: https://discord.gg/tRTRXXbyjp (my god why don't we just use IRC like good people?)
 
-A GPLv3 static ARM64 to x86 recompiler with a Nintendo Switch translation layer for Linux, Windows and FreeBSD.
+A GPLv3 static ARM64 to x86 recompiler with a Nintendo Switch, GBA and GNU/Linux ABI translation layer for Solaris, Linux, Windows and FreeBSD.
 
 Forked from MZLab's SwitchRecomp. SwitchRecomp is based off Nexium.
 
@@ -22,7 +22,9 @@ build/gnuabi/scarletnx-gnuabi ./test_aarch64
 
 See [Linux ABI execution and QEMU validation](docs/GNUABI.md) for supported syscalls,
 virtual filesystems, static ELF execution, and current limits. The NX executable also
-has `scarletnx-erista`, `scarletnx-mariko`, and `scarletnx-aula` aliases.
+has `scarletnx-erista`, `scarletnx-mariko`, and `scarletnx-aula` aliases. Game Boy
+Advance ROMs run under the `scarletnx-agb` system type, on the emulated AGB board
+being built under `src/agb/` (licensed under MPL-2.0), see [AGB board](docs/AGB.md).
 
 Install the build tools first. On Debian/Ubuntu:
 ```bash
@@ -72,5 +74,6 @@ For more detailed information please see: [Build + run](./docs/BUILD.md).
 - LibHac.
 - [Nexium](https://nexium-emu.org/) for research and development.
 - [Switchbrew](https://switchbrew.org) for research.
+- [mGBA](https://github.com/mgba-emu/mgba) as a direct reference for the AGB board.
 
 Wimsy, the mascot and the runtime's icon (`dist/wimsy.svg`) was drawn by Liz.

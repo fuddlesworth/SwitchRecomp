@@ -36,6 +36,7 @@ set(CMAKE_CXX_EXTENSIONS ON)
 
 option(SNX_BUILD_NX "Build the Nintendo Switch Horizon/Maxwell runtime" ON)
 option(SNX_BUILD_GNUABI "Build the CPU-only Linux AArch64 runtime" ON)
+option(SNX_BUILD_AGB "Build the Game Boy Advance AGB board runtime" ON)
 # Reject stale backend selections instead of silently changing an existing build's behavior.
 if(SNX_BUILD_NX AND DEFINED SNX_BACKEND AND NOT SNX_BACKEND STREQUAL "sdl3")
     message(FATAL_ERROR "SNX_BACKEND=${SNX_BACKEND}: SDL3 is now mandatory for the NX runtime. "
@@ -85,6 +86,9 @@ if(SNX_TOOLS_ONLY AND SNX_BUILD_NX)
 endif()
 if(SNX_BUILD_GNUABI)
     add_subdirectory(src/gnuabi)
+endif()
+if(SNX_BUILD_AGB)
+    add_subdirectory(src/agb)
 endif()
 if(SNX_BUILD_NX OR SNX_BUILD_GUI)
     include(cmake/dependencies.cmake)

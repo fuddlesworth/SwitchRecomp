@@ -110,19 +110,21 @@ static void thumb_pushpop(ArmIR* a, const SnxThumb* t) {
     LLVMValueRef sp = treg(a, 13);
     if (t->op == 0) { /* PUSH */
         LLVMValueRef start = sub(a, sp, c32(a, count * 4));
-        bounds(a, start, count * 4, 4);
+        bounds(a, start, count * 4, 1); /* the ARM7TDMI transfers at an unaligned SP */
         unsigned index = 0;
-        for (i = 0; i < 8; ++i) if (list & (1u << i)) writemem(a, add(a, start, c32(a, index++ * 4)), 4, treg(a, i));
-        if (t->ra) writemem(a, add(a, start, c32(a, index * 4)), 4, treg(a, 14));
+        for (i = 0; i < 8; ++i) if (list & (1u << i)) writemem_list(a, add(a, start, c32(a, index++ * 4)), 4, treg(a, i));
+        if (t->ra) writemem_list(a, add(a, start, c32(a, index * 4)), 4, treg(a, 14));
         setreg(a, 13, start);
     } else { /* POP */
         LLVMValueRef start = sp, value;
-        bounds(a, start, count * 4, 4);
+        bounds(a, start, count * 4, 1);
         unsigned index = 0;
-        for (i = 0; i < 8; ++i) if (list & (1u << i)) setreg(a, i, readmem(a, add(a, start, c32(a, index++ * 4)), 4, 0));
+        for (i = 0; i < 8; ++i) if (list & (1u << i)) setreg(a, i, readmem_list(a, add(a, start, c32(a, index++ * 4)), 4));
         if (t->ra) {
-            value = readmem(a, add(a, start, c32(a, index * 4)), 4, 0);
-            branch_exchange(a, value);
+            value = readmem_list(a, add(a, start, c32(a, index * 4)), 4);
+            /* The GBA's ARM7TDMI keeps the Thumb state on POP {pc}: interworking takes BX, and the
+               target keeps only bit 0 clear (ARMv8-A would branch with the state from bit 0). */
+            setreg(a, 15, band(a, value, c32(a, ~1u)));
         }
         setreg(a, 13, add(a, start, c32(a, count * 4)));
     }
@@ -133,13 +135,18 @@ static void thumb_ldmstm(ArmIR* a, const SnxThumb* t) {
     for (i = 0; i < 8; ++i) count += (list >> i) & 1;
     if (!count) { trap(a, SNX_ARM_UNDEFINED, c32(a, a->word)); return; }
     LLVMValueRef base = treg(a, t->rn), values[8];
-    bounds(a, base, count * 4, 4);
+    bounds(a, base, count * 4, 1); /* the ARM7TDMI transfers at an unaligned base */
     unsigned index = 0;
     if (t->op == 1) { /* LDMIA: snapshot before writeback */
         for (i = 0; i < 8; ++i) if (list & (1u << i)) values[i] = readmem(a, add(a, base, c32(a, index++ * 4)), 4, 0);
         for (i = 0; i < 8; ++i) if (list & (1u << i)) if (i != t->rn) setreg(a, i, values[i]);
-    } else { /* STMIA */
-        for (i = 0; i < 8; ++i) if (list & (1u << i)) writemem(a, add(a, base, c32(a, index++ * 4)), 4, treg(a, i));
+    } else { /* STMIA: the ARM7TDMI stores the written back base when the base is not the first in the list */
+        for (i = 0; i < 8; ++i)
+            if (list & (1u << i))
+                writemem_list(a, add(a, base, c32(a, index++ * 4)), 4,
+                         i == (unsigned)t->rn && (t->flags & TH_WB) && (list & ((1u << i) - 1))
+                             ? add(a, base, c32(a, count * 4))
+                             : treg(a, i));
     }
     if (t->flags & TH_WB) setreg(a, t->rn, add(a, base, c32(a, count * 4)));
 }
@@ -270,8 +277,17 @@ static int thumb_instruction(ArmIR* a, const SnxThumb* t) {
                 if (t->op == BR_BLX_REG) setreg(a, 14, bor(a, tpcbase(a), c32(a, 1)));
                 return 1;
             }
-            if (t->op == 0) setreg(a, t->rd, add(a, treg(a, t->rn), treg(a, t->rm)));
-            else if (t->op == 1) taddsub(a, treg(a, t->rn), treg(a, t->rm), 1, 1);
+            if (t->op == 0) {
+                /* The GBA's ARM7TDMI reads the raw PC here, not the aligned form ADR uses: the result
+                   branches, so it must not become the register update the block flow would overwrite. */
+                LLVMValueRef sum = add(a, t->rn == 15 ? c32(a, a->pc + 4) : treg(a, t->rn),
+                                       t->rm == 15 ? c32(a, a->pc + 4) : treg(a, t->rm));
+                if (t->rd == 15) {
+                    setreg(a, 15, band(a, sum, c32(a, ~1u)));
+                    return 1;
+                }
+                setreg(a, t->rd, sum);
+            } else if (t->op == 1) taddsub(a, treg(a, t->rn), treg(a, t->rm), 1, 1);
             else {
                 if (t->rd == 15) { setreg(a, 15, band(a, treg(a, t->rm), c32(a, ~1u))); return 1; }
                 setreg(a, t->rd, treg(a, t->rm));
@@ -280,7 +296,11 @@ static int thumb_instruction(ArmIR* a, const SnxThumb* t) {
         case TH_LOAD: case TH_STORE: thumb_ldst(a, t); return 0;
         case TH_ADDR:
             if (t->rd == 13 && t->rn == 13) setreg(a, 13, taddsub(a, treg(a, 13), c32(a, t->imm), t->op == ALU_SUB, 0));
-            else setreg(a, t->rd, add(a, treg(a, t->rn), c32(a, t->imm)));
+            else if (t->rd == 15) { /* a write to the PC branches */
+                setreg(a, 15, band(a, add(a, treg(a, t->rn), c32(a, t->imm)), c32(a, ~1u)));
+                return 1;
+            } else
+                setreg(a, t->rd, add(a, treg(a, t->rn), c32(a, t->imm)));
             return 0;
         case TH_EXTEND: thumb_extend(a, t); return 0;
         case TH_PUSHPOP: thumb_pushpop(a, t); return t->op == 1 && t->ra;

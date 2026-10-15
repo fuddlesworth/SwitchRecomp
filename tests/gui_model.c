@@ -32,6 +32,7 @@ int main(void) {
     assert(menu.view == GUI_LOAD_NONE);
     gui_menu_key(&menu, GUI_DOWN);
     gui_menu_key(&menu, GUI_RIGHT);
+    gui_menu_key(&menu, GUI_DOWN);
     assert(menu.selected == GUI_KEYS);
     gui_menu_key(&menu, GUI_SELECT);
     assert(menu.view == GUI_LOAD_KEYS && !menu.running);
@@ -73,7 +74,7 @@ int main(void) {
 
     menu = (GuiMenu){0};
     gui_menu_key(&menu, GUI_SELECT);
-    menu.selected = GUI_LINUX; /* Mouse focus outside the open submenu. */
+    menu.selected = GUI_GBA; /* Mouse focus outside the open submenu. */
     menu.focus_load = false;
     gui_menu_key(&menu, GUI_DOWN);
     assert(menu.selected == GUI_KEYS && menu.active == GUI_SWITCH && menu.view == GUI_LOAD_OPTIONS);
