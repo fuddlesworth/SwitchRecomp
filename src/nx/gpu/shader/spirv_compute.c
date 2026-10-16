@@ -291,7 +291,7 @@ u32* shader_compute_to_spirv(const u8* code, u32 max_bytes, ShaderInfo* si, size
             spv_emit_return(&c->e);
         else if (id == O_MEMBAR) {
             /* CTA orders workgroup memory, anything else device memory. Image | AtomicCounter | Workgroup |
-               Uniform | AcquireRelease, like vektor's barrier. A memory fence only: never execution. */
+               Uniform | AcquireRelease. */
             spv_emit_memory_barrier(&c->e, c->u, B(w, 8, 2) == 0 ? 2 : 1, 0xD48);
         } else if (id == O_S2R) {
             u32 vec = spv_emit_load(&c->e, v3, b <= 0x23 ? c->local : c->group);
