@@ -3883,6 +3883,13 @@ static void pointer(App* app, float window_x, float window_y, bool click, bool t
     else
         screen_pointer(app, x, y, click, touch);
 }
+#ifdef SDL_PLATFORM_ANDROID
+#define PICKED_UNREADABLE                                                                                              \
+    "Cannot read this file by its path. Check that ScarletNX may access the device's files in Android's settings, "    \
+    "then pick it from the device's storage, not from an app"
+#else
+#define PICKED_UNREADABLE "Pick the file from the device's storage, not from an app"
+#endif
 /* the file the system's picker chose, as a dropped one; none (cancelled) stays on the screen and says so */
 static void picked(App* app, const char* uri) {
     char* path = uri ? gui_document_path(uri) : NULL;
@@ -3892,8 +3899,7 @@ static void picked(App* app, const char* uri) {
     if (!uri)
         snprintf(app->message, sizeof(app->message), "No file was picked.");
     else if (!path)
-        snprintf(app->message, sizeof(app->message), "Pick the file from the device's storage, not from an app (%s).",
-                 uri);
+        snprintf(app->message, sizeof(app->message), "%s (%s).", PICKED_UNREADABLE, uri);
     else
         drop(app, path, false);
     free(path);

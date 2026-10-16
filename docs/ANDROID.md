@@ -38,6 +38,21 @@ fingers reach a game's touch screen (*Touch screen*, in the game's menu or the S
 mouse). The buttons and sticks are on the screen, over the game ([USAGE](USAGE.md#on-screen-controls)), and a gamepad
 works beside them; the menu's *On-screen controls* item hides them.
 
+## Keys
+
+*Setup device keys* copies `prod.keys` into the app's own files, as `.switch/prod.keys` in its `HOME`, and its screen
+names that path. The picked file must be named `prod.keys` exactly: a copy saved as `prod (1).keys` is
+refused. The menu installs no `title.keys`. It is optional, as an NSP's tickets give the title keys too.
+
+The menu reads the picked file by its path, so ScarletNX needs access to the device's files: *All files access* from
+Android 11, the storage permission before it. The app asks when it starts. If it was refused, turn it on in Android's
+settings for ScarletNX, then pick the file again from the device's storage (its own, or a memory card). A file the
+app cannot read by its path (a cloud's, or one from Downloads' own list without that access) is refused with its URI.
+
+The keys may also be copied by hand to `/sdcard/ScarletNX/`: `prod.keys`, and `title.keys` if you have one. That is
+the data folder once the app has the access, and the driver reads both there before the app's own files. The *Setup
+device keys* screen shows only the keys it installed, so it does not name these.
+
 ## Building
 
 LLVM's libraries for each ABI, once (about 10 minutes each on 12 cores):
