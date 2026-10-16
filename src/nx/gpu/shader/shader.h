@@ -81,6 +81,9 @@ extern int g_shader_output_layer;
 /* set by the renderer: the device has geometryShader, which the Geometry capability (a fragment program reading the
    layer) needs; 1 for the offline translator */
 extern int g_shader_geometry;
+/* set by the renderer: the device has shaderFloat16, which fp16 texture results need;
+   1 for the offline translator */
+extern int g_shader_float16;
 /* in clip_enable: a later stage before rasterization follows this one (tessellation or geometry), and the last one
    applies the depth mode and the clip distances */
 #define SNX_SH_NOT_LAST (1u << 31)

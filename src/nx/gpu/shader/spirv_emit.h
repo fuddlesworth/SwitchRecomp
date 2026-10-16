@@ -61,6 +61,7 @@ void spv_emit_destroy(SpvEmitter* e);
 uint32_t spv_emit_id(SpvEmitter* e);
 uint32_t spv_emit_glsl450_import(SpvEmitter* e);
 void spv_emit_shader_capability(SpvEmitter* e);
+void spv_emit_float16_capability(SpvEmitter* e);
 void spv_emit_float64_capability(SpvEmitter* e);
 void spv_emit_draw_parameters_capability(SpvEmitter* e);
 void spv_emit_layer_capability(SpvEmitter* e);
@@ -88,6 +89,8 @@ uint32_t spv_emit_convert_f_to_s(SpvEmitter* e, uint32_t i32_type, uint32_t valu
 uint32_t spv_emit_convert_f_to_u(SpvEmitter* e, uint32_t u32_type, uint32_t value);
 uint32_t spv_emit_convert_s_to_f(SpvEmitter* e, uint32_t f32_type, uint32_t value);
 uint32_t spv_emit_convert_u_to_f(SpvEmitter* e, uint32_t f32_type, uint32_t value);
+uint32_t spv_emit_convert_f_to_f(SpvEmitter* e, uint32_t result_type, uint32_t value);
+uint32_t spv_emit_type_f16(SpvEmitter* e);
 uint32_t spv_emit_type_f32(SpvEmitter* e);
 uint32_t spv_emit_type_f64(SpvEmitter* e);
 uint32_t spv_emit_type_vec4(SpvEmitter* e, uint32_t component_type);
@@ -193,6 +196,7 @@ uint32_t spv_emit_atomic_compare_exchange_shared_u32(SpvEmitter* e, uint32_t u32
 uint32_t spv_emit_atomic_compare_exchange_u32(SpvEmitter* e, uint32_t u32_type, uint32_t pointer, uint32_t desired,
                                               uint32_t expected);
 void spv_emit_control_barrier(SpvEmitter* e, uint32_t u32_type);
+void spv_emit_memory_barrier(SpvEmitter* e, uint32_t u32_type, uint32_t scope, uint32_t semantics);
 uint32_t spv_emit_bitfield_insert(SpvEmitter* e, uint32_t u32_type, uint32_t base, uint32_t insert, uint32_t offset,
                                   uint32_t count);
 uint32_t spv_emit_bit_count(SpvEmitter* e, uint32_t u32_type, uint32_t value);

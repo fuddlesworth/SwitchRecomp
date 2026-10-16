@@ -8,7 +8,7 @@
 
 typedef struct {
     SpvEmitter emit;
-    u32 u32_type, f32_type, f64_type, bool_type, zero, true_value, false_value, glsl;
+    u32 u32_type, f32_type, f16_type, f64_type, bool_type, zero, true_value, false_value, glsl;
     u32 reg[255];
     u32 pred[7];
     u32 cc_c, cc_o, cc_z, cc_s;
@@ -25,6 +25,7 @@ int g_shader_texture_arrays;
 int g_shader_stage_point_size;
 int g_shader_output_layer = 1;
 int g_shader_geometry = 1;
+int g_shader_float16 = 1;
 
 static u32 reg_read(DirectCtx* c, u32 r) {
     return r >= 255 ? c->zero : spv_emit_load(&c->emit, c->u32_type, c->reg[r]);
@@ -949,6 +950,7 @@ static int supported(u64 w, int op) {
         case O_EXIT: return cc_valid(B(w, 0, 5));
         case O_NOP:
         case O_DEPBAR:
+        case O_MEMBAR:
         case O_VOTE_VTG: return 1;
         case O_VOTE: return B(w, 48, 2) < 3;
         case O_FLO_R:
@@ -1164,8 +1166,7 @@ static int supported(u64 w, int op) {
         /* not 6, a multisample fetch: its sample index would be dropped */
         case O_TLDS:
             return (B(w, 53, 4) == 0 || B(w, 53, 4) == 1 || B(w, 53, 4) == 2 || B(w, 53, 4) == 4 || B(w, 53, 4) == 5 ||
-                    B(w, 53, 4) == 7 || B(w, 53, 4) == 8 || B(w, 53, 4) == 12) &&
-                   B(w, 59, 1);
+                    B(w, 53, 4) == 7 || B(w, 53, 4) == 8 || B(w, 53, 4) == 12);
         case O_TLD: return B(w, 28, 3) <= 4 && !B(w, 50, 1) && (!B(w, 35, 1) || B(w, 28, 3) == 2);
         case O_TLD_B:
             return B(w, 28, 3) <= 4 && (!B(w, 50, 1) || B(w, 28, 3) == 2 || B(w, 28, 3) == 3) &&
@@ -1372,7 +1373,7 @@ u32* shader_to_spirv(const u8* code, u32 max_bytes, int stage, ShaderInfo* si, s
     int needs_instance = 0;
     int needs_local_id = 0, needs_group_id = 0;
     int needs_scale = 0;
-    int needs_glsl = 0, needs_f64 = 0;
+    int needs_glsl = 0, needs_f16 = 0, needs_f64 = 0;
     int has_flow = 0, has_calls = 0, has_barrier = 0, converge;
     u32 wait_label = 0;
     int first_indexed = -1, k_indexed;
@@ -1544,7 +1545,8 @@ u32* shader_to_spirv(const u8* code, u32 max_bytes, int stage, ShaderInfo* si, s
         if (guard < 7) pred_used[guard] = 1;
         if (d < 255 && op->id != O_EXIT && op->id != O_KIL && op->id != O_BRA && op->id != O_BRX && op->id != O_SSY &&
             op->id != O_PBK && op->id != O_PCNT && op->id != O_SYNC && op->id != O_BRK && op->id != O_CONT &&
-            op->id != O_AST && op->id != O_NOP && op->id != O_VOTE_VTG && op->id != O_DEPBAR && op->id != O_CAL &&
+            op->id != O_AST && op->id != O_NOP && op->id != O_VOTE_VTG && op->id != O_DEPBAR && op->id != O_MEMBAR &&
+            op->id != O_CAL &&
             op->id != O_PRET && op->id != O_RET && op->id != O_FSETP_R && op->id != O_FSETP_C && op->id != O_FSETP_I &&
             op->id != O_HSETP2_R && op->id != O_HSETP2_C && op->id != O_HSETP2_I && op->id != O_DSETP_R &&
             op->id != O_PSETP && op->id != O_CSETP && op->id != O_R2P_I)
@@ -2072,8 +2074,14 @@ u32* shader_to_spirv(const u8* code, u32 max_bytes, int stage, ShaderInfo* si, s
             if ((enc == 12 || array) && b + 1 < 255) used[b + 1] = 1;
             u32 regs[4], comps[4];
             int outputs = texs_outputs(insn[i], regs, comps);
-            for (int k = 0; k < outputs; k++)
-                if (regs[k] < 255) used[regs[k]] = 1;
+            if (!B(insn[i], 59, 1)) {
+                /* fp16 results pack component pairs into the destination and the second register */
+                needs_f16 = 1;
+                if (d < 255) used[d] = 1;
+                if (outputs > 2 && B(insn[i], 28, 8) < 255) used[B(insn[i], 28, 8)] = 1;
+            } else
+                for (int k = 0; k < outputs; k++)
+                    if (regs[k] < 255) used[regs[k]] = 1;
         }
         if (op->id == O_TEX || op->id == O_TEX_B) {
             int bindless = op->id == O_TEX_B;
@@ -2414,6 +2422,7 @@ u32* shader_to_spirv(const u8* code, u32 max_bytes, int stage, ShaderInfo* si, s
     spv_emit_shader_capability(&c->emit);
     if (stage == ST_TCS || stage == ST_TES) spv_emit_capability(&c->emit, 3); /* Tessellation */
     if (stage == ST_GS) spv_emit_capability(&c->emit, 2);                     /* Geometry */
+    if (needs_f16) spv_emit_float16_capability(&c->emit);
     if (needs_f64) spv_emit_float64_capability(&c->emit);
     if (needs_subgroup || converge) spv_emit_subgroup_capabilities(&c->emit);
     if (converge) spv_emit_subgroup_arithmetic_capability(&c->emit);
@@ -2426,6 +2435,7 @@ u32* shader_to_spirv(const u8* code, u32 max_bytes, int stage, ShaderInfo* si, s
     c->u32_type = spv_emit_type_u32(&c->emit);
     u32 i32_type = spv_emit_type_i32(&c->emit);
     c->f32_type = spv_emit_type_f32(&c->emit);
+    if (needs_f16) c->f16_type = spv_emit_type_f16(&c->emit);
     if (needs_f64) c->f64_type = spv_emit_type_f64(&c->emit);
     c->bool_type = spv_emit_type_bool(&c->emit);
     c->true_value = spv_emit_constant_bool(&c->emit, c->bool_type, 1);
@@ -2434,6 +2444,7 @@ u32* shader_to_spirv(const u8* code, u32 max_bytes, int stage, ShaderInfo* si, s
     u32 vec4_u32 = spv_emit_type_vec4(&c->emit, c->u32_type);
     u32 vec4_i32 = spv_emit_type_vec4(&c->emit, i32_type);
     u32 vec2 = spv_emit_type_vec2(&c->emit, c->f32_type);
+    u32 vec2f16 = needs_f16 ? spv_emit_type_vec2(&c->emit, c->f16_type) : 0;
     u32 vec2_u32 = spv_emit_type_vec2(&c->emit, c->u32_type);
     u32 vec2_i32 = spv_emit_type_vec2(&c->emit, i32_type);
     u32 vec3 = spv_emit_type_vec3(&c->emit, c->f32_type);
@@ -3627,6 +3638,9 @@ u32* shader_to_spirv(const u8* code, u32 max_bytes, int stage, ShaderInfo* si, s
                 spv_emit_patch_barrier(&c->emit, c->u32_type);
             else
                 spv_emit_control_barrier(&c->emit, c->u32_type);
+        } else if (op == O_MEMBAR) {
+            /* a memory fence only, never execution: CTA orders workgroup memory, the rest device memory */
+            spv_emit_memory_barrier(&c->emit, c->u32_type, B(w, 8, 2) == 0 ? 2 : 1, 0xD48);
         } else if (op == O_LDL || op == O_STL) {
             u32 immediate = spv_emit_constant_u32(&c->emit, c->u32_type, (u32)((i32)(B(w, 20, 24) << 8) >> 8));
             u32 address = a == 255 ? immediate : spv_emit_iadd_u32(&c->emit, c->u32_type, reg_read(c, a), immediate);
@@ -4883,8 +4897,26 @@ u32* shader_to_spirv(const u8* code, u32 max_bytes, int stage, ShaderInfo* si, s
                 spv_emit_image_fetch(&c->emit, texture_vec4[slot], c->sampled_type[slot], c->sampler[slot], coord, lod);
             u32 regs[4], comps[4];
             int outputs = texs_outputs(w, regs, comps);
-            for (int k = 0; k < outputs; k++)
-                if (regs[k] < 255) reg_write(c, regs[k], texture_component(c, sample, texture_scalar[slot], comps[k]));
+            if (!B(w, 59, 1)) {
+                /* fp16 surfaces sample as f32; convert each component and pack pairs into halves */
+                u32 halves[4];
+                int pairs = 0;
+                for (int k = 0; k < outputs; k++)
+                    halves[pairs++] = spv_emit_vec4_extract(&c->emit, c->f32_type, sample, comps[k]);
+                u32 lo = spv_emit_vec2_construct(&c->emit, vec2, pairs > 0 ? halves[0] : zero_f,
+                                                 pairs > 1 ? halves[1] : zero_f);
+                lo = spv_emit_bitcast(&c->emit, c->u32_type, spv_emit_convert_f_to_f(&c->emit, vec2f16, lo));
+                if (d < 255) reg_write(c, d, lo);
+                if (outputs > 2) {
+                    u32 db = B(w, 28, 8);
+                    u32 hi = spv_emit_vec2_construct(&c->emit, vec2, pairs > 2 ? halves[2] : zero_f,
+                                                     pairs > 3 ? halves[3] : zero_f);
+                    hi = spv_emit_bitcast(&c->emit, c->u32_type, spv_emit_convert_f_to_f(&c->emit, vec2f16, hi));
+                    if (db < 255) reg_write(c, db, hi);
+                }
+            } else
+                for (int k = 0; k < outputs; k++)
+                    if (regs[k] < 255) reg_write(c, regs[k], texture_component(c, sample, texture_scalar[slot], comps[k]));
         } else if (op == O_TEXS) {
             u32 off = B(w, 36, 13);
             u32 encoding = B(w, 53, 4);

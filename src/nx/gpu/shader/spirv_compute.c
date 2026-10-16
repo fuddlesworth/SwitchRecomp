@@ -51,7 +51,8 @@ static int buffer_index(ShaderInfo* si, int tag) {
 }
 static int supported(u64 w, int op) {
     switch (op) {
-        case O_DEPBAR: return 1;
+        case O_DEPBAR:
+        case O_MEMBAR: return 1;
         case O_EXIT: return B(w, 0, 5) == 15;
         case O_S2R: return (B(w, 20, 8) >= 0x21 && B(w, 20, 8) <= 0x23) || (B(w, 20, 8) >= 0x25 && B(w, 20, 8) <= 0x27);
         case O_MOV_R:
@@ -107,7 +108,7 @@ u32* shader_compute_to_spirv(const u8* code, u32 max_bytes, ShaderInfo* si, size
         unsupported(si, "compute program length");
         return NULL;
     }
-    int flush = 0, preserve = 0, has_exit = 0, needs_carry = 0, needs_group = 0, needs_local = 0;
+    int flush = 0, preserve = 0, needs_carry = 0, needs_group = 0, needs_local = 0;
     ShaderInfo meta = {0};
     meta.stage = ST_CS;
     memcpy(meta.cs_local, si->cs_local, sizeof meta.cs_local);
@@ -124,10 +125,9 @@ u32* shader_compute_to_spirv(const u8* code, u32 max_bytes, ShaderInfo* si, size
         u32 guard = B(w, 16, 3);
         if (guard < 7) pred_used[guard] = 1;
         if (id == O_EXIT) {
-            has_exit = 1;
             continue;
         }
-        if (id == O_DEPBAR) continue;
+        if (id == O_DEPBAR || id == O_MEMBAR) continue;
         if (d < 255 && id != O_STG && id != O_ISETP_R && id != O_ISETP_C && id != O_ISETP_I) used[d] = 1;
         if (a < 255 && id != O_MOV_R && id != O_MOV_C && id != O_MOV32I && id != O_S2R && id != O_ISETP_R &&
             id != O_ISETP_C && id != O_ISETP_I)
@@ -224,7 +224,7 @@ u32* shader_compute_to_spirv(const u8* code, u32 max_bytes, ShaderInfo* si, size
                     if (d + k < 255) tags[d + k] = 0;
         }
     }
-    if (!has_exit || (flush && preserve)) {
+    if (flush && preserve) {
         unsupported(si, "compute control flow or FP32 mode");
         return NULL;
     }
@@ -289,7 +289,11 @@ u32* shader_compute_to_spirv(const u8* code, u32 max_bytes, ShaderInfo* si, size
         }
         if (id == O_EXIT)
             spv_emit_return(&c->e);
-        else if (id == O_S2R) {
+        else if (id == O_MEMBAR) {
+            /* CTA orders workgroup memory, anything else device memory. Image | AtomicCounter | Workgroup |
+               Uniform | AcquireRelease, like vektor's barrier. A memory fence only: never execution. */
+            spv_emit_memory_barrier(&c->e, c->u, B(w, 8, 2) == 0 ? 2 : 1, 0xD48);
+        } else if (id == O_S2R) {
             u32 vec = spv_emit_load(&c->e, v3, b <= 0x23 ? c->local : c->group);
             cw(c, d, spv_emit_vec4_extract(&c->e, c->u, vec, (b <= 0x23 ? b - 0x21 : b - 0x25)));
         } else if (id == O_MOV32I)

@@ -334,15 +334,19 @@ VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, 
         }
         size_t nw = 0;
         u32* spv = vk_translate_spirv(code, 0x10000, stage, &s->si, &nw, sh_cb_read, &s->cbr);
-        if (spv && !g_vk.feat.shaderFloat64) {
+        if (spv && (!g_vk.feat.shaderFloat64 || !g_shader_float16)) {
             for (size_t at = 5; at < nw;) {
                 u32 width = spv[at] >> 16;
                 if (!width || at + width > nw || (spv[at] & 0xffffu) != 17) break;
-                if (width == 2 && spv[at + 1] == 10) {
-                    free(spv);
-                    spv = NULL;
-                    snprintf(s->si.first_unsupported, sizeof s->si.first_unsupported, "shaderFloat64 is unavailable");
-                    break;
+                if (width == 2 && (spv[at + 1] == 10 || spv[at + 1] == 9)) {
+                    int ok = spv[at + 1] == 10 ? g_vk.feat.shaderFloat64 : g_shader_float16;
+                    if (!ok) {
+                        free(spv);
+                        spv = NULL;
+                        snprintf(s->si.first_unsupported, sizeof s->si.first_unsupported,
+                                 spv[at + 1] == 10 ? "shaderFloat64 is unavailable" : "shaderFloat16 is unavailable");
+                        break;
+                    }
                 }
                 at += width;
             }
