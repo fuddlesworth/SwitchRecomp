@@ -54,9 +54,11 @@ is `work/3ds/<title-id>-<full-input-sha256>` of the data folder the Switch drive
 (the checkout, a portable copy's folder, else the user's data folder; `--repo DIR` names
 another), which an installed copy on Linux keeps in `~/.cache/scarletnx/work/3ds/`. No source CIA needs to be mounted by
 the future guest FS. Extraction is privately staged, then published only after
-all checks succeed; failures remove staging files. Existing destinations are
-**refused**, never overwritten or blindly reused as a cache hit. Resume/cache
-validation is still stage-2b work. Keep the input and output parent trusted and
+all checks succeed; failures remove staging files. A second launch of the same
+CIA reuses the default directory when its `manifest.ini` says `state=extracted`
+with the same `input_sha256`. Any other existing destination, including an existing
+`--output` one, is **refused**, never overwritten. Resuming a partial
+extraction is still stage-2b work. Keep the input and output parent trusted and
 not concurrently modified; extraction is not a sandbox against hostile host
 processes racing parent directory changes.
 

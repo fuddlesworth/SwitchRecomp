@@ -101,6 +101,18 @@ def main():
         )
         expected = data.resolve() / 'work/3ds' / name
         assert expected.is_dir() and str(expected) in text
+        # Launching it again reuses that finished output; one whose manifest names another input is refused.
+        _, text = run(
+            plain,
+            3,
+            'static compilation/execution is not implemented',
+            extra=('--repo', str(data)),
+            explicit=False,
+        )
+        assert str(expected) in text
+        manifest = expected / 'manifest.ini'
+        manifest.write_text(manifest.read_text().replace(hashlib.sha256(plain).hexdigest(), '0' * 64))
+        run(plain, 1, 'output already exists', extra=('--repo', str(data)), explicit=False)
         if sys.platform != 'win32' and sys.platform != 'darwin':
             # An installed build's (its folder is the user's data folder) is in the XDG cache folder
             env = {**os.environ, 'XDG_DATA_HOME': str(root / 'xdg-data'), 'XDG_CACHE_HOME': str(root / 'xdg-cache')}

@@ -146,11 +146,25 @@ static bool no_links(const char* path) {
     free(part);
     return ok;
 }
+/* A finished default output: the name carries the input hash, and only a complete extraction is
+   published with a manifest that says so. Anything else at that path is still refused. */
+static bool finished(const char* target, const char* input_hash) {
+    char* path = snx_path_join(target, "manifest.ini");
+    char* expected = snx_format("\ninput_sha256=%s\n", input_hash);
+    size_t size = 0;
+    unsigned char* text = snx_is_link(path) ? NULL : snx_read_file(path, &size);
+    bool ok = text && size > 25 && !memcmp(text, "format=1\nstate=extracted\n", 25) &&
+              strstr((const char*)text, expected);
+    free(text);
+    free(expected);
+    free(path);
+    return ok;
+}
 SnxCtrExtractResult snx_ctr_extract(const char* input, const char* destination, const char* work, char** published,
                                     char* error, size_t error_size) {
     CtrReader r = {.error = error, .error_size = error_size};
     CtrCia cia = {0};
-    char *target = NULL, *parent = NULL, *stage = NULL, *generated = NULL;
+    char *target = NULL, *parent = NULL, *stage = NULL, *generated = NULL, hex[65];
     if (published) *published = NULL;
     if (error_size) error[0] = 0;
     if (!input || !snx_is_file(input) || !(r.input = snx_fopen(input, "rb"))) {
@@ -171,9 +185,8 @@ SnxCtrExtractResult snx_ctr_extract(const char* input, const char* destination, 
     r.size = (uint64_t)ftello(r.input);
 #endif
     if (!ctr_cia_load(&r, &cia)) goto done;
+    for (size_t i = 0; i < 32; ++i) snprintf(hex + i * 2, 3, "%02x", cia.input_hash[i]);
     if (!destination) {
-        char hex[65];
-        for (size_t i = 0; i < 32; ++i) snprintf(hex + i * 2, 3, "%02x", cia.input_hash[i]);
         generated = snx_format("%s/%016" PRIx64 "-%s", work ? work : "work/3ds", cia.title_id, hex);
         destination = generated;
     }
@@ -186,6 +199,13 @@ SnxCtrExtractResult snx_ctr_extract(const char* input, const char* destination, 
             ctr_fail(&r, SNX_CTR_EXTRACT_IO, "output path may not contain control characters");
             goto done;
         }
+    }
+    if (snx_path_exists(target) && generated && snx_is_dir(target) && finished(target, hex)) {
+        if (published) {
+            *published = target;
+            target = NULL;
+        }
+        goto done;
     }
     if (snx_path_exists(target)) {
         ctr_fail(&r, SNX_CTR_EXTRACT_EXISTS, "output already exists; no cache reuse or overwrite: %s", target);

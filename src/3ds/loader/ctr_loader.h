@@ -17,9 +17,10 @@ typedef enum {
    implemented. Hash checks are integrity checks, NOT signature authentication.
    Output is a NEW directory, published only after complete extraction. NULL
    destination selects <work>/<title-id>-<full-input-sha256>, work/3ds when work
-   is NULL. Existing outputs are refused, never treated as a cache hit. Parent
-   directory and input must be trusted and not concurrently modified. published
-   is owned by caller on OK. */
+   is NULL, and reuses it when its manifest says it finished from the same input.
+   Other existing outputs are refused, never overwritten. Parent directory and
+   input must be trusted and not concurrently modified. published is owned by
+   caller on OK. */
 SnxCtrExtractResult snx_ctr_extract(const char* input, const char* destination, const char* work, char** published,
                                     char* error, size_t error_size);
 /* ExeFS backward LZSS/BLZ, exact bounded expansion; output_size is authoritative.
