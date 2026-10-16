@@ -54,12 +54,86 @@ def main():
         assert sorted(p.name for p in (output / 'contents').iterdir()) == ['00001111.app', '00002222.app']
         assert (output / 'contents/00002222.app').read_bytes() == ncch()
         before = {p.relative_to(output): p.read_bytes() for p in output.rglob('*') if p.is_file()}
+        timestamps = {p.relative_to(output): p.stat().st_mtime_ns for p in output.rglob('*')}
         source.write_bytes(plain)
         p = subprocess.run(
             [driver, '-x', '--output', str(output), str(source)], capture_output=True, text=True, timeout=20
         )
-        assert p.returncode == 1 and 'output already exists' in p.stderr
+        assert p.returncode == 0, p.stdout + p.stderr
         assert before == {p.relative_to(output): p.read_bytes() for p in output.rglob('*') if p.is_file()}
+        assert timestamps == {p.relative_to(output): p.stat().st_mtime_ns for p in output.rglob('*')}
+
+        # A completed extraction may be reused, but an incomplete or unrelated output must not be changed.
+        def retry_existing(message='output already exists'):
+            snapshot = {p.relative_to(output): p.read_bytes() for p in output.rglob('*') if p.is_file()}
+            p = subprocess.run(
+                [driver, '-x', '--output', str(output), str(source)], capture_output=True, text=True, timeout=20
+            )
+            assert p.returncode == 1 and message in p.stderr, p.stdout + p.stderr
+            assert snapshot == {p.relative_to(output): p.read_bytes() for p in output.rglob('*') if p.is_file()}
+            assert not list(root.rglob('.snx-*'))
+
+        manifest_path = output / 'manifest.ini'
+        original_manifest = manifest_path.read_bytes()
+        for old, new in [
+            (b'format=1', b'format=2'),
+            (b'state=extracted', b'state=extracting'),
+            (manifest['input_sha256'].encode(), b'0' * 64),
+            (manifest['title_id'].encode(), b'0004000000000000'),
+            (f'title_version={manifest["title_version"]}'.encode(), b'title_version=65535'),
+            (b'state=extracted\n', b''),
+        ]:
+            assert old in original_manifest
+            manifest_path.write_bytes(original_manifest.replace(old, new))
+            retry_existing()
+        for malformed in [
+            b'',
+            b'x' * 4097,
+            b'\n'.join(original_manifest.splitlines()[:6]) + b'\n',
+            original_manifest + b'state=extracting\n',
+            original_manifest + b'\0',
+            original_manifest.replace(b'entry=0x00100000\n', b''),
+            original_manifest.replace(b'data_bytes=4\n', b'data_bytes=\n'),
+        ]:
+            manifest_path.write_bytes(malformed)
+            retry_existing()
+        manifest_path.unlink()
+        retry_existing()
+        manifest_path.write_bytes(original_manifest)
+        code_path = output / 'exefs/.code'
+        code_path.unlink()
+        retry_existing()
+        code_path.write_bytes(b'changed')
+        retry_existing()
+        code_path.write_bytes(code)
+        (output / 'romfs').rename(output / 'saved-romfs')
+        retry_existing()
+        (output / 'saved-romfs').rename(output / 'romfs')
+        source.write_bytes(cia(with_meta=False))
+        retry_existing()
+        source.write_bytes(plain)
+        if os.name != 'nt':
+            manifest_path.unlink()
+            saved_manifest = root / 'saved-manifest.ini'
+            saved_manifest.write_bytes(original_manifest)
+            manifest_path.symlink_to(saved_manifest)
+            retry_existing()
+            manifest_path.unlink()
+            manifest_path.write_bytes(original_manifest)
+            code_path.unlink()
+            saved_code = root / 'saved-code'
+            saved_code.write_bytes(code)
+            code_path.symlink_to(saved_code)
+            retry_existing()
+            code_path.unlink()
+            code_path.write_bytes(code)
+            romfs = output / 'romfs'
+            saved_romfs = output / 'saved-romfs'
+            romfs.rename(saved_romfs)
+            romfs.symlink_to(saved_romfs, target_is_directory=True)
+            retry_existing()
+            romfs.unlink()
+            saved_romfs.rename(romfs)
         # Signature-dependent body positions, absent content and optional metadata.
         for sig in [0x10000, 0x10001, 0x10002, 0x10003, 0x10004, 0x10005]:
             run(cia(signature=sig, with_meta=False))
@@ -101,6 +175,15 @@ def main():
         )
         expected = data.resolve() / 'work/3ds' / name
         assert expected.is_dir() and str(expected) in text
+        # The menu's normal launch path must reach the same unsupported-execution stage on every launch.
+        _, text = run(
+            plain,
+            3,
+            'static compilation/execution is not implemented',
+            extra=('--repo', str(data)),
+            explicit=False,
+        )
+        assert str(expected) in text
         if sys.platform != 'win32' and sys.platform != 'darwin':
             # An installed build's (its folder is the user's data folder) is in the XDG cache folder
             env = {**os.environ, 'XDG_DATA_HOME': str(root / 'xdg-data'), 'XDG_CACHE_HOME': str(root / 'xdg-cache')}

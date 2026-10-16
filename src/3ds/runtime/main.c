@@ -17,11 +17,12 @@
 #endif
 
 static void usage(FILE* out) {
-    fputs("Usage: scarletnx-3ds [--model old|new] [-x] [--output NEW_DIRECTORY] [--repo DIR] [--] game.cia\n"
+    fputs("Usage: scarletnx-3ds [--model old|new] [-x] [--output DIRECTORY] [--repo DIR] [--] game.cia\n"
           "       scarletnx-3ds [--model old|new] --board-info\n"
           "Stage 2a: decrypted application CIA extraction and memory controller.\n"
           "  -x, --extract   extract only (no guest execution)\n"
-          "  --output DIR    new output directory; default work/3ds/<title>-<sha256> of the data folder\n"
+          "  --output DIR    extraction directory; matching completed output is reused\n"
+          "                  default work/3ds/<title>-<sha256> of the data folder\n"
           "  --repo DIR      the data folder (default: the checkout, a portable copy's folder, else the\n"
           "                  user's data folder, as scarletnx picks it; an installed build's work/ is in\n"
           "                  its cache folder)\n"

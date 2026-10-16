@@ -15,9 +15,10 @@ typedef enum {
 } SnxCtrExtractResult;
 /* Decrypted application CIAs only. RSA/ECDSA trust and encrypted layers are not
    implemented. Hash checks are integrity checks, NOT signature authentication.
-   Output is a NEW directory, published only after complete extraction. NULL
+   New output is published only after complete extraction. NULL
    destination selects <work>/<title-id>-<full-input-sha256>, work/3ds when work
-   is NULL. Existing outputs are refused, never treated as a cache hit. Parent
+   is NULL. Existing outputs are reused only with a matching completed format-1
+   manifest, intact code hash and extraction directories; otherwise refused. Parent
    directory and input must be trusted and not concurrently modified. published
    is owned by caller on OK. */
 SnxCtrExtractResult snx_ctr_extract(const char* input, const char* destination, const char* work, char** published,

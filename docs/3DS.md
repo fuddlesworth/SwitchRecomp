@@ -55,8 +55,12 @@ is `work/3ds/<title-id>-<full-input-sha256>` of the data folder the Switch drive
 another), which an installed copy on Linux keeps in `~/.cache/scarletnx/work/3ds/`. No source CIA needs to be mounted by
 the future guest FS. Extraction is privately staged, then published only after
 all checks succeed; failures remove staging files. Existing destinations are
-**refused**, never overwritten or blindly reused as a cache hit. Resume/cache
-validation is still stage-2b work. Keep the input and output parent trusted and
+reused only when their format-1 manifest has all required fields and records a completed extraction with the
+same input SHA-256, title ID and version, the extracted code matches its recorded
+SHA-256, and the extraction directories are present without symlinks. Incomplete
+or mismatched outputs are refused, never overwritten or repaired. This reuses
+completed extraction only; interrupted extraction resume and native-module cache
+validation are still stage-2b work. Keep the input and output parent trusted and
 not concurrently modified; extraction is not a sandbox against hostile host
 processes racing parent directory changes.
 
@@ -67,7 +71,7 @@ selects the board profile (default Old); it does not change the extracted code.
 `--board-info` prints physical regions without allocating RAM. Exit codes:
 
 - 0: help, board information, or successful extract-only operation.
-- 1: malformed/inconsistent data, IO/limit failure, or existing destination.
+- 1: malformed/inconsistent data, IO/limit failure, or incomplete/mismatched existing destination.
 - 2: invalid CLI arguments or missing/non-CIA file path.
 - 3: unsupported encrypted/type variant, or missing ARM11 AOT/execution stage.
 
