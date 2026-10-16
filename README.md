@@ -78,6 +78,7 @@ See the [staged 3DS port](docs/3DS.md) for limits, build instructions and remain
 
 For more detailed information please see: [Build + run](./docs/BUILD.md). For the Android app (arm64 and x86_64),
 see [Android](./docs/ANDROID.md).
+For an error a game or the driver prints, see [Troubleshooting](./docs/TROUBLESHOOTING.md).
 
 # Special thanks
 
