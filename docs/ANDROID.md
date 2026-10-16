@@ -41,7 +41,7 @@ works beside them; the menu's *On-screen controls* item hides them.
 ## Keys
 
 *Setup device keys* copies `prod.keys` into the app's own files, as `.switch/prod.keys` in its `HOME`, and its screen
-names that path. The picked file must be named `prod.keys` exactly: a second download saved as `prod (1).keys` is
+names that path. The picked file must be named `prod.keys` exactly: a copy saved as `prod (1).keys` is
 refused. The menu installs no `title.keys`. It is optional, as an NSP's tickets give the title keys too.
 
 The menu reads the picked file by its path, so ScarletNX needs access to the device's files: *All files access* from
