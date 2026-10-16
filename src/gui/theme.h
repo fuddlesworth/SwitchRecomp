@@ -71,6 +71,42 @@ typedef struct {
     size_t count;
 } GuiThemes;
 
+/* A key of theme.ini: where a GuiTheme keeps it and what it takes. gui_theme_keys lists every one the GUI writes, by
+   section, the editor's form and the file in the same order */
+typedef enum { GUI_KEY_TEXT, GUI_KEY_COLOUR, GUI_KEY_FLAG, GUI_KEY_NUMBER, GUI_KEY_WORD } GuiKeyType;
+typedef struct {
+    const char* section;
+    const char* key;
+    GuiKeyType type;
+    size_t at, size;          /* the field's offset in GuiTheme and its bytes: a text takes size - 1 at most */
+    const char* const* words; /* GUI_KEY_WORD: its words, NULL-ended; the field an int, the word's index */
+    uint32_t max;             /* GUI_KEY_NUMBER: 0 to 10000 read, then at most max */
+    const char* about;
+} GuiThemeKey;
+extern const GuiThemeKey gui_theme_keys[]; /* a NULL section ends it */
+/* what a section of the file holds, for the editor's and the file's heading */
+const char* gui_theme_section_about(const char* section);
+const GuiThemeKey* gui_theme_key(const char* section, const char* key);
+/* value into the key's field: 1 when the GUI takes it, 0 leaves the field as it was */
+int gui_theme_set(GuiTheme* theme, const GuiThemeKey* key, const char* value);
+/* the key's value as the file writes it */
+void gui_theme_get(const GuiTheme* theme, const GuiThemeKey* key, char* out, size_t size);
+
+/* What a theme's file says beyond the theme, to be written back: its base and ErET's layout, ErET's places for the
+   ring, the boot word and the texture (written again with the theme's values), and the keys the GUI does not read,
+   as "[section]\nkey = value\n" lines kept for the programs that do */
+typedef struct {
+    char base[64], layout[16];
+    int ring_side, loading_title, colors_texture;
+    char* others;
+} GuiThemeFile;
+/* text's: a built-in's to start from it. False when out of memory */
+int gui_theme_file_read(GuiThemeFile* file, const char* text, size_t size);
+void gui_theme_file_free(GuiThemeFile* file);
+/* the theme as a theme.ini of the newest format, every key in it so it reads the same over any base; owned, NULL
+   when out of memory */
+char* gui_theme_write(const GuiTheme* theme, const GuiThemeFile* file);
+
 /* "default" and "yorha"; NULL for any other id */
 const GuiTheme* gui_theme_builtin(const char* id);
 /* the theme whose splash a boot shows: this one when roll (0 to 99) is under its chance, else the default */

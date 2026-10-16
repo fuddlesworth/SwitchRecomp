@@ -22,8 +22,9 @@ enum {
     GUI_GCCJIT,
     GUI_GDBSTUB,
     GUI_THEME,
-    GUI_TEXT, /* the menu's letters */
-    GUI_LOG,  /* the logs in one file, for a bug report: a phone has no terminal to copy them from */
+    GUI_THEME_EDIT, /* the theme editor: its keys, a preview, and Save */
+    GUI_TEXT,       /* the menu's letters */
+    GUI_LOG,        /* the logs in one file, for a bug report: a phone has no terminal to copy them from */
     GUI_EXIT,
     GUI_ITEM_COUNT
 };
@@ -42,6 +43,7 @@ typedef struct {
     int touch;      /* GUI_TOUCH_*, fingers the default */
     int text_size;  /* the font's scale, 1 to GUI_TEXT_MAX; 0 fits the screen */
     int theme_next; /* the GUI moves to the next theme and clears it */
+    int theme_edit; /* the GUI opens the theme editor and clears it */
     int share_log;  /* the GUI shares the logs and clears it */
     /* the recent games above the items: how many, the focused one + 1 (0: an item has the focus), and the one
        to run + 1, which the GUI runs and clears */
@@ -67,6 +69,9 @@ size_t gui_launch_options(const GuiMenu* menu, bool prepared, const char* repo, 
 /* the game's --touch=N and --controls=N for the menu's choices */
 const char* gui_touch_option(const GuiMenu* menu);
 const char* gui_controls_option(const GuiMenu* menu);
+/* the footer's line: RAM in MB or GB, the CPU as a share of all cores and the cores in use (cpu_percent counts one
+   core as 100%) */
+void gui_usage_text(char* out, size_t size, bool available, uint64_t memory_bytes, double cpu_percent, int cores);
 /* how many columns a line over columns too many has slid at ms, a column every step_ms: it waits at each end */
 int gui_slide(int over, uint64_t ms, uint32_t step_ms);
 

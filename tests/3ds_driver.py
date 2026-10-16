@@ -20,6 +20,8 @@ def main():
 
     run(['--help'], 0, 'Stage 2a')
     run(['--output'], 2, 'requires a directory')
+    run(['--repo'], 2, 'requires a directory')
+    run(['--board-info', '--repo', '.'], 2, 'Usage:')
     run(['--board-info', '-x'], 2, 'Usage:')
     run([], 2, 'Usage:')
     run(['--model'], 2, 'requires old or new')

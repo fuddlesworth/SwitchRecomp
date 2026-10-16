@@ -43,6 +43,24 @@ int snx_write_file(const char* path, const void* data, size_t size);
 int snx_write_changed(const char* path, const void* data, size_t size);
 char* snx_temp_dir(const char* parent);
 char* snx_user_data_dir(void);
+/* Systems that follow the XDG Base Directory spec, where settings, state and caches have folders of their own */
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__ANDROID__)
+#define SNX_XDG 1
+#endif
+enum { SNX_USER_DATA, SNX_USER_CONFIG, SNX_USER_STATE, SNX_USER_CACHE };
+/* An installed build's folder for one kind of file: $XDG_CONFIG_HOME/scarletnx (~/.config), $XDG_STATE_HOME/scarletnx
+   (~/.local/state) or $XDG_CACHE_HOME/scarletnx (~/.cache), a relative path ignored. Without SNX_XDG all four are the
+   data folder. NULL when the environment names no home */
+char* snx_user_dir(int kind);
+/* A path in the user's data folder, moved to the same place in the folder of kind: games/X.ini of the data folder is
+   games/X.ini of the config folder. Any other path (a checkout, a portable copy, --outdir) is returned as it is */
+char* snx_user_path(const char* path, int kind);
+/* 1 while what an older build left at old is still there, for the caller to say each run where it is and that this
+   build keeps it at now. Nothing is moved: the player does that */
+int snx_left_behind(const char* old, const char* now);
+/* work/ of a data folder, the drivers' extractions: an installed build's is in its cache folder. An older build's
+   work/ in the data folder stays, a line on stdout saying so */
+char* snx_work_dir(const char* data_dir);
 /* The folder work/, games/ and the keys are in when a run names none (--repo), and the menu's games/: the checkout a build
    came from; else, when a games/ folder is beside it, the folder of the AppImage or of the program (a portable copy);
    else the user's data folder. NULL when none can be named */

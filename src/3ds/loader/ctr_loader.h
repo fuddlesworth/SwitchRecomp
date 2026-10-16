@@ -16,11 +16,12 @@ typedef enum {
 /* Decrypted application CIAs only. RSA/ECDSA trust and encrypted layers are not
    implemented. Hash checks are integrity checks, NOT signature authentication.
    Output is a NEW directory, published only after complete extraction. NULL
-   destination selects work/3ds/<title-id>-<full-input-sha256>. Existing outputs
-   are refused, never treated as a cache hit. Parent directory and input must be
-   trusted and not concurrently modified. published is owned by caller on OK. */
-SnxCtrExtractResult snx_ctr_extract(const char* input, const char* destination, char** published, char* error,
-                                    size_t error_size);
+   destination selects <work>/<title-id>-<full-input-sha256>, work/3ds when work
+   is NULL. Existing outputs are refused, never treated as a cache hit. Parent
+   directory and input must be trusted and not concurrently modified. published
+   is owned by caller on OK. */
+SnxCtrExtractResult snx_ctr_extract(const char* input, const char* destination, const char* work, char** published,
+                                    char* error, size_t error_size);
 /* ExeFS backward LZSS/BLZ, exact bounded expansion; output_size is authoritative.
    The input and output buffers must not overlap. */
 bool snx_ctr_blz(const unsigned char* input, size_t input_size, unsigned char* output, size_t output_size);

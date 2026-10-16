@@ -39,6 +39,9 @@ __pycache__/
 /dist/*.zsync
 /dist/appinfo
 
+# What patch or git apply --reject leaves behind when a hunk does not apply
+*.rej
+
 # The Windows toolchains and prebuilt binaries bundled in the MZ Labs zip, in case one is unpacked over the checkout
 # (scripts/import-upstream.sh leaves them out of the upstream branch)
 /python/

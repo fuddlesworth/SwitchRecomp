@@ -45,8 +45,11 @@ static void extract_help(void) {
          "  --keys FILE         prod.keys (default: REPO, then ~/.switch)\n"
          "  --title-keys FILE   title.keys (same discovery order; optional)\n"
          "  --help              Show this help");
-    puts("REPO is the checkout, or for an installed build the user's data folder (scarletnx --help).\n"
-         "Decrypted content needs no keys. Refuses output containing exefs.");
+    puts("REPO is the checkout, or for an installed build the user's data folder (scarletnx --help).");
+#ifdef SNX_XDG
+    puts("An installed build's work/ is in its cache folder, $XDG_CACHE_HOME/scarletnx (~/.cache/scarletnx).");
+#endif
+    puts("Decrypted content needs no keys. Refuses output containing exefs.");
 }
 
 static char* text_copy(const char* text, size_t size) {
@@ -709,11 +712,12 @@ static int prepare_paths(ExtractState* state, const ExtractOptions* options, con
         free(name);
         return snx_error("Extraction name must be a single nonempty filename");
     }
-    work = snx_path_join(paths->repo, "work");
+    /* only when --out names none: play_dump names one, and has said where an older build's extractions are */
+    work = options->out ? NULL : snx_work_dir(paths->repo);
     target = work ? snx_path_join(work, name) : NULL;
     free(work);
     free(name);
-    if (!target) return snx_error("Out of memory resolving extraction output");
+    if (!options->out && !target) return snx_error("Out of memory resolving extraction output");
     state->out = snx_absolute(options->out ? options->out : target);
     free(target);
     if (!state->out) return snx_error("Cannot resolve extraction output");

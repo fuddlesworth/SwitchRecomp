@@ -88,7 +88,7 @@ void logf_(int lvl, const char* fmt, ...) {
        game, leaves no stray <name>.log. Until then the lines go to stderr, and are kept for the log's top */
     if (!g_logf && !g_logf_failed && g_mod) {
         char p[1200];
-        snprintf(p, sizeof p, "%s%s.log", g_exedir, g_exename);
+        snprintf(p, sizeof p, "%s%s.log", g_statedir, g_exename);
         g_logf = fopen(p, "w");
         if (!g_logf) {
             g_logf_failed = 1;

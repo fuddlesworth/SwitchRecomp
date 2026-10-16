@@ -21,7 +21,7 @@ def main():
         root = Path(temp)
         source = root / 'input with spaces;literal.CIA'
 
-        def run(blob, status=0, message='Extracted', output=None, extra=(), explicit=True):
+        def run(blob, status=0, message='Extracted', output=None, extra=(), explicit=True, env=None):
             nonlocal cases
             cases += 1
             source.write_bytes(blob)
@@ -30,7 +30,7 @@ def main():
             if explicit:
                 args += ['-x', '--output', str(output)]
             args += [str(source)]
-            p = subprocess.run(args, capture_output=True, text=True, cwd=root, timeout=20)
+            p = subprocess.run(args, capture_output=True, text=True, cwd=root, timeout=20, env=env)
             text = p.stdout + p.stderr
             assert p.returncode == status, (cases, args, p.returncode, text)
             assert message in text, (cases, message, text)
@@ -88,10 +88,33 @@ def main():
 
         empty, _ = run(cia(application=ncch(patch_exefs=empty_icon)))
         assert (empty / 'exefs/icon').read_bytes() == b''
-        # Default path is content addressed; extraction succeeds but execution is not claimed.
-        _, text = run(plain, 3, 'static compilation/execution is not implemented', explicit=False)
-        expected = root / 'work/3ds' / f'{TITLE:016x}-{hashlib.sha256(plain).hexdigest()}'
+        # Default path is content addressed, in the data folder's work/3ds; extraction succeeds but execution is not
+        # claimed.
+        name = f'{TITLE:016x}-{hashlib.sha256(plain).hexdigest()}'
+        data = root / 'data'
+        _, text = run(
+            plain,
+            3,
+            'static compilation/execution is not implemented',
+            extra=('--repo', str(data)),
+            explicit=False,
+        )
+        expected = data.resolve() / 'work/3ds' / name
         assert expected.is_dir() and str(expected) in text
+        if sys.platform != 'win32' and sys.platform != 'darwin':
+            # An installed build's (its folder is the user's data folder) is in the XDG cache folder
+            env = {**os.environ, 'XDG_DATA_HOME': str(root / 'xdg-data'), 'XDG_CACHE_HOME': str(root / 'xdg-cache')}
+            _, text = run(
+                plain,
+                3,
+                'static compilation/execution is not implemented',
+                extra=('--repo', str(root / 'xdg-data/scarletnx')),
+                explicit=False,
+                env=env,
+            )
+            expected = (root / 'xdg-cache').resolve() / 'scarletnx/work/3ds' / name
+            assert expected.is_dir() and str(expected) in text
+            assert not (root / 'xdg-data/scarletnx/work').exists()
         # Requested extraction alone may succeed without a runtime; normal launches stop before AOT.
         run(cia(encrypted=True), 3, 'encrypted CIA')
         run(cia(application=ncch(encrypted=True)), 3, 'encrypted NCCH')

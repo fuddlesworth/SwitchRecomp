@@ -135,6 +135,13 @@ int main(void) {
     const GuiTheme* loading = yorha; /* YoRHa's runs are its loading screen */
     assert(def && yorha && !gui_theme_builtin("yorha-loading") && !gui_theme_builtin("nothing") &&
            !gui_theme_builtin(NULL));
+    /* the key table is format 1's keys, but for the three that are no field of a theme */
+    for (i = 0; gui_theme_keys[i].section; ++i) {
+        snprintf(longer, sizeof longer, "%s/%s", gui_theme_keys[i].section, gui_theme_keys[i].key);
+        assert(listed_in(format_keys, sizeof format_keys / sizeof *format_keys, longer));
+    }
+    assert(i == sizeof format_keys / sizeof *format_keys - 3 && !gui_theme_key("theme", "format") &&
+           !gui_theme_key("theme", "layout") && !gui_theme_key("theme", "base"));
     assert(rgb_is(yorha->run_colors.page, 0x14, 0x14, 0x16) && !same(yorha->run_colors.page, yorha->page));
     assert(same(def->run_colors.page, def->page) && same(def->run_colors.ink, def->ink));
     assert(def->run == GUI_RUN_CONSOLE && !def->fade_in_ms && !def->fade_out_ms && def->line_in == GUI_LINE_NONE);

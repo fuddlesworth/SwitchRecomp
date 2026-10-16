@@ -86,7 +86,7 @@ static int cached_abi(const char* base) {
 static int play_dump(const char* input, const SnxPaths* paths, unsigned flags, const char* backend, const char* touch,
                      const char* controls, int game_argc, char** game_argv) {
     char *name = game_name(input), *dump = snx_absolute(input);
-    char *work = snx_path_join(paths->repo, "work"), *games = snx_path_join(paths->repo, "games");
+    char *work = snx_work_dir(paths->repo), *games = snx_path_join(paths->repo, "games");
     char *extracted = snx_path_join(work, name), *pending = snx_format("%s.extracting", extracted);
     char *game, *base = snx_path_join(games, name), *code;
     const char** command = (const char**)snx_alloc((size_t)(game_argc + 16) * sizeof(*command));

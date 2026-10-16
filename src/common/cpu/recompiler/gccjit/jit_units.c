@@ -194,6 +194,8 @@ static int compile_forked(SnxJitUnits* u, unsigned jobs) {
             polls[k].events = POLLIN;
             polls[k].revents = 0;
         }
+        /* no time limit: a slow unit is as valid as a quick one, and one whose process hangs without failing holds
+           the call until it is ended (Ctrl+C) */
         if (poll(polls, jobs, -1) < 0) {
             if (errno == EINTR) continue;
             for (k = 0; k < jobs; ++k) polls[k].revents = POLLIN; /* reads block instead */

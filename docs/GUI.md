@@ -42,8 +42,10 @@ build of a detached checkout outside CI says `detached`, and both read `unknown`
   drag and drop `prod.keys` (or paste its path with Ctrl+V); a blinking
   **[ Drop prod.keys here ]** waits in the middle of the screen (the theme's
   `[prompt]`). It installs the file to `~/.switch/prod.keys`, or
-  `%USERPROFILE%\.switch\prod.keys` on Windows,
-  creating the folder if needed. Existing keys trigger the bright-red warning
+  `%USERPROFILE%\.switch\prod.keys` on Windows; an installed copy on Linux puts it in its
+  data folder instead (`~/.local/share/scarletnx/prod.keys`), which the driver reads before
+  `~/.switch`, and names the keys of `~/.switch` it would use until then. It creates the
+  folder if needed. Existing keys trigger the bright-red warning
   **Keys already setup. This will overwrite the previous ones**. A successful
   drop replaces them and returns to the menu; ESC cancels without changing them.
 - **[ON/OFF] Fullscreen** sets how the Switch game starts. ON passes `-f` (short for
@@ -64,6 +66,12 @@ build of a detached checkout outside CI says `detached`, and both read `unknown`
   Switch options; they are never forwarded as Linux guest arguments or to the 3DS driver.
 - **Theme** switches to the next theme: the built-in Default and YoRHa, then each
   folder of `themes/` (see [Themes](#themes)). It lasts for the session.
+- **Theme editor** edits the current theme: a row per `theme.ini` key, and beside them a
+  preview of the menu or a run (Tab switches). Left/Right change a word, a switch or a
+  number, Enter types a colour, a text or a number.
+  Save (Ctrl+S) writes `themes/<folder>/theme.ini` in the data folder and switches to it;
+  a built-in is saved as a new theme, `mytheme` until renamed. ESC leaves, asking first if
+  there are unsaved changes.
 - **Text size** steps the menu's letters through Auto (fit the screen) and four sizes.
   Bigger letters scroll the menu.
 - **Share log** saves the last run's output and game log to `scarletnx.log`. On the
@@ -76,9 +84,10 @@ build of a detached checkout outside CI says `detached`, and both read `unknown`
   The focus moves between them and the items in one ring, and the line under the menu
   shows the focused game's path. Choosing one runs it again with the driver it was
   loaded with and the options the menu has now; a game whose file is gone leaves the
-  list instead. The list is kept in `recent.txt` in the user's data folder
-  (`$XDG_DATA_HOME/scarletnx/gui/`, by default `~/.local/share/scarletnx/gui/`, or
-  `%APPDATA%\scarletnx\gui\` on Windows), a line per
+  list instead. The list is kept in `recent.txt`, beside `last-run.log`, in the user's state
+  folder on Linux (`$XDG_STATE_HOME/scarletnx/gui/`, by default `~/.local/state/scarletnx/gui/`;
+  an older version's in `~/.local/share/scarletnx/gui/` stay where they are), or in
+  `%APPDATA%\scarletnx\gui\` on Windows, a line per
   game: `switch`, `linux` or `3ds`, `file` or `games` (a program from games/, run as it is),
   the path and the name, separated by tabs.
 
@@ -135,10 +144,10 @@ program that buffers or privately redirects its output still controls when it fl
 
 The footer samples combined GUI and descendant resource use every half second:
 
-- RAM is the sum of resident sets (Windows working sets), in MiB. Shared pages may
+- RAM is the sum of resident sets (Windows working sets), in MB or GB. Shared pages may
   be counted more than once. It is not the machine's total installed memory.
-- CPU is aggregate utilization. 100% means one fully occupied host CPU, so parallel
-  compilation can exceed 100%.
+- CPU is a share of the whole machine, 100% being every core busy, then how many cores'
+  worth of time that is.
 
 Linux and FreeBSD track a private child session, including the separate process
 groups created by the driver's stage supervisor and descendants that outlive their
@@ -172,8 +181,8 @@ nothing else: each folder of `src/gui/themes/` is one, its `theme.ini` compiled 
 takes YoRHa's colours from the same file at build time. The files are copied beside the GUI
 in the build and installed with it: copy one under a new name to make a theme, or edit one
 to change the built-in. `[theme] base` picks the built-in a file starts from, and a key it
-leaves out, or that cannot be read, keeps the base's value. The theme builder at
-<https://scarletnx.github.io/theme/> writes a theme.ini with a preview drawn as the GUI draws.
+leaves out, or that cannot be read, keeps the base's value. The menu's **Theme editor**
+writes one with every key.
 
 ```ini
 [theme]
@@ -280,8 +289,9 @@ ErET needs `[theme] layout`, so the built-in files carry one: `debug` and `menu`
 
 - A file of a format the GUI knows reads the same in it and in every later GUI: each key
   keeps its meaning, and each value reads to the same theme. `tests/gui_themes/<N>/` holds
-  files of format N as the theme builder writes them, with the theme each reads to
-  (`<name>.json`, the GUI's fields in the builder's names); `gui_theme_formats` checks them.
+  files of format N as a theme tool wrote them, with the theme each reads to (`<name>.json`,
+  the GUI's fields by key); `gui_theme_formats` checks them, and `gui_theme_write` checks
+  that each, written again, reads to the same theme.
   They are never changed: a field added to themes later is simply not in an older one's JSON.
 - A new key, or a new word for a key, keeps N: an older GUI leaves what it does not know, and
   the base's value stays. A new key's value in the built-ins must keep an older file looking
@@ -290,15 +300,15 @@ ErET needs `[theme] layout`, so the built-in files carry one: `debug` and `menu`
   older format's files with the older meaning, their fixtures stay, and the new format's go
   in `tests/gui_themes/<N+1>/`.
 - A file of a newer format than the GUI's: the keys it knows still apply, the others are left.
-- The theme builder writes every key and the newest format it knows, so its files never lean
-  on a built-in's values, which may change. It reads an older file as that format reads, and
-  writes it in the current one.
+- The theme editor writes every key and the newest format it knows (`gui_theme_write`), so its
+  files never lean on a built-in's values, which may change. It reads an older file as that
+  format reads, and writes it in the current one.
 
 ## Building and testing
 
 The NX build enables `SNX_BUILD_GUI` by default. Disable it with
 `-DSNX_BUILD_GUI=OFF`. Tools-only builds do not enable the GUI.
-The GUI itself needs only SDL3, not Vulkan or FFmpeg. Both driver binaries can be
+The GUI itself needs only SDL3, not Vulkan or FFmpeg. The driver binaries can be
 built separately and installed beside it or made available on PATH.
 
 To build it alongside the NX runtime (which supports `-H` for no-window runs):
@@ -311,7 +321,7 @@ ctest --test-dir build/gui -R '^gui_' --output-on-failure
 
 For just the GUI and Linux runtime, use `-DSNX_BUILD_NX=OFF -DSNX_BUILD_GUI=ON`.
 Tools-only and hactool-only builds cannot enable the GUI.
-Supported host platforms are Linux, FreeBSD and Windows (llvm-mingw).
+Supported host platforms are Linux, FreeBSD, Windows (llvm-mingw) and Android (`dist/android`).
 SDL3 handles window creation, keyboard/mouse input, rendering, clipboard and drag-and-drop
 on every host. The platform-specific code only handles child processes and resource
 accounting. See [BUILD](BUILD.md) for SDL3's desktop dependencies.

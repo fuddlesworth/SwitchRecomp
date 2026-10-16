@@ -2,25 +2,102 @@
    Copyright 2026 the ScarletNX contributors */
 #include "theme.h"
 #include "common.h"
+#include "ini_lines.h"
 #include "gui_themes.h"
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* the built-ins: each folder of src/gui/themes, its theme.ini compiled in (cmake/gui_themes.cmake) and read the
    first time one is asked for. Their files are their only source: nothing here holds a value of theirs */
 static GuiTheme builtins[SNX_GUI_THEME_COUNT];
-/* a theme's id fits a slot of the theme list: an array of negative size otherwise */
+/* a theme's id fits a slot of the theme list, and a word's field is an int: an array of negative size otherwise */
 typedef char snx_gui_id_slot[sizeof(((GuiThemes*)0)->ids[0]) == sizeof(((GuiTheme*)0)->id) ? 1 : -1];
-static const char* const screens[GUI_SCREEN_COUNT] = {"menu", "games", "keys", "compiling", "loading"};
-static const char* const rings[] = {"none", "left", "right", "right-near-text"};
+typedef char snx_gui_word_int[sizeof(GuiStyle) == sizeof(int) && sizeof(GuiRunLayout) == sizeof(int) &&
+                                      sizeof(GuiRing) == sizeof(int) && sizeof(GuiLineIn) == sizeof(int) &&
+                                      sizeof(GuiAlign) == sizeof(int)
+                                  ? 1
+                                  : -1];
 
-static char* trim(char* s) {
-    size_t n;
-    while (*s == ' ' || *s == '\t') ++s;
-    n = strlen(s);
-    while (n && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r')) s[--n] = 0;
-    return s;
-}
+static const char* const styles[] = {"plain", "bar", "none", NULL};
+static const char* const focuses[] = {"color", "bar", NULL};
+static const char* const layouts[] = {"console", "steps", NULL};
+static const char* const rings[] = {"none", "left", "right", "right-near-text", NULL};
+static const char* const aligns[] = {"left", "center", "right", NULL};
+static const char* const entrances[] = {"none", "typing", "slide", "fade", NULL};
+static const char* const typings[] = {"async", "sync", NULL};
+#define FIELD(f)                    offsetof(GuiTheme, f), sizeof(((GuiTheme*)0)->f)
+#define TEXT(s, k, f, about)        {s, k, GUI_KEY_TEXT, FIELD(f), NULL, 0, about}
+#define COLOUR(s, k, f, about)      {s, k, GUI_KEY_COLOUR, FIELD(f), NULL, 0, about}
+#define FLAG(s, k, f, about)        {s, k, GUI_KEY_FLAG, FIELD(f), NULL, 0, about}
+#define NUMBER(s, k, f, max, about) {s, k, GUI_KEY_NUMBER, FIELD(f), NULL, max, about}
+#define WORD(s, k, f, words, about) {s, k, GUI_KEY_WORD, FIELD(f), words, 0, about}
+const GuiThemeKey gui_theme_keys[] = {
+    TEXT("theme", "name", name, "the name the menu's Theme item shows"),
+    TEXT("theme", "author", author, "who made it"),
+    COLOUR("colors", "page", page, "the background"),
+    COLOUR("colors", "ink", ink, "text; the head's and footer's bar"),
+    COLOUR("colors", "soft", soft, "hints, secondary text, rules"),
+    COLOUR("colors", "focus", focus, "the focused line, or its band"),
+    COLOUR("colors", "active", active, "the item chosen, the run's head"),
+    COLOUR("colors", "failure", failure, "warnings, the ESC line, a failed run"),
+    COLOUR("colors", "dim", dim, "unused by the menus; [run] dim is the loading screen's"),
+    COLOUR("colors", "warning", warning, "the abort question in the console layout"),
+    WORD("head", "style", head, styles, "bar: the title on a band of ink; none: no title and no hints"),
+    FLAG("head", "rule", head_rule, "a line under the head"),
+    TEXT("head", "menu", title[GUI_SCREEN_MENU], "the menu's title"),
+    TEXT("head", "games", title[GUI_SCREEN_GAMES], "the games/ list's title"),
+    TEXT("head", "keys", title[GUI_SCREEN_KEYS], "the keys screen's title"),
+    TEXT("head", "compiling", title[GUI_SCREEN_COMPILING], "a run's title until the game loads"),
+    TEXT("head", "loading", title[GUI_SCREEN_LOADING], "a run's title once the runner's banner came"),
+    TEXT("body", "marker", marker, "before each menu item"),
+    WORD("body", "focus", focus_bar, focuses, "the focused line in the focus colour, or on a band of it"),
+    WORD("footer", "style", footer, styles, "bar: on a band of ink"),
+    FLAG("footer", "rule", footer_rule, "a line over the footer"),
+    WORD("run", "layout", run, layouts, "steps: the loading screen; the keys below but colours are its"),
+    COLOUR("run", "page", run_colors.page, "the loading screen's background"),
+    COLOUR("run", "ink", run_colors.ink, "its text, the cursor, the ring's turning bar"),
+    COLOUR("run", "soft", run_colors.soft, "older steps, the name, the inner ring"),
+    COLOUR("run", "dim", run_colors.dim, "the outer ring, the bar's empty segments"),
+    COLOUR("run", "failure", run_colors.failure, "a failed step, a failed run"),
+    COLOUR("run", "warning", run_colors.warning, "a run being aborted, the question"),
+    FLAG("run", "texture", texture, "faint lines over the page"),
+    FLAG("run", "bar", bar, "the progress bar and its percentage"),
+    FLAG("run", "detailed", detailed, "each step's other lines under it"),
+    FLAG("run", "collapse", collapse, "a done step's lines folded away"),
+    WORD("run", "ring", ring, rings, "the turning ring"),
+    WORD("prompt", "align", prompt.align, aligns, "on its row"),
+    TEXT("prompt", "open", prompt.open, "before the line"),
+    TEXT("prompt", "close", prompt.close, "after it"),
+    FLAG("prompt", "blink", prompt.blink, "blinking at blink_ms"),
+    FLAG("prompt", "keys", prompt.lines[GUI_PROMPT_KEYS], "the keys screen's drop line"),
+    FLAG("prompt", "done", prompt.lines[GUI_PROMPT_DONE], "the ESC line after a run"),
+    FLAG("prompt", "failed", prompt.lines[GUI_PROMPT_FAILED], "the ESC line after a failed run"),
+    FLAG("prompt", "aborting", prompt.lines[GUI_PROMPT_ABORTING], "a run being aborted"),
+    NUMBER("transitions", "fade_in_ms", fade_in_ms, 10000, "what comes after a fade out, from black"),
+    NUMBER("transitions", "fade_out_ms", fade_out_ms, 10000, "the menu as a run starts, a run ESC leaves"),
+    WORD("transitions", "line_in", line_in, entrances, "how a step's line comes in"),
+    NUMBER("transitions", "line_in_ms", line_in_ms, 10000, "slide and fade's length"),
+    NUMBER("transitions", "typing_ms", typing_ms, 10000, "a character of the running line, any other line whole"),
+    WORD("transitions", "typing", typing_sync, typings, "sync: one line at a time"),
+    NUMBER("transitions", "blink_ms", blink_ms, 10000, "the cursor's and the prompt's blink"),
+    NUMBER("transitions", "scroll_ms", scroll_ms, 10000, "a line too long for its row slides a column each"),
+    COLOUR("splash", "page", splash_page, "behind the icon"),
+    NUMBER("splash", "ms", splash_ms, 10000, "how long; 0: none"),
+    NUMBER("splash", "chance", splash_chance, 100, "the boots in 100 that show this theme's, the default's the others"),
+    {NULL, NULL, GUI_KEY_TEXT, 0, 0, NULL, 0, NULL}};
+static const char* const sections[][2] = {
+    {"theme", "Who made it. The theme's id is its folder's name."},
+    {"colors", "The menus' colours, #RRGGBB."},
+    {"head", "The top: a title per screen and the hints under it."},
+    {"body", "The menu's lines."},
+    {"footer", "The bottom: resource use and the working folder."},
+    {"run", "A run: the driver's output as it comes, or a loading screen in its own colours."},
+    {"prompt", "A line that waits on the user: framed, placed and blinking when its key is true."},
+    {"transitions", "Milliseconds, 0 to 10000; 0 turns the thing off."},
+    {"splash", "The boot's: the program's icon on a page."}};
+
 /* "quoted" keeps its spaces */
 static char* unquote(char* s) {
     size_t n = strlen(s);
@@ -55,26 +132,6 @@ static int colour(GuiRgb* out, const char* value) {
     out->b = v[2];
     return 1;
 }
-static int style(GuiStyle* out, const char* value) {
-    if (!strcmp(value, "plain"))
-        *out = GUI_STYLE_PLAIN;
-    else if (!strcmp(value, "bar"))
-        *out = GUI_STYLE_BAR;
-    else if (!strcmp(value, "none"))
-        *out = GUI_STYLE_NONE;
-    else
-        return 0;
-    return 1;
-}
-static int flag(int* out, const char* value) {
-    if (!strcmp(value, "true"))
-        *out = 1;
-    else if (!strcmp(value, "false"))
-        *out = 0;
-    else
-        return 0;
-    return 1;
-}
 /* a whole number, 0 to 10000 */
 static int integer(uint32_t* out, const char* value) {
     char* end;
@@ -83,127 +140,84 @@ static int integer(uint32_t* out, const char* value) {
     *out = (uint32_t)n;
     return 1;
 }
-static int word(int* out, const char* value, const char* const* words, int count) {
+const char* gui_theme_section_about(const char* section) {
+    size_t i;
+    for (i = 0; i < sizeof sections / sizeof *sections; ++i)
+        if (!strcmp(sections[i][0], section)) return sections[i][1];
+    return "";
+}
+const GuiThemeKey* gui_theme_key(const char* section, const char* key) {
+    const GuiThemeKey* k;
+    for (k = gui_theme_keys; k->section; ++k)
+        if (!strcmp(k->section, section) && !strcmp(k->key, key)) return k;
+    return NULL;
+}
+int gui_theme_set(GuiTheme* theme, const GuiThemeKey* key, const char* value) {
+    char* field = (char*)theme + key->at;
+    uint32_t n;
     int i;
-    for (i = 0; i < count; ++i)
-        if (!strcmp(value, words[i])) {
-            *out = i;
+    switch (key->type) {
+        case GUI_KEY_TEXT: return !strchr(value, '\n') && copy(field, key->size, value); /* a line of the file */
+        case GUI_KEY_COLOUR: return colour((GuiRgb*)field, value);
+        case GUI_KEY_FLAG:
+            if (strcmp(value, "true") && strcmp(value, "false")) return 0;
+            *(int*)field = value[0] == 't';
             return 1;
-        }
+        case GUI_KEY_NUMBER:
+            if (!integer(&n, value)) return 0;
+            *(uint32_t*)field = n < key->max ? n : key->max;
+            return 1;
+        case GUI_KEY_WORD:
+            for (i = 0; key->words[i]; ++i)
+                if (!strcmp(value, key->words[i])) {
+                    *(int*)field = i;
+                    return 1;
+                }
+            return 0;
+    }
     return 0;
 }
-static void palette(GuiPalette* p, const char* key, const char* value) {
-    size_t i;
-    static const size_t roles[] = {offsetof(GuiPalette, page),    offsetof(GuiPalette, ink),
-                                   offsetof(GuiPalette, soft),    offsetof(GuiPalette, dim),
-                                   offsetof(GuiPalette, failure), offsetof(GuiPalette, warning)};
-    static const char* const names[] = {"page", "ink", "soft", "dim", "failure", "warning"};
-    for (i = 0; i < sizeof roles / sizeof *roles; ++i)
-        if (!strcmp(key, names[i])) colour((GuiRgb*)((char*)p + roles[i]), value);
+void gui_theme_get(const GuiTheme* theme, const GuiThemeKey* key, char* out, size_t size) {
+    const char* field = (const char*)theme + key->at;
+    const GuiRgb* c = (const GuiRgb*)field;
+    int i, n;
+    switch (key->type) {
+        case GUI_KEY_TEXT: snprintf(out, size, "%s", field); return;
+        case GUI_KEY_COLOUR: snprintf(out, size, "#%02X%02X%02X", c->r, c->g, c->b); return;
+        case GUI_KEY_FLAG: snprintf(out, size, "%s", *(const int*)field ? "true" : "false"); return;
+        case GUI_KEY_NUMBER: snprintf(out, size, "%lu", (unsigned long)*(const uint32_t*)field); return;
+        case GUI_KEY_WORD:
+            i = *(const int*)field;
+            for (n = 0; key->words[n]; ++n) {}
+            snprintf(out, size, "%s", key->words[i >= 0 && i < n ? i : 0]);
+            return;
+    }
 }
 /* run_colors: an ErET loading theme's [colors] are its loading screen's, here the run's */
 static void apply(GuiTheme* t, const char* section, const char* key, const char* value, int run_colors) {
+    const GuiThemeKey* k;
     uint32_t number;
-    if (!strcmp(section, "theme") && !strcmp(key, "name"))
-        copy(t->name, sizeof t->name, value);
-    else if (!strcmp(section, "theme") && !strcmp(key, "author"))
-        copy(t->author, sizeof t->author, value);
-    else if (!strcmp(section, "theme") && !strcmp(key, "format")) {
+    if (!strcmp(section, "theme") && !strcmp(key, "format")) {
         if (integer(&number, value) && number) t->format = number;
-    } else if (!strcmp(section, "colors") && run_colors) {
-        if (!strcmp(key, "texture")) flag(&t->texture, value);
-        palette(&t->run_colors, key, value);
-    } else if (!strcmp(section, "colors")) {
-        size_t i;
-        static const size_t roles[] = {offsetof(GuiTheme, page),   offsetof(GuiTheme, ink),
-                                       offsetof(GuiTheme, soft),   offsetof(GuiTheme, focus),
-                                       offsetof(GuiTheme, active), offsetof(GuiTheme, failure),
-                                       offsetof(GuiTheme, dim),    offsetof(GuiTheme, warning)};
-        static const char* const names[] = {"page", "ink", "soft", "focus", "active", "failure", "dim", "warning"};
-        if (!strcmp(key, "texture")) flag(&t->texture, value); /* where ErET keeps it */
-        for (i = 0; i < sizeof roles / sizeof *roles; ++i)
-            if (!strcmp(key, names[i])) colour((GuiRgb*)((char*)t + roles[i]), value);
-    } else if (!strcmp(section, "head") || !strcmp(section, "footer")) {
-        int i;
-        int head = section[0] == 'h';
-        if (!strcmp(key, "style"))
-            style(head ? &t->head : &t->footer, value);
-        else if (!strcmp(key, "rule"))
-            flag(head ? &t->head_rule : &t->footer_rule, value);
-        else
-            for (i = 0; head && i < GUI_SCREEN_COUNT; ++i)
-                if (!strcmp(key, screens[i])) copy(t->title[i], sizeof t->title[i], value);
-    } else if (!strcmp(section, "body")) {
-        if (!strcmp(key, "marker"))
-            copy(t->marker, sizeof t->marker, value);
-        else if (!strcmp(key, "focus") && (!strcmp(value, "bar") || !strcmp(value, "color")))
-            t->focus_bar = value[0] == 'b';
-    } else if (!strcmp(section, "run")) {
-        static const char* const layouts[] = {"console", "steps"};
-        int n;
-        if (!strcmp(key, "layout") && word(&n, value, layouts, 2))
-            t->run = (GuiRunLayout)n;
-        else if (!strcmp(key, "ring") && word(&n, value, rings, 4))
-            t->ring = (GuiRing)n;
-        else if (!strcmp(key, "texture"))
-            flag(&t->texture, value);
-        else if (!strcmp(key, "bar"))
-            flag(&t->bar, value);
-        else if (!strcmp(key, "detailed"))
-            flag(&t->detailed, value);
-        else if (!strcmp(key, "collapse"))
-            flag(&t->collapse, value);
-        else
-            palette(&t->run_colors, key, value);
-    } else if (!strcmp(section, "transitions")) {
-        static const char* const entrances[] = {"none", "typing", "slide", "fade"};
-        int n;
-        if (!strcmp(key, "line_in") && word(&n, value, entrances, 4))
-            t->line_in = (GuiLineIn)n;
-        else if (!strcmp(key, "fade_in_ms"))
-            integer(&t->fade_in_ms, value);
-        else if (!strcmp(key, "fade_out_ms"))
-            integer(&t->fade_out_ms, value);
-        else if (!strcmp(key, "line_in_ms"))
-            integer(&t->line_in_ms, value);
-        else if (!strcmp(key, "typing_ms"))
-            integer(&t->typing_ms, value);
-        else if (!strcmp(key, "blink_ms"))
-            integer(&t->blink_ms, value);
-        else if (!strcmp(key, "scroll_ms"))
-            integer(&t->scroll_ms, value);
-        else if (!strcmp(key, "typing") && (!strcmp(value, "async") || !strcmp(value, "sync")))
-            t->typing_sync = value[0] == 's';
-    } else if (!strcmp(section, "splash")) {
-        if (!strcmp(key, "page"))
-            colour(&t->splash_page, value);
-        else if (!strcmp(key, "ms"))
-            integer(&t->splash_ms, value);
-        else if (!strcmp(key, "chance") && integer(&t->splash_chance, value) && t->splash_chance > 100)
-            t->splash_chance = 100;
-    } else if (!strcmp(section, "header") && !strcmp(key, "ring_side")) {
-        /* ErET's words; none is ours */
-        static const char* const sides[] = {"right", "left", "right-near-text"};
-        static const GuiRing as[] = {GUI_RING_RIGHT, GUI_RING_LEFT, GUI_RING_NEAR_TEXT};
-        int n;
-        if (word(&n, value, sides, 3)) t->ring = as[n];
-    } else if (!strcmp(section, "prompt")) {
-        static const char* const aligns[] = {"left", "center", "right"};
-        static const char* const lines[GUI_PROMPT_COUNT] = {"keys", "done", "failed", "aborting"};
-        int n;
-        if (!strcmp(key, "align") && word(&n, value, aligns, 3))
-            t->prompt.align = (GuiAlign)n;
-        else if (!strcmp(key, "open"))
-            copy(t->prompt.open, sizeof t->prompt.open, value);
-        else if (!strcmp(key, "close"))
-            copy(t->prompt.close, sizeof t->prompt.close, value);
-        else if (!strcmp(key, "blink"))
-            flag(&t->prompt.blink, value);
-        else if (word(&n, key, lines, GUI_PROMPT_COUNT))
-            flag(&t->prompt.lines[n], value);
-    } else if (!strcmp(section, "loading") && !strcmp(key, "title")) {
-        copy(t->title[GUI_SCREEN_LOADING], sizeof t->title[GUI_SCREEN_LOADING], value); /* ErET's boot word */
+        return;
     }
+    /* ErET's places: [colors] texture, and with its loading layout the run's colours; [header] ring_side in its
+       words, none being ours; [loading] title, its boot word */
+    if (!strcmp(section, "colors") && (run_colors || !strcmp(key, "texture"))) {
+        k = gui_theme_key("run", key);
+        if (k && (k->type == GUI_KEY_COLOUR || !strcmp(key, "texture"))) gui_theme_set(t, k, value);
+        return;
+    }
+    if (!strcmp(section, "header") && !strcmp(key, "ring_side")) {
+        if (strcmp(value, "none")) gui_theme_set(t, gui_theme_key("run", "ring"), value);
+        return;
+    }
+    if (!strcmp(section, "loading") && !strcmp(key, "title")) {
+        gui_theme_set(t, gui_theme_key("head", "loading"), value);
+        return;
+    }
+    k = gui_theme_key(section, key);
+    if (k) gui_theme_set(t, k, value);
 }
 /* each key = value of text, with its section, to visit; false when out of memory */
 /* ErET's layout as the built-in to start from, when no base names one */
@@ -216,37 +230,17 @@ static const GuiTheme* layout_base(const char* layout) {
 }
 static int visit(const char* text, size_t size, GuiTheme* theme, const GuiTheme** bases, int base_only,
                  int run_colors) {
-    char section[32];
-    char* line;
-    char* next;
+    SnxIni ini;
+    char* key;
+    char* value;
     char* copy_of = malloc(size + 1);
     if (!copy_of) return 0;
     memcpy(copy_of, text, size);
     copy_of[size] = 0;
-    memset(section, 0, sizeof section);
-    for (line = copy_of; line; line = next) {
-        char* key;
-        char* value;
-        char* equals;
-        char* s;
-        next = strchr(line, '\n');
-        if (next) *next++ = 0;
-        s = trim(line);
-        if (!*s || *s == ';' || *s == '#') continue;
-        if (*s == '[') {
-            char* end = strchr(s, ']');
-            if (end && (size_t)(end - s - 1) < sizeof section) {
-                memcpy(section, s + 1, (size_t)(end - s - 1));
-                section[end - s - 1] = 0;
-            } else
-                section[0] = 0;
-            continue;
-        }
-        equals = strchr(s, '=');
-        if (!equals) continue;
-        *equals = 0;
-        key = trim(s);
-        value = unquote(trim(equals + 1));
+    snx_ini_start(&ini, copy_of);
+    while (snx_ini_next(&ini, &key, &value)) {
+        const char* section = ini.section;
+        value = unquote(value);
         if (base_only) {
             if (!strcmp(section, "theme") && !strcmp(key, "base") && gui_theme_builtin(value))
                 bases[0] = gui_theme_builtin(value);
@@ -351,4 +345,165 @@ void gui_themes_scan(GuiThemes* themes, const char* const* dirs, size_t count) {
         }
         snx_free_strings(names, found);
     }
+}
+
+/* text that grows as it is written; failed once out of memory */
+typedef struct {
+    char* p;
+    size_t n, room;
+    int failed;
+} Out;
+static void put(Out* o, const char* format, ...) {
+    va_list ap;
+    int n;
+    for (;;) {
+        char* grown;
+        if (o->failed) return;
+        if (o->room) {
+            va_start(ap, format);
+            n = vsnprintf(o->p + o->n, o->room - o->n, format, ap);
+            va_end(ap);
+            if (n < 0) o->failed = 1;
+            if (n < 0 || o->n + (size_t)n < o->room) {
+                o->n += n < 0 ? 0 : (size_t)n;
+                return;
+            }
+        }
+        o->room = o->room ? o->room * 2 : 4096;
+        grown = realloc(o->p, o->room);
+        if (!grown) {
+            free(o->p);
+            o->p = NULL;
+            o->failed = 1;
+        }
+        o->p = grown;
+    }
+}
+/* quotes keep white space at either end, and a value that is itself quoted */
+static void put_key(Out* o, const char* key, const char* value) {
+    size_t n = strlen(value);
+    int quoted = n && (value[0] == ' ' || value[0] == '\t' || value[n - 1] == ' ' || value[n - 1] == '\t' ||
+                       value[n - 1] == '\r' || (n >= 2 && value[0] == '"' && value[n - 1] == '"'));
+    put(o, quoted ? "%s = \"%s\"\n" : "%s = %s\n", key, value);
+}
+static const char* const eret_layouts[] = {"plain", "debug", "loading", "menu", "skip", NULL};
+static int is_word(const char* const* words, const char* w) {
+    for (; *words; ++words)
+        if (!strcmp(*words, w)) return 1;
+    return 0;
+}
+
+int gui_theme_file_read(GuiThemeFile* file, const char* text, size_t size) {
+    Out others = {NULL, 0, 0, 0};
+    SnxIni ini;
+    char *key, *value, last[sizeof ini.section] = "";
+    char* copy_of = malloc(size + 1);
+    memset(file, 0, sizeof *file);
+    if (!copy_of) return 0;
+    memcpy(copy_of, text, size);
+    copy_of[size] = 0;
+    snx_ini_start(&ini, copy_of);
+    while (snx_ini_next(&ini, &key, &value)) {
+        value = unquote(value);
+        if (!strcmp(ini.section, "theme") && !strcmp(key, "base"))
+            copy(file->base, sizeof file->base, value);
+        else if (!strcmp(ini.section, "theme") && !strcmp(key, "layout"))
+            copy(file->layout, sizeof file->layout, value);
+        else if (!strcmp(ini.section, "header") && !strcmp(key, "ring_side"))
+            file->ring_side = 1;
+        else if (!strcmp(ini.section, "loading") && !strcmp(key, "title"))
+            file->loading_title = 1;
+        else if (!strcmp(ini.section, "colors") && !strcmp(key, "texture"))
+            file->colors_texture = 1;
+        else if (ini.section[0] && key[0] && !gui_theme_key(ini.section, key) &&
+                 (strcmp(ini.section, "theme") || strcmp(key, "format"))) {
+            if (strcmp(last, ini.section)) put(&others, "[%s]\n", strcpy(last, ini.section));
+            put_key(&others, key, value);
+        }
+    }
+    free(copy_of);
+    file->others = others.p;
+    return !others.failed;
+}
+void gui_theme_file_free(GuiThemeFile* file) {
+    free(file->others);
+    file->others = NULL;
+}
+/* the [theme] layout a built-in's file names: ErET's drawing for a theme that starts from it */
+static const char* builtin_layout(const char* id) {
+    static GuiThemeFile files[SNX_GUI_THEME_COUNT];
+    size_t i;
+    for (i = 0; i < SNX_GUI_THEME_COUNT; ++i)
+        if (!strcmp(snx_gui_theme_ids[i], id)) {
+            if (!files[i].layout[0])
+                gui_theme_file_read(&files[i], snx_gui_theme_texts[i], strlen(snx_gui_theme_texts[i]));
+            return is_word(eret_layouts, files[i].layout) ? files[i].layout : "debug";
+        }
+    return "debug";
+}
+char* gui_theme_write(const GuiTheme* theme, const GuiThemeFile* file) {
+    Out o = {NULL, 0, 0, 0};
+    const char* base = file && gui_theme_builtin(file->base) ? file->base : "default";
+    const char* layout = file && is_word(eret_layouts, file->layout) ? file->layout : builtin_layout(base);
+    int loading = !strcmp(layout, "loading"); /* ErET's: no base, it starts from YoRHa, [colors] are the run's */
+    char value[80];
+    size_t s;
+    put(&o,
+        "; ScarletNX GUI theme, format %d: a folder of themes/ holding this file, the folder's name its id. A\n"
+        "; folder named like a built-in replaces it. Keys left out, or that cannot be read, keep the base's value;\n"
+        "; keys this GUI does not know are left for others (rEden's ErET reads the same file). A comment takes a\n"
+        "; line of its own. docs/GUI.md describes every key. Made with the theme editor in ScarletNX's menu.\n",
+        GUI_THEME_FORMAT);
+    for (s = 0; s < sizeof sections / sizeof *sections; ++s) {
+        const char* name = sections[s][0];
+        int run_colors = loading && !strcmp(name, "colors");
+        const GuiThemeKey* k;
+        put(&o, "%s[%s]\n; %s\n", s ? "\n" : "", name,
+            run_colors ? "The loading screen's colours (a run's), as [run] has them in other layouts."
+                       : sections[s][1]);
+        /* a newer format's file keeps its number: the keys of it this GUI does not know are kept as they are */
+        if (!s)
+            put(&o, "format = %lu\n",
+                (unsigned long)(theme->format > GUI_THEME_FORMAT ? theme->format : GUI_THEME_FORMAT));
+        for (k = gui_theme_keys; k->section; ++k) {
+            if (strcmp(k->section, run_colors ? "run" : name)) continue;
+            if (run_colors && k->type != GUI_KEY_COLOUR && strcmp(k->key, "texture")) continue;
+            if (loading && !strcmp(name, "run") && k->type == GUI_KEY_COLOUR) continue;
+            gui_theme_get(theme, k, value, sizeof value);
+            put(&o, "; %s\n", k->about);
+            put_key(&o, k->key, value);
+        }
+        if (s) continue;
+        put(&o, "; ErET's drawing for it (plain | debug | loading | menu | skip); a base when no base names one\n");
+        put_key(&o, "layout", layout);
+        if (loading)
+            put(&o, "; no base: ErET's loading layout starts from yorha, the menus in its colours\n");
+        else {
+            put(&o, "; the built-in it starts from: default | yorha\n");
+            put_key(&o, "base", base);
+        }
+    }
+    if (file && ((file->ring_side && theme->ring != GUI_RING_NONE) || file->loading_title ||
+                 (file->colors_texture && !loading))) {
+        put(&o, "\n; ErET's places for the ring, the boot word and the texture, the same as above\n");
+        if (file->ring_side && theme->ring != GUI_RING_NONE) {
+            put(&o, "[header]\n");
+            put_key(&o, "ring_side", rings[theme->ring]);
+        }
+        if (file->loading_title) {
+            put(&o, "[loading]\n");
+            put_key(&o, "title", theme->title[GUI_SCREEN_LOADING]);
+        }
+        if (file->colors_texture && !loading) {
+            put(&o, "[colors]\n");
+            put_key(&o, "texture", theme->texture ? "true" : "false");
+        }
+    }
+    if (file && file->others)
+        put(&o, "\n; keys this GUI does not read, kept for the programs that do\n%s", file->others);
+    if (o.failed) {
+        free(o.p);
+        return NULL;
+    }
+    return o.p;
 }

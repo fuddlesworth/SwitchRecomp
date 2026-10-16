@@ -50,7 +50,9 @@ build/3ds/scarletnx-3ds -x --output work/my-title game.cia
 The output is a **new** directory containing `contents/*.app`, `exefs/` (with
 expanded/page-padded `.code`), `romfs/`, raw container/NCCH/ExHeader metadata and
 `manifest.ini` with source/code hashes and segment layout. The default directory
-is `work/3ds/<title-id>-<full-input-sha256>`. No source CIA needs to be mounted by
+is `work/3ds/<title-id>-<full-input-sha256>` of the data folder the Switch driver uses
+(the checkout, a portable copy's folder, else the user's data folder; `--repo DIR` names
+another), which an installed copy on Linux keeps in `~/.cache/scarletnx/work/3ds/`. No source CIA needs to be mounted by
 the future guest FS. Extraction is privately staged, then published only after
 all checks succeed; failures remove staging files. Existing destinations are
 **refused**, never overwritten or blindly reused as a cache hit. Resume/cache

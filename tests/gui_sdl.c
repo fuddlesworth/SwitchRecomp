@@ -55,6 +55,20 @@ static void swipe(App* app, int col, int row, int to_col, int to_row) {
     event(app, &e);
 }
 static void tap(App* app, int col, int row) { swipe(app, col, row, col, row); }
+/* a key with a modifier held, and text as a keyboard types it */
+static void key_with(App* app, SDL_Keycode code, SDL_Keymod mod) {
+    SDL_Event e = {0};
+    e.type = SDL_EVENT_KEY_DOWN;
+    e.key.key = code;
+    e.key.mod = mod;
+    event(app, &e);
+}
+static void typed(App* app, const char* text) {
+    SDL_Event e = {0};
+    e.type = SDL_EVENT_TEXT_INPUT;
+    e.text.text = text;
+    event(app, &e);
+}
 /* what the system's picker answers, from its own thread */
 static void pick(App* app, const char* uri) {
     SDL_Event e = {0};
@@ -206,6 +220,8 @@ int main(int argc, char** argv) {
     assert(!strcmp(app.data_dir, "/nonexistent/snx-gui-test/scarletnx"));
     assert(!strcmp(app.games_dir, "/nonexistent/snx-gui-test/scarletnx/games"));
     assert(!strcmp(app.themes_dirs[0], "/nonexistent/snx-gui-test/scarletnx/themes"));
+    /* and the keys go in it, where the driver reads them first, not in ~/.switch */
+    assert(!strcmp(app.keys_path, "/nonexistent/snx-gui-test/scarletnx/prod.keys"));
 #endif
     /* the window says which build it is: commit, compiler, platform */
     assert(!strcmp(SDL_GetWindowTitle(app.window), snx_build_info()) && !strncmp(snx_build_info(), "ScarletNX ", 10));
@@ -344,6 +360,35 @@ int main(int argc, char** argv) {
     assert(app.menu.view == GUI_LOAD_NONE && snx_is_file(app.keys_path));
     free(switch_dir);
     free(source_keys);
+#ifdef SNX_XDG
+    /* keys another tool left in ~/.switch, which the driver reads after the data folder's, are the installed build's
+       keys in use until some are installed here */
+    {
+        char *home = snx_path_join(temporary, "home"), *saved_home = getenv("HOME") ? SDL_strdup(getenv("HOME")) : NULL;
+        char *dir = snx_path_join(home, ".switch"), *found = snx_path_join(dir, "prod.keys"), *in_use;
+        assert(!snx_mkdirs(dir) && !snx_write_file(found, "home keys", 9));
+        SDL_setenv_unsafe("HOME", home, 1);
+        in_use = keys_in_use(&app);
+        assert(in_use && !strcmp(in_use, app.keys_path)); /* those installed above come first */
+        free(in_use);
+        assert(!snx_remove_tree(app.keys_path));
+        in_use = keys_in_use(&app);
+        assert(in_use && !strcmp(in_use, found));
+        free(in_use);
+        key(&app, SDLK_RETURN);
+        assert(app.menu.view == GUI_LOAD_KEYS);
+        render(&app);
+        key(&app, SDLK_ESCAPE);
+        if (saved_home)
+            SDL_setenv_unsafe("HOME", saved_home, 1);
+        else
+            SDL_unsetenv_unsafe("HOME");
+        SDL_free(saved_home);
+        free(found);
+        free(dir);
+        free(home);
+    }
+#endif
     key(&app, SDLK_RIGHT);
     assert(app.menu.selected == GUI_FULLSCREEN);
     key(&app, SDLK_SPACE);
@@ -985,6 +1030,67 @@ int main(int argc, char** argv) {
         free(custom);
         free(themes);
 
+        /* The theme editor: its screen in the menu's theme, a preview the menu's own drawing makes in the theme being
+           edited, a typed value, the preview's switch, and Save making it the menu's theme */
+        {
+            int col, prow, cols, rows, r;
+            SDL_Color night = {0x10, 0x20, 0x30, 255};
+            char* saved = snx_format("%s/themes/mytheme/theme.ini", temporary);
+            mouse(&app, 2, menu_row(&app, GUI_THEME_EDIT), true);
+            assert(app.editing && !strcmp(app.editor.id, "mytheme") && !strcmp(app.editor.theme.id, "default"));
+            render(&app);
+            colored_text_at(&app, 1, 0, "THEME EDITOR  /  mytheme", normal);
+            preview_box(&app, &col, &prow, &cols, &rows);
+            /* page = #102030, typed: the preview's page takes it, the editor's own stays the menu's */
+            for (r = 0; !gui_editor_key_of(r) || strcmp(gui_editor_key_of(r)->key, "page"); ++r) {}
+            app.editor.row = r;
+            key(&app, SDLK_RETURN);
+            assert(app.editor.typing && SDL_TextInputActive(app.window));
+            for (int i = 0; i < 7; ++i) key(&app, SDLK_BACKSPACE);
+            typed(&app, "#102030");
+            key(&app, SDLK_RETURN);
+            assert(!app.editor.typing && !SDL_TextInputActive(app.window) && app.editor.dirty);
+            assert(!strcmp(app.editor.text, "#102030"));
+            render(&app);
+            assert(same_colour(
+                pixel(&app, (col + cols * 76.0f / 80) * 8 * app.scale, (prow + rows * 12.5f / 25) * 16 * app.scale),
+                night));
+            assert(same_colour(pixel(&app, 4, (app.rows - 4) * 16.0f * app.scale + 8), black));
+            /* Tab, or a tap on the preview: a run in the theme, then the menu again */
+            key(&app, SDLK_TAB);
+            assert(app.editor.preview == GUI_SCREEN_COMPILING);
+            render(&app);
+            mouse(&app, col + 2, prow + 2, true);
+            assert(app.editor.preview == GUI_SCREEN_MENU);
+            /* a space typed arrives as text: the key itself, Select elsewhere, does not take a text value */
+            app.editor.row = 1; /* [theme] name */
+            key(&app, SDLK_RETURN);
+            typed(&app, "x");
+            key(&app, SDLK_SPACE);
+            assert(app.editor.typing);
+            key(&app, SDLK_ESCAPE);
+            assert(!app.editor.typing && strcmp(app.editor.theme.name, "Defaultx"));
+            /* a click focuses a row, a click on the focused one changes it */
+            mouse(&app, 2, 4 + 2 - app.editor.top, true);
+            assert(app.editor.row == 2 && !app.editor.typing);
+            /* ESC over changes asks first; Ctrl+S saves in themes/mytheme, and the menu's theme is it */
+            key(&app, SDLK_ESCAPE);
+            assert(app.editing && app.editor.leaving);
+            key_with(&app, SDLK_S, SDL_KMOD_LCTRL);
+            assert(snx_is_file(saved) && !app.editor.dirty && !strcmp(app.theme.id, "mytheme"));
+            assert(same_colour(rgb(app.theme.page), night));
+            key(&app, SDLK_ESCAPE); /* nothing left unsaved: it leaves at once */
+            assert(!app.editing);
+            render(&app);
+            colored_text_on(&app, 1, menu_row(&app, GUI_THEME), "- Theme: Default", normal, night);
+            /* opened on a theme of themes/, it saves there under its own name */
+            mouse(&app, 2, menu_row(&app, GUI_THEME_EDIT), true);
+            assert(app.editing && !strcmp(app.editor.id, "mytheme") && !strcmp(app.editor.file.base, "default"));
+            key(&app, SDLK_ESCAPE);
+            assert(!app.editing);
+            free(saved);
+        }
+
         /* YoRHa loading: a run as steps, typed in, with the ring, the dots and the bar; the run fades in, and out */
         steps_input = snx_path_join(temporary, "option flags steps.nro");
         assert(!snx_write_file(steps_input, "fixture", 7));
@@ -1320,13 +1426,62 @@ int main(int argc, char** argv) {
         app.cwd = SDL_strdup(temporary);
         snprintf(app.message, sizeof(app.message), "before the log");
         app.menu.selected = GUI_LOG;
+#ifdef SNX_XDG
+        /* an installed build's in its state folder, as the working folder is the home folder from the desktop */
+        char *state = snx_path_join(temporary, "state"), *logged = snx_path_join(state, "scarletnx/scarletnx.log");
+        char* installed_dir = app.data_dir;
+        SDL_setenv_unsafe("XDG_STATE_HOME", state, 1);
+        key(&app, SDLK_RETURN);
+        assert(strstr(app.message, logged) && !snx_path_exists(saved));
+        text = (char*)snx_read_file(logged, &size);
+        assert(text && strstr(text, "Message: before the log"));
+        free(text);
+        free(logged);
+        free(state);
+        /* any other build's (a checkout, a portable copy) in the working folder */
+        app.data_dir = snx_strdup(temporary);
+        snprintf(app.message, sizeof(app.message), "before the log");
+#endif
         key(&app, SDLK_RETURN);
         assert(!strncmp(app.message, "Log saved to ", 13) && strstr(app.message, "scarletnx.log"));
         text = (char*)snx_read_file(saved, &size);
         assert(text && strstr(text, "Message: before the log") && strstr(text, "== the last run: "));
         free(text);
         free(saved);
+#ifdef SNX_XDG
+        free(app.data_dir);
+        app.data_dir = installed_dir;
+#endif
     }
+#ifdef SNX_XDG
+    /* the menu's recent.txt and last-run.log in the state folder's gui/; an older build's in the data folder's stay */
+    {
+        char *data = snx_path_join(temporary, "data"), *state = snx_path_join(temporary, "state");
+        char *old = snx_path_join(data, "scarletnx/gui"), *recent = snx_path_join(old, "recent.txt");
+        char *run = snx_path_join(old, "last-run.log"), *folder, *expected = snx_path_join(state, "scarletnx/gui"),
+             *now;
+        assert(!snx_mkdirs(old) && !snx_write_file(recent, "recent", 6) && !snx_write_file(run, "run", 3));
+        SDL_setenv_unsafe("XDG_DATA_HOME", data, 1);
+        folder = state_folder();
+        assert(folder && !strcmp(folder, expected) && snx_file_size(recent) == 6 && snx_file_size(run) == 3);
+        now = snx_path_join(folder, "recent.txt");
+        assert(!snx_path_exists(now) && snx_left_behind(recent, now));
+        free(now);
+        free(folder);
+        /* and an empty state folder is made for the first run */
+        assert(!snx_remove_tree(state));
+        folder = state_folder();
+        assert(folder && snx_is_dir(folder));
+        free(folder);
+        SDL_setenv_unsafe("XDG_DATA_HOME", "/nonexistent/snx-gui-test", 1);
+        free(expected);
+        free(run);
+        free(recent);
+        free(old);
+        free(state);
+        free(data);
+    }
+#endif
     /* the system's picker, as the Android menu opens it for a file to load or for the keys: a document with no path
        stays on the screen, and so does none, saying so, for the screen's messages to be read; a path loads */
     app.picked = SDL_RegisterEvents(1);

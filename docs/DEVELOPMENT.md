@@ -52,7 +52,8 @@ build/snx-shaderc corpus --validate --out translated
 ```
 
 `--validate` needs `spirv-val`. `--out` writes SPIR-V modules for build comparisons.
-PowerShell: `$env:SNX_SHADER_CORPUS='corpus'`.
+PowerShell: `$env:SNX_SHADER_CORPUS='corpus'`. Where the game gets no environment (Android), its INI's `[Debug]
+diag=1` keeps each shader's entry in `captures/shaders` beside the game, for the same `snx-shaderc`.
 
 ## Upstream / provenance
 

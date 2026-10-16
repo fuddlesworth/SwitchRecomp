@@ -327,6 +327,9 @@ typedef int (*VkCbReader)(u32 idx, u32 off, u32* out);
 u32* vk_translate_spirv(const u8* code, u32 max_bytes, int stage, ShaderInfo* si, size_t* words, VkCbReader read,
                         VkCbReads* reads);
 u64 vk_shader_hash(const u8* code, u32 max_bytes, u32* out_len, VkCbReader read); /* BRX tables through read */
+/* where each new shader's snx-shaderc corpus entry goes: SNX_SHADER_CORPUS, else with diag=1 captures/shaders beside
+   the games; NULL for neither */
+const char* vk_corpus_dir(void);
 int vk_cb_reads_hold(const VkCbReads* reads, VkCbReader read);
 typedef struct VkSh {
     u64 hash;

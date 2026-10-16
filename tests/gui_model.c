@@ -94,6 +94,10 @@ int main(void) {
     gui_menu_key(&menu, GUI_SELECT);
     assert(menu.selected == GUI_THEME && menu.theme_next && !menu.quit);
     menu.theme_next = false; /* the GUI's to clear */
+    gui_menu_key(&menu, GUI_DOWN);
+    gui_menu_key(&menu, GUI_SELECT);
+    assert(menu.selected == GUI_THEME_EDIT && menu.theme_edit && !menu.theme_next && menu.view == GUI_LOAD_NONE);
+    menu.theme_edit = 0; /* the GUI's to clear */
     /* Text size goes round 1x to the largest, then back to fitting the screen */
     gui_menu_key(&menu, GUI_DOWN);
     assert(menu.selected == GUI_TEXT && !menu.text_size);
@@ -158,6 +162,20 @@ int main(void) {
         assert(gui_launch_options(&menu, true, "data folder", args) == 0);
     }
 
+    /* the footer's use, as a player reads it: MB under a GB, the CPU a share of every core, never over 100% */
+    {
+        char use[128];
+        gui_usage_text(use, sizeof use, true, 812ull << 20, 52, 4);
+        assert(!strcmp(use, "GUI + children: RAM 812 MB  CPU 13% (0.5 cores)"));
+        gui_usage_text(use, sizeof use, true, 1404ull << 20, 216, 8); /* a game compiling on 8 cores */
+        assert(!strcmp(use, "GUI + children: RAM 1.4 GB  CPU 27% (2.2 cores)"));
+        gui_usage_text(use, sizeof use, true, 1, 830, 8);
+        assert(!strcmp(use, "GUI + children: RAM 0 MB  CPU 100% (8.0 cores)"));
+        gui_usage_text(use, sizeof use, true, 0, 150, 0); /* SDL knows no cores: one */
+        assert(!strcmp(use, "GUI + children: RAM 0 MB  CPU 100% (1.0 cores)"));
+        gui_usage_text(use, sizeof use, false, 1, 1, 1);
+        assert(!strcmp(use, "GUI + children: resource usage unavailable"));
+    }
     /* a line 5 columns too long, a column every 100 ms: rests 8 steps, slides, rests at its end, slides back */
     assert(!gui_slide(0, 900, 100) && !gui_slide(5, 900, 0) && !gui_slide(-3, 900, 100));
     assert(!gui_slide(5, 0, 100) && !gui_slide(5, 799, 100) && gui_slide(5, 900, 100) == 1);

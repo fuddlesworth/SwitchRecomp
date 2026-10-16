@@ -20,6 +20,8 @@ foreach(target snx_ctr_memory snx_ctr_loader snx_ctr_cpu)
 endforeach()
 add_executable(scarletnx-3ds runtime/main.c)
 target_link_libraries(scarletnx-3ds PRIVATE snx_ctr_board snx_ctr_loader)
+# its checkout, which it works in as the Switch driver does (snx_data_dir)
+target_compile_definitions(scarletnx-3ds PRIVATE SNX_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 set_target_properties(scarletnx-3ds PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 target_compile_options(scarletnx-3ds PRIVATE -Wall -Wextra -Werror=missing-prototypes)

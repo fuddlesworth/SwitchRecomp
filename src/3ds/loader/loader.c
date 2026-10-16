@@ -146,8 +146,8 @@ static bool no_links(const char* path) {
     free(part);
     return ok;
 }
-SnxCtrExtractResult snx_ctr_extract(const char* input, const char* destination, char** published, char* error,
-                                    size_t error_size) {
+SnxCtrExtractResult snx_ctr_extract(const char* input, const char* destination, const char* work, char** published,
+                                    char* error, size_t error_size) {
     CtrReader r = {.error = error, .error_size = error_size};
     CtrCia cia = {0};
     char *target = NULL, *parent = NULL, *stage = NULL, *generated = NULL;
@@ -174,7 +174,7 @@ SnxCtrExtractResult snx_ctr_extract(const char* input, const char* destination, 
     if (!destination) {
         char hex[65];
         for (size_t i = 0; i < 32; ++i) snprintf(hex + i * 2, 3, "%02x", cia.input_hash[i]);
-        generated = snx_format("work/3ds/%016" PRIx64 "-%s", cia.title_id, hex);
+        generated = snx_format("%s/%016" PRIx64 "-%s", work ? work : "work/3ds", cia.title_id, hex);
         destination = generated;
     }
     if (!*destination || !no_links(destination) || !(target = snx_absolute(destination))) {

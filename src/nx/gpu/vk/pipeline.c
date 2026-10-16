@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "runtime/main.h"
+#include "runtime/options.h"
 #include "gpu/gpu.h"
 #include "gpu/shader/shader.h"
 #include "runtime/platform/log.h"
@@ -55,6 +56,20 @@ static int rec_read(u32 idx, u32 off, u32* out) {
     }
     reads->r[reads->n++] = (VkCbRead){idx, off, (u32)ok, ok ? *out : 0};
     return ok;
+}
+const char* vk_corpus_dir(void) {
+    static char dir[sizeof g_exedir + sizeof "captures/shaders"];
+    static const char* at = (const char*)-1;
+    if (at != (const char*)-1) return at;
+    at = getenv("SNX_SHADER_CORPUS");
+    if (!at && g_opt_diag) { /* a phone's game has no environment to set */
+        snprintf(dir, sizeof dir, "%scaptures", g_exedir);
+        plat_mkdir(dir);
+        snprintf(dir, sizeof dir, "%scaptures/shaders", g_exedir);
+        plat_mkdir(dir);
+        at = dir;
+    }
+    return at;
 }
 u32* vk_translate_spirv(const u8* code, u32 max_bytes, int stage, ShaderInfo* si, size_t* words, VkCbReader read,
                         VkCbReads* reads) {
@@ -195,7 +210,7 @@ void vk_pipeline_init(void) {
                                      .pPushConstantRanges = &pc};
     if (!VK_OK(vkCreatePipelineLayout(g_vk.dev, &pl, NULL, &g_vk_playout)))
         fatal("vulkan: cannot create shader pipeline layout");
-    snprintf(g_cache_dir, sizeof g_cache_dir, "%sshader_cache", g_exedir);
+    snprintf(g_cache_dir, sizeof g_cache_dir, "%sshader_cache", g_cachedir);
     plat_mkdir(g_cache_dir);
     snprintf(g_pcache_path, sizeof g_pcache_path, "%s/vk_pipelines.bin", g_cache_dir);
     /* the temporary name is the process's own: two games running at once would otherwise write the same file */
@@ -327,11 +342,7 @@ VkSh* vk_shader_get(u64 gva, u64 gva_a, int stage, u32 int_mask, u32 sint_mask, 
             s->si.rt_int_mask = rt_int; /* the tessellation or geometry primitive */
             s->si.clip_enable = clip;
         }
-        {
-            static const char* corpus = (const char*)-1;
-            if (corpus == (const char*)-1) corpus = getenv("SNX_SHADER_CORPUS");
-            if (corpus) shader_corpus_save(corpus, code, mlen, 0x10000, stage, &s->si, h ^ mix);
-        }
+        if (vk_corpus_dir()) shader_corpus_save(vk_corpus_dir(), code, mlen, 0x10000, stage, &s->si, h ^ mix);
         size_t nw = 0;
         u32* spv = vk_translate_spirv(code, 0x10000, stage, &s->si, &nw, sh_cb_read, &s->cbr);
         if (spv && !g_vk.feat.shaderFloat64) {

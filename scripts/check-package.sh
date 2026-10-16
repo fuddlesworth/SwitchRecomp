@@ -24,13 +24,17 @@ esac
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cd "$work"
-# An installed copy keeps work/, games/ and prod.keys in the user's data folder, wherever it was started from: point
-# that folder into this run's
-export XDG_DATA_HOME="$work/data"
+# An installed copy keeps games/ and prod.keys in the user's data folder, wherever it was started from, and on Linux a
+# game's settings, log and caches (work/ too) in the XDG config, state and cache folders: point them into this run's
+export XDG_DATA_HOME="$work/data" XDG_CONFIG_HOME="$work/config" XDG_STATE_HOME="$work/state" XDG_CACHE_HOME="$work/cache"
 data=$XDG_DATA_HOME/scarletnx
+config=$XDG_CONFIG_HOME/scarletnx/games
+state=$XDG_STATE_HOME/scarletnx/games
 if [ -n "$exe" ]; then
     APPDATA=$(cygpath -w "$work/data")
     export APPDATA
+    config=$data/games
+    state=$data/games
 fi
 
 failed=0
@@ -80,6 +84,11 @@ if [ "$status" -eq 0 ] && [ -f "$data/games/Smoke$exe" ] && [ -f "$data/games/Sm
 else
     fail "scarletnx -r smoke.nro exited $status, without $data/games/Smoke$exe and its .abi" "$out"
 fi
+if [ -f "$config/Smoke.ini" ] && { [ "$config" = "$data/games" ] || [ ! -e "$data/games/Smoke.ini" ]; }; then
+    pass "its settings are $config/Smoke.ini"
+else
+    fail "scarletnx -r smoke.nro did not write its settings in $config only" "$out"
+fi
 
 # The runtime left next to the game must start on its own (on Windows, with the DLLs it needs), find the game's code
 # by its name and take its ABI. The banner comes after that and before the GPU, which CI runners lack
@@ -89,6 +98,12 @@ if [ -f "$data/games/Smoke$exe" ]; then
         pass "$data/games/Smoke$exe started the game (exit $status: $(tail -n 1 <<<"$out"))"
     else
         fail "$data/games/Smoke$exe exited $status before the game's banner" "$out"
+    fi
+    if grep -q 'ScarletNX - Smoke' "$state/Smoke.log" 2>/dev/null &&
+        { [ "$state" = "$data/games" ] || [ ! -e "$data/games/Smoke.log" ]; }; then
+        pass "its log is $state/Smoke.log"
+    else
+        fail "the game did not log in $state only" "$out"
     fi
 fi
 
