@@ -2,11 +2,11 @@
 # Copyright 2026 the ScarletNX contributors
 # what the backends share: function discovery over NX images, chunk labels, progress lines, the entry table
 add_library(snx_nx_module STATIC ../../loader/module.c ../../loader/codegen_view.c)
-set_target_properties(snx_nx_module PROPERTIES C_STANDARD 90 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+set_target_properties(snx_nx_module PROPERTIES C_STANDARD ${SNX_C90_STANDARD} C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 target_compile_options(snx_nx_module PRIVATE -pedantic-errors -Wall -Wextra -Werror=missing-prototypes)
 target_link_libraries(snx_nx_module PUBLIC scarletnx-common)
 add_library(snx_driver STATIC driver.c extract.c game_name.c recompile.c toolchain.c ../../loader/loader.c)
-set_target_properties(snx_driver PROPERTIES C_STANDARD 90 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+set_target_properties(snx_driver PROPERTIES C_STANDARD ${SNX_C90_STANDARD} C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 target_compile_definitions(snx_driver PRIVATE
     SNX_SOURCE_DIR="${CMAKE_SOURCE_DIR}" SNX_BUILD_DIR="${CMAKE_BINARY_DIR}" _CRT_SECURE_NO_WARNINGS
     SNX_NX_ABI_INCLUDE="${CMAKE_SOURCE_DIR}/src/nx/loader"
@@ -44,7 +44,7 @@ endif()
 add_subdirectory("${CMAKE_SOURCE_DIR}/src/common/cpu/recompiler" recompiler-library)
 if(SNX_TOOLS_ONLY)
     add_executable(scarletnx main.c)
-    set_target_properties(scarletnx PROPERTIES C_STANDARD 90 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+    set_target_properties(scarletnx PROPERTIES C_STANDARD ${SNX_C90_STANDARD} C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
     target_link_libraries(scarletnx PRIVATE snx_driver)
     if(WIN32)
