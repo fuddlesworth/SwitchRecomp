@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<component type="desktop-application">
+    <id>io.github.scarletnx.scarletnx</id>
+    <metadata_license>CC0-1.0</metadata_license>
+    <project_license>GPL-3.0-or-later</project_license>
+    <name>ScarletNX</name>
+    <summary>A static ARM64 to x86 recompiler</summary>
+    <developer id="io.github.scarletnx">
+        <name>ScarletNX Contributors</name>
+    </developer>
+    <description>
+      <p>
+      ScarletNX is a recompiler for ARM64 to x86 systems with a Nintendo Switch layer for emulation
+      </p>
+    </description>
+    <launchable type="desktop-id">scarletnx.desktop</launchable>
+    <categories>
+        <category>Game</category>
+        <category>Emulator</category>
+    </categories>
+    <icon type="stock">wimsy</icon>
+    <branding>
+        <color scheme_preference="light" type="primary">#f3edc8</color>
+        <color scheme_preference="dark" type="primary">#4f40bf</color>
+    </branding>
+    <screenshots>
+        <screenshot type="default">
+            <image>https://scarletnx.github.io/assets/1.png</image>
+        </screenshot>
+        <screenshot>
+            <image>https://scarletnx.github.io/assets/2.png</image>
+        </screenshot>
+        <screenshot>
+            <image>https://scarletnx.github.io/assets/3.png</image>
+        </screenshot>
+    </screenshots>
+    <content_rating type="oars-1.1"/>
+    <url type="homepage">https://scarletnx.github.io/</url>
+    <url type="bugtracker">https://github.com/scarletnx/ScarletNX/issues</url>
+    <url type="faq">https://github.com/scarletnx/ScarletNX/tree/main/docs</url>
+    <url type="help">https://github.com/scarletnx/ScarletNX/tree/main/docs</url>
+    <url type="contact">https://discord.gg/tRTRXXbyjp</url>
+    <url type="vcs-browser">https://github.com/scarletnx/ScarletNX</url>
+    <url type="contribute">https://github.com/scarletnx/ScarletNX</url>
+    <releases>
+        <release date="1970-01-01" version="nightly">
+            <url type="details">https://github.com/scarletnx/ScarletNX/releases/tag/nightly</url>
+        </release>
+    </releases>
+    <supports>
+        <control>pointing</control>
+        <control>keyboard</control>
+        <control>gamepad</control>
+    </supports>
+</component>
