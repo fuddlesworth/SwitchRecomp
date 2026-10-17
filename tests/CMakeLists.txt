@@ -641,23 +641,19 @@ if(NOT WIN32)
     set_tests_properties(ldr_service PROPERTIES TIMEOUT 60)
 endif()
 
-# Deterministic FFmpeg API double: no decoder dependency in tools-only builds.
-add_executable(snx-test-nvdec-packets nvdec_packets.c "${PROJECT_SOURCE_DIR}/src/nx/gpu/video/vp9_rebuild.cpp")
+# Deterministic FFmpeg API double: no decoder dependency in tools-only builds. nvdec_packets.c includes
+# nvdec.c, nvdec_h264.c and nvdec_vp9.c; vp9_head.c compiles and links against the double just the same
+add_executable(snx-test-nvdec-packets nvdec_packets.c "${PROJECT_SOURCE_DIR}/src/nx/gpu/video/vp9_head.c")
 snx_test_target(snx-test-nvdec-packets 11)
 target_include_directories(snx-test-nvdec-packets BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ffmpeg_stub")
 add_test(NAME nvdec_packets COMMAND snx-test-nvdec-packets)
 if(NOT SNX_TOOLS_ONLY)
-    add_executable(snx-test-nvdec-decode nvdec_packets.c "${PROJECT_SOURCE_DIR}/src/nx/gpu/video/vp9_rebuild.cpp")
+    add_executable(snx-test-nvdec-decode nvdec_packets.c "${PROJECT_SOURCE_DIR}/src/nx/gpu/video/vp9_head.c")
     snx_test_target(snx-test-nvdec-decode 11)
     target_compile_definitions(snx-test-nvdec-decode PRIVATE SNX_TEST_REAL_FFMPEG)
     target_link_libraries(snx-test-nvdec-decode PRIVATE FFmpeg::avcodec)
     add_test(NAME nvdec_decode COMMAND snx-test-nvdec-decode)
 endif()
-# VP9 packets rebuilt from NVDEC jobs (gpu/video/vp9_rebuild.cpp): the destination of the frame each emits, and
-# setups with invalid tile layouts refused before a header is built
-add_executable(snx-test-vp9-rebuild vp9_rebuild.cpp "${PROJECT_SOURCE_DIR}/src/nx/gpu/video/vp9_rebuild.cpp")
-snx_test_target(snx-test-vp9-rebuild 23)
-add_test(NAME vp9_rebuild COMMAND snx-test-vp9-rebuild)
 # the 2D engine's blit in guest memory (fermi2d.c, dma.c's bl_span_ptr): block linear scaling, an odd window, the
 # renderer's hooks once a blit
 add_executable(snx-test-fermi2d-blit fermi2d_blit.c)

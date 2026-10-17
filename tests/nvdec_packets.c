@@ -3,6 +3,9 @@
 /* Compile the production implementation with either the isolated FFmpeg double (default CTest target),
    or real FFmpeg headers/libraries and -DSNX_TEST_REAL_FFMPEG for synthetic I_PCM decode coverage. */
 #include "nx/gpu/video/nvdec.c"
+#include "nx/gpu/video/nvdec_h264.c"
+#include "nx/gpu/video/nvdec_rec.c"
+#include "nx/gpu/video/nvdec_vp9.c"
 
 static unsigned checks;
 #define CHECK(x)                                                                                                       \
@@ -94,12 +97,12 @@ static void packet_tests(void) {
     const u8 annex[] = {0, 0, 1, 0x65, 0x88, 0, 0, 0, 1, 0x61, 0x99};
     const u8 avcc[] = {0, 0, 0, 2, 0x65, 0x88, 0, 0, 0, 2, 0x61, 0x99};
     const u8 converted[] = {0, 0, 0, 1, 0x65, 0x88, 0, 0, 0, 1, 0x61, 0x99};
-    CHECK(!make_packet(p, hdr, sizeof hdr, annex, sizeof annex));
+    CHECK(!nvdec_h264_packet(p, hdr, sizeof hdr, annex, sizeof annex));
     CHECK(p->size == sizeof hdr + sizeof annex);
     CHECK(!memcmp(p->data, hdr, sizeof hdr));
     CHECK(!memcmp(p->data + sizeof hdr, annex, sizeof annex));
     padding_is_zero(p);
-    CHECK(!make_packet(p, hdr, 0, avcc, sizeof avcc));
+    CHECK(!nvdec_h264_packet(p, hdr, 0, avcc, sizeof avcc));
     CHECK(p->size == sizeof converted && !memcmp(p->data, converted, sizeof converted));
     padding_is_zero(p);
     /* A complete AVCC NAL with a 00 00 01 xx length must not be mistaken for an Annex B start code. */
@@ -109,16 +112,16 @@ static void packet_tests(void) {
     large[2] = 1;
     large[3] = 0x65;
     large[4] = 0x65;
-    CHECK(!make_packet(p, hdr, 0, large, sizeof large));
+    CHECK(!nvdec_h264_packet(p, hdr, 0, large, sizeof large));
     CHECK(p->size == sizeof large && !memcmp(p->data, "\0\0\0\1", 4));
     CHECK(!memcmp(p->data + 4, large + 4, sizeof large - 4));
     padding_is_zero(p);
     /* A much shorter packet must have fresh zero padding, not the previous payload's tail. */
-    CHECK(!make_packet(p, hdr, 0, avcc + 4, 2));
+    CHECK(!nvdec_h264_packet(p, hdr, 0, avcc + 4, 2));
     CHECK(p->size == 5 && !memcmp(p->data, "\0\0\1\x65\x88", 5));
     padding_is_zero(p);
     const u8 leading[] = {0, 0, 0, 0, 0, 1, 0x65, 0x80};
-    CHECK(!make_packet(p, hdr, 0, leading, sizeof leading));
+    CHECK(!nvdec_h264_packet(p, hdr, 0, leading, sizeof leading));
     CHECK(p->size == sizeof leading && !memcmp(p->data, leading, sizeof leading));
     padding_is_zero(p);
     const u8 bad[][6] = {{0, 0, 0, 8, 0x65, 0x88},
@@ -127,8 +130,8 @@ static void packet_tests(void) {
                          {0, 0, 1, 0, 0, 0},
                          {0xff, 0, 0, 0, 0, 0}};
     for (unsigned i = 0; i < sizeof bad / sizeof *bad; ++i)
-        CHECK(make_packet(p, hdr, 0, bad[i], sizeof bad[i]) == AVERROR_INVALIDDATA);
-    for (unsigned i = 0; i < 4; ++i) CHECK(make_packet(p, hdr, 0, avcc, i) == AVERROR_INVALIDDATA);
+        CHECK(nvdec_h264_packet(p, hdr, 0, bad[i], sizeof bad[i]) == AVERROR_INVALIDDATA);
+    for (unsigned i = 0; i < 4; ++i) CHECK(nvdec_h264_packet(p, hdr, 0, avcc, i) == AVERROR_INVALIDDATA);
     av_packet_free(&p);
 }
 
@@ -181,7 +184,7 @@ AVCodecContext* avcodec_alloc_context3(const AVCodec* codec) {
 int avcodec_open2(AVCodecContext* c, const AVCodec* codec, void* options) {
     (void)codec;
     (void)options;
-    CHECK(c->thread_type == FF_THREAD_SLICE && (c->thread_count == 1 || c->thread_count == 4));
+    CHECK(c->thread_count == 1);
     return 0;
 }
 void avcodec_free_context(AVCodecContext** c) {
@@ -401,9 +404,8 @@ static void submission_tests(void) {
     nvdec_free(d);
 }
 #endif
-/* A VP9 job opens a VP9 decoder whose opaque is the channel's context, which starts with what FFmpeg's patched VP9
-   decoder reads there (cmake/ffmpeg-vp9-nvdec.patch); one with no probability table fails without writing the
-   picture; a codec NVDEC jobs are not decoded for fails and leaves the decoder as it was */
+/* A VP9 job opens a VP9 decoder whose opaque is the channel's context; one with no probability table fails
+   without writing the picture; a codec NVDEC jobs are not decoded for fails and leaves the decoder as it was */
 /* a job failed before its size was known: the status says failed, and the output surface keeps its bytes */
 static void failed_untouched(void) {
     CHECK(rd32(memory, 0x3000) == 0 && rd32(memory, 0x300c) == 1);
@@ -413,13 +415,13 @@ static void vp9_tests(void) {
     fixture();
     NvdecCtx* d = nvdec_new();
     CHECK(d != NULL);
-    CHECK(((const u32*)d)[0] == 0x534e5856 && ((const u32*)d)[1] == 0);
+    CHECK(d->app == 0 && !d->dec);
     regs[0x200 / 4] = 9;
     regs[0x5C0 / 4] = 0;
     nvdec_execute(d, regs);
     failed_untouched();
-    CHECK(d->app == 9 && d->dec && d->dec->opaque == d && d->vp9);
-    CHECK(d->dec->thread_type == FF_THREAD_SLICE && d->dec->thread_count == 4);
+    CHECK(d->app == 9 && d->dec && d->dec->opaque == d);
+    CHECK(d->dec->thread_count == 1);
     regs[0x200 / 4] = 5;
     memset(memory + 0x3000, 0, 16);
     nvdec_execute(d, regs);

@@ -33,7 +33,7 @@ a source keep that source's copyright lines and license, most with the revision 
 | `src/3ds/gpu/`, `src/3ds/audio/`, `src/3ds/services/dsp.c` | Azahar (Citra) | GPL-2.0-or-later |
 | `src/3ds/gpu/shader.c` and `shader.h` (the instruction fields) | nihstro | BSD-3-Clause |
 | `src/common/network/`, `src/nx/hle/services/network/` | Eden and yuzu | GPL-3.0-or-later, GPL-2.0-or-later |
-| `src/nx/gpu/video/vp9_rebuild.cpp` | Eden and yuzu | GPL-3.0-or-later, GPL-2.0-or-later |
+| `src/nx/gpu/video/vp9_head.c`, `vp9_head.h`, `vp9_head_coef.h` | Eden and yuzu | GPL-3.0-or-later, GPL-2.0-or-later |
 | `tests/ipc_message.c` (the HIPC, CMIF and TIPC request builders) | libnx | ISC |
 | `dist/controls/*.xml`, and `controls.png` made from them | yuzu's Android overlay, as Eden and rEden carry it | GPL-3.0-or-later |
 

@@ -46,7 +46,8 @@ snx_swipc(snx_hle ROOT "${CMAKE_CURRENT_SOURCE_DIR}" FILES
           hle/services/vi.swipc hle/services/nvdrv.swipc hle/services/network/bsd.swipc
           hle/services/network/dns.swipc hle/services/network/nifm.swipc hle/services/network/ssl.swipc
           hle/filesystem/fs.swipc)
-snx_component(video gpu/video/host1x.c gpu/video/nvdec.c gpu/video/vp9_rebuild.cpp gpu/video/vic.c)
+snx_component(video gpu/video/host1x.c gpu/video/nvdec.c gpu/video/nvdec_h264.c gpu/video/nvdec_rec.c
+              gpu/video/nvdec_vp9.c gpu/video/vic.c gpu/video/vp9_head.c)
 target_link_libraries(snx_video PRIVATE FFmpeg::avcodec)
 # hwopus (hle/services/audio.c) decodes Opus with FFmpeg too
 target_link_libraries(snx_hle PRIVATE FFmpeg::avcodec OpenSSL::SSL)

@@ -145,8 +145,7 @@ endif()
 # libraries built into the runtime and hactool, each in a folder named after it
 set(licenses "${CMAKE_INSTALL_DATADIR}/licenses/scarletnx")
 install(FILES LICENSE LICENSE.apache NOTICE DESTINATION ${licenses})
-# FFmpeg's with the change made to it (cmake/ffmpeg-vp9-nvdec.patch), which its LGPL wants carried with the binaries
-install(FILES "${FFmpeg_SOURCE_DIR}/COPYING.LGPLv2.1" "${FFmpeg_SOURCE_DIR}/LICENSE.md" cmake/ffmpeg-vp9-nvdec.patch
+install(FILES "${FFmpeg_SOURCE_DIR}/COPYING.LGPLv2.1" "${FFmpeg_SOURCE_DIR}/LICENSE.md"
         DESTINATION ${licenses}/FFmpeg)
 install(FILES LICENSE.apache DESTINATION ${licenses}/OpenSans RENAME LICENSE) # the shared fonts' stand-in (pl.c)
 install(FILES "${Vulkan-Headers_SOURCE_DIR}/LICENSE.md" DESTINATION ${licenses}/Vulkan-Headers)

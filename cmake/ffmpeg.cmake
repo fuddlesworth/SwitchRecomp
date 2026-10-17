@@ -1,27 +1,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright 2026 the ScarletNX contributors
 #
-# FFmpeg's libavcodec, libswresample and libavutil as static libraries (targets FFmpeg::avcodec, FFmpeg::swresample and
-# FFmpeg::avutil), built from the release source in cmake/dependencies.cmake with FFmpeg's own configure and make, which
-# it has instead of a CMake build. NVDEC's VP9 jobs need a change to its VP9 decoder (cmake/ffmpeg-vp9-nvdec.patch), so
-# it builds from a patched copy of the release in the build tree. Only the decoders NVDEC handles are in (H.264, VP8,
-# VP9), and Opus for hwopus (FFmpeg's Opus decoder resamples its SILK layer with libswresample, which is why that
-# library is in): no programs, formats, filters, devices, network or autodetected system libraries, so the result needs
-# nothing but libc and builds the same everywhere. All of it is LGPL (no --enable-gpl). It needs a POSIX shell and make
-# (gmake on the BSDs), and NASM for the x86-64 assembly.
+# FFmpeg's libavcodec, libswresample and libavutil as static libraries (targets FFmpeg::avcodec, FFmpeg::swresample
+# and FFmpeg::avutil), built from the release source in cmake/dependencies.cmake with FFmpeg's own configure and make,
+# which it has instead of a CMake build. Only the decoders NVDEC handles are in (H.264, VP8, VP9), and Opus for hwopus
+# (FFmpeg's Opus decoder resamples its SILK layer with libswresample, which is why that library is in): no programs,
+# formats, filters, devices, network or autodetected system libraries, so the result needs nothing but libc and builds
+# the same everywhere. All of it is LGPL (no --enable-gpl). It needs a POSIX shell and make (gmake on the BSDs), and
+# NASM for the x86-64 assembly.
 # This file is included into the top-level scope: its variables carry the snx_ffmpeg_ prefix.
-set(snx_ffmpeg_src "${CMAKE_BINARY_DIR}/_deps/ffmpeg-patched")
+set(snx_ffmpeg_src "${FFmpeg_SOURCE_DIR}")
 set(snx_ffmpeg_prefix "${CMAKE_BINARY_DIR}/ffmpeg")
 # FFmpeg's configure stops on a source path with a space in it, which would only show at build time
 if(snx_ffmpeg_src MATCHES "[ \t]")
-    message(FATAL_ERROR "FFmpeg can't be built from a path with spaces in it (${snx_ffmpeg_src}). Use a build folder "
-                        "whose path has none. FFmpeg is required by the NX runtime.")
+    message(FATAL_ERROR "FFmpeg can't be built from a path with spaces in it (${snx_ffmpeg_src}). Move the checkout "
+                        "to a path without spaces or set CPM_SOURCE_CACHE to one. FFmpeg is required by the NX runtime.")
 endif()
-set(snx_ffmpeg_patch "${CMAKE_SOURCE_DIR}/cmake/ffmpeg-vp9-nvdec.patch")
-file(SHA256 "${snx_ffmpeg_patch}" snx_ffmpeg_patch_sha256)
-include("${CMAKE_SOURCE_DIR}/cmake/patched_copy.cmake")
-snx_patched_copy(SOURCE "${FFmpeg_SOURCE_DIR}" DEST "${snx_ffmpeg_src}" PATCHES "${snx_ffmpeg_patch}"
-                 FILES libavcodec/vp9.c 69bcc226b8d240fb21ea5cfa071c101ed451409bf80368ec26d5664c9fc2ab6c)
 # sh before bash: on Windows a bash.exe in System32 is WSL's launcher, and w64devkit's sh is the one to use
 find_program(SNX_FFMPEG_SH NAMES sh bash)
 find_program(SNX_FFMPEG_MAKE NAMES gmake make)
@@ -106,8 +100,8 @@ endif()
 
 # Built once for every tree that builds it the same way, when SNX_DEPS_CACHE names a folder (cmake/deps_cache.cmake).
 # The install prefix stays out of the key: FFmpeg only quotes it in its configuration string
-snx_deps_cached(ffmpeg snx_ffmpeg_cache "source: ${snx_ffmpeg_sha256}" "patch: ${snx_ffmpeg_patch_sha256}"
-                "configure: ${snx_ffmpeg_args}" "nasm: ${snx_ffmpeg_nasm}")
+snx_deps_cached(ffmpeg snx_ffmpeg_cache "source: ${snx_ffmpeg_sha256}" "configure: ${snx_ffmpeg_args}"
+                "nasm: ${snx_ffmpeg_nasm}")
 if(snx_ffmpeg_cache_FOUND)
     set(snx_ffmpeg_prefix "${snx_ffmpeg_cache_DIR}")
 else()
@@ -119,9 +113,7 @@ else()
     include(ExternalProject)
     ExternalProject_Add(ffmpeg_build
         SOURCE_DIR "${snx_ffmpeg_src}"
-        # configure leaves a src link to its source there: a tree that built the release's own folder before would
-        # keep compiling that one
-        BINARY_DIR "${CMAKE_BINARY_DIR}/ffmpeg-build-patched"
+        BINARY_DIR "${CMAKE_BINARY_DIR}/ffmpeg-build"
         INSTALL_DIR "${snx_ffmpeg_prefix}"
         CONFIGURE_COMMAND "${SNX_FFMPEG_SH}" "${snx_ffmpeg_src}/configure" --prefix=${snx_ffmpeg_prefix}
                           ${snx_ffmpeg_args}

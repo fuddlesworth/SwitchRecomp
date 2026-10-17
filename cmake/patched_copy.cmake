@@ -9,8 +9,8 @@
 # touch is in FILES with the SHA-256 it has patched; one that has another makes the copy again (a patch edited since, a
 # copy left half patched) and, after that, stops the configure.
 #
-# The one way a package is patched here: CPM's PATCHES leaves a cache it did not fill unpatched (#214). hactool uses
-# it, and goes with its patches once hactool is a fork of ours (#166); so does FFmpeg, for NVDEC's VP9 jobs.
+# The one way a package is patched here: CPM's PATCHES leaves a cache it did not fill unpatched (#214). Only hactool
+# uses it, and it goes with hactool's patches once hactool is a fork of ours (#166).
 function(snx_patched_copy)
     cmake_parse_arguments(arg "" "SOURCE;DEST" "PATCHES;FILES" ${ARGN})
     set(stale FALSE)
