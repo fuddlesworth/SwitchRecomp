@@ -50,7 +50,10 @@ static int vp9_decode_one(NvdecCtx* d, const Vp9Job* j, const u64 next[4], int h
         show = d->cur; /* nothing good yet: partial is better than green */
     if (show) {
         PicOut pt = {j->luma, j->chroma, j->pitch_y, j->pitch_c, 1, j->w, j->h};
-        if (j->luma && j->chroma) write_pic(show, &pt);
+        if (j->luma && j->chroma) {
+            const AVFrame* pf = cpu_pic(d, show);
+            if (pf) write_pic(pf, &pt);
+        }
         if (show == d->vp9_prev) err = 0; /* concealed: report success */
     }
     return err;

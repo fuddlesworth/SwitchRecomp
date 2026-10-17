@@ -53,17 +53,53 @@ ctest --test-dir build/packet-tests -R '^nvdec_packets$' --output-on-failure
 It decodes synthetic 16x16 I_PCM and reference-dependent
 P-skip pictures, checks exact luma/interleaved chroma values, reuses SPS/PPS and
 exercises Annex B, four-byte AVCC and bare-NAL submission. No copyrighted video or
-encoder dependency is required.
+encoder dependency is required. A second pass offers the same pictures to the
+machine's Vulkan decode; a driver whose minimum coded extent is above 16x16 (radv's
+floor is 64x64) declines them, FFmpeg retries without Vulkan by itself, and the pass
+reports that the CPU ran.
 
 ```sh
 cmake --build build --target snx-test-nvdec-decode
 ctest --test-dir build -R '^nvdec_(packets|decode)$' --output-on-failure
 ```
 
+`nvdec_replay` runs the frontends' synthetic pins anywhere, and replays recorded game
+jobs when captures are under `tests/data/nvdec` (CTest reports 77, skip, without
+them). With the FE3H VP9 captures it composes the game's 720p stream, decodes it,
+pins each picture's luma crc32, and then runs the same stream through the machine's
+Vulkan decode, requiring the read-back pictures to be the software decoder's byte for
+byte; a machine without a device, or a driver that declines the stream, is told apart
+and stays green.
+
 Validation here: 16 tools-only CTests passed with Clang 21.1.5 and ASan/UBSan;
 the real-decoder harness passed 2,290 checks against the pinned FFmpeg 9.0.2.
 The locally built FFmpeg library itself was not sanitizer-instrumented. A `-no-pie`
 executable link flag was needed for ASan's address-space reservation in the sandbox.
+
+## Hardware decoding (Vulkan)
+
+The movie jobs run on the machine's GPU where its driver decodes them: FFmpeg's
+Vulkan video decoders for H.264 and VP9 cover AMD, Intel, NVIDIA and mobile drivers
+through one backend, and the bundled FFmpeg carries them with their device code. A
+machine with no Vulkan device, or one whose driver cannot open the decoder, falls
+back to the CPU when the decoder opens, and the log says which happened.
+`SNX_NVDEC_CPU=1` forces the CPU path, which capture replays want to come out the
+same everywhere.
+
+A driver can also turn a stream down after its device was created - a picture below
+its minimum coded extent (radv's floor is 64x64) or a level it does not decode.
+FFmpeg's own `ff_get_format` drops Vulkan from the format list and retries when the
+hardware start fails, so the decoder instance lands on the CPU before it has decoded
+anything: no reference history is replayed, and the log names it ("the Vulkan driver
+would not decode %s"). Nothing depends on a mid-stream switch, which a reference
+chain could not survive.
+
+A hardware picture arrives as NV12 and is downloaded with `av_hwframe_transfer_data`
+into the same block-linear surface writes as the software path's planar 4:2:0, so
+surfaces are identical; corruption of a picture the decoder never shows back (an
+alt-ref) would stay invisible to the game's own sampled surfaces, but the write is
+semaphore-synced by the transfer either way. FFmpeg dlopens the Vulkan loader at run
+time, so nothing new is linked and machines without Vulkan run as before.
 
 ## Limits
 
@@ -74,3 +110,6 @@ still need capture-based coverage. This patch does not change SPS/PPS reconstruc
 the decode-order `get_buffer2` strategy, or recover reference pictures already lost
 to malformed input. Framing autodetection remains a heuristic without explicit
 container metadata. A game-level green-screen fix still needs in-game verification.
+On the hardware path the VP9 capture replay pins real pictures byte for byte; H.264
+there has only synthetic coverage, below the drivers' minimum picture sizes, and
+field-coded pairs have had none yet.

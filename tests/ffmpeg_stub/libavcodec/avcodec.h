@@ -16,8 +16,13 @@
 #define AV_CODEC_ID_H264             27
 #define AV_CODEC_ID_VP9              167
 #define FF_THREAD_SLICE              2
-#define AV_PIX_FMT_YUV420P           0
-#define AV_PIX_FMT_YUVJ420P          12
+enum AVPixelFormat {
+    AV_PIX_FMT_NONE     = -1,
+    AV_PIX_FMT_YUV420P  = 0,
+    AV_PIX_FMT_YUVJ420P = 12,
+    AV_PIX_FMT_NV12     = 23,
+    AV_PIX_FMT_VULKAN   = 199,
+};
 typedef struct AVCodec {
     int unused;
 } AVCodec;
@@ -36,6 +41,8 @@ typedef struct AVCodecContext {
     void* opaque;
     int thread_count, thread_type;
     int (*get_buffer2)(struct AVCodecContext*, AVFrame*, int);
+    void* hw_device_ctx; /* the double never makes one: the hardware attempt lands on the CPU path */
+    enum AVPixelFormat (*get_format)(struct AVCodecContext*, const enum AVPixelFormat*);
 } AVCodecContext;
 const AVCodec* avcodec_find_decoder(int id);
 AVCodecContext* avcodec_alloc_context3(const AVCodec* codec);

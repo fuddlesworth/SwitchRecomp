@@ -7,6 +7,7 @@
 #include "nx/gpu/video/nvdec_int.h"
 #include "nx/gpu/video/vp9_head.h"
 #include <libavcodec/avcodec.h>
+#include <libavutil/hwcontext.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -190,7 +191,10 @@ static u32 crc32_y(const AVFrame* f) {
     return c ^ 0xFFFFFFFFu;
 }
 
-/* one composed packet through FFmpeg: 0 when it decodes without complaint */
+static AVFrame* vp9_cpu; /* the read-back target for pictures the GPU decoded */
+static int vp9_hw_pics;  /* pictures that came back as hardware frames: 0 means the CPU did the work */
+/* one composed packet through FFmpeg: 0 when it decodes without complaint. A hardware picture is read back
+   into CPU memory first, the way the runtime's write path does, so the crc sees the same bytes either way */
 static int feed_packet(AVCodecContext* vd, AVPacket* vpkt, AVFrame* vfr, const u8* data, u32 len) {
     int err;
     vpkt->data = (u8*)data;
@@ -199,10 +203,22 @@ static int feed_packet(AVCodecContext* vd, AVPacket* vpkt, AVFrame* vfr, const u
     for (;;) {
         int r = avcodec_receive_frame(vd, vfr);
         if (r == 0) {
+            const AVFrame* f = vfr;
+            if (vfr->format == AV_PIX_FMT_VULKAN) {
+                if (!vp9_cpu) vp9_cpu = av_frame_alloc();
+                if (vp9_cpu) av_frame_unref(vp9_cpu);
+                if (!vp9_cpu || av_hwframe_transfer_data(vp9_cpu, vfr, 0) < 0) {
+                    if (err >= 0) err = AVERROR_EXTERNAL;
+                    av_frame_unref(vfr);
+                    break;
+                }
+                f = vp9_cpu;
+                vp9_hw_pics++;
+            }
             if (vp9_ncrc < 32) {
-                vp9_fw = vfr->width;
-                vp9_fh = vfr->height;
-                vp9_frame_crc[vp9_ncrc++] = crc32_y(vfr);
+                vp9_fw = f->width;
+                vp9_fh = f->height;
+                vp9_frame_crc[vp9_ncrc++] = crc32_y(f);
             }
             av_frame_unref(vfr);
             continue;
@@ -211,6 +227,118 @@ static int feed_packet(AVCodecContext* vd, AVPacket* vpkt, AVFrame* vfr, const u
         break;
     }
     return err;
+}
+/* a captured job: the frontends' inputs and the surfaces its picture belongs in */
+typedef struct {
+    u8 ps[0x100];
+    u8 prob[0xEA0];
+    u8* bs;
+    u32 bs_n;
+    u64 off[4];
+    int key;
+} VJob;
+
+/* the choice the runtime's decoder makes: Vulkan when the decoder offers it, the first software format
+   otherwise (FFmpeg retries the format list without Vulkan when a driver will not take the stream) */
+static enum AVPixelFormat vp9_get_format(AVCodecContext* c, const enum AVPixelFormat* fmts) {
+    (void)c;
+    for (const enum AVPixelFormat* p = fmts; *p != AV_PIX_FMT_NONE; p++)
+        if (*p == AV_PIX_FMT_VULKAN) return *p;
+    return fmts[0];
+}
+/* the decoder one pass runs on, software or on the machine's Vulkan device. NULL when the machine has no
+   device or the decoder will not open */
+static AVCodecContext* vp9_open(int hw) {
+    const AVCodec* vc = avcodec_find_decoder(AV_CODEC_ID_VP9);
+    AVCodecContext* vd = vc ? avcodec_alloc_context3(vc) : NULL;
+    if (!vd) return NULL;
+    if (hw) {
+        AVBufferRef* dev = NULL;
+        if (av_hwdevice_ctx_create(&dev, AV_HWDEVICE_TYPE_VULKAN, NULL, NULL, 0) < 0) {
+            avcodec_free_context(&vd);
+            return NULL;
+        }
+        vd->hw_device_ctx = dev; /* the context owns it now */
+        vd->get_format = vp9_get_format;
+    }
+    vd->thread_count = 1;
+    if (avcodec_open2(vd, vc, NULL) < 0) {
+        avcodec_free_context(&vd);
+        return NULL;
+    }
+    return vd;
+}
+/* the captured jobs through one decoder: composed packets in, one Y crc32 per output picture into
+   vp9_frame_crc. Returns the packets emitted; first_err gets the first packet that did not compose or
+   decode, -1 when they all did */
+static int vp9_stream(const VJob* jobs, unsigned nj, AVCodecContext* vd, AVPacket* vpkt, AVFrame* vfr,
+                      int* first_err) {
+    static u8 pps_buf[0x100], pprob[0xEA0];
+    Vp9HeadCtx vctx;
+    u8* pbs = NULL;
+    u32 plen = 0;
+    u64 poff[4] = {0, 0, 0, 0};
+    u8* vout2 = malloc(4u << 20);
+    int emitted = 0;
+    memset(&vctx, 0, sizeof vctx);
+    *first_err = -1;
+    if (!vout2) {
+        fprintf(stderr, "FAIL: vp9 oom\n");
+        failures++;
+    }
+    for (unsigned j = 0; j < nj && vout2; j++) {
+        u32 nbs = jobs[j].bs_n;
+        if (pbs) {
+            u32 o = vp9_compose_frame(&vctx, pps_buf, pprob, pbs, plen, vout2, 4u << 20, poff, jobs[j].off, 1,
+                                      (rd32(jobs[j].ps, 0x68) & 0x10) != 0);
+            if (!o || feed_packet(vd, vpkt, vfr, vout2, o) < 0) {
+                if (!o) fprintf(stderr, "FAIL: vp9 compose pending at job %u\n", j);
+                if (*first_err < 0) *first_err = emitted;
+            }
+            emitted++;
+            free(pbs);
+            pbs = NULL;
+        }
+        if (jobs[j].key) {
+            u64 zero[4] = {0, 0, 0, 0};
+            u32 o = vp9_compose_frame(&vctx, jobs[j].ps, jobs[j].prob, jobs[j].bs, nbs, vout2, 4u << 20,
+                                      jobs[j].off, zero, 0, 1);
+            if (!o || feed_packet(vd, vpkt, vfr, vout2, o) < 0) {
+                if (!o) fprintf(stderr, "FAIL: vp9 compose job %u\n", j);
+                if (*first_err < 0) *first_err = emitted;
+            }
+            emitted++;
+        } else {
+            memcpy(pps_buf, jobs[j].ps, 0x100);
+            memcpy(pprob, jobs[j].prob, 0xEA0);
+            free(pbs);
+            pbs = malloc(nbs);
+            if (!pbs) {
+                fprintf(stderr, "FAIL: vp9 oom at job %u\n", j);
+                failures++;
+                break;
+            }
+            memcpy(pbs, jobs[j].bs, nbs);
+            plen = nbs;
+            memcpy(poff, jobs[j].off, sizeof poff);
+        }
+    }
+    free(pbs);
+    free(vout2);
+    return emitted;
+}
+/* the pictures the captured run decodes to on the software decoder: every pass must produce them */
+static const u32 vp9_golden[] = {
+    0xd595ffbb, 0xd55e9fda, 0xdaf783cd, 0x9dcd25b2, 0x218072e7, 0x2da3d834, 0x9e2f11cf,
+    0xa7227ba6, 0x0d580780, 0x5e2a457d, 0x763cf6af, 0xa41386ad, 0xf7c7a146, 0x4fc16d01,
+    0x08587a9c, 0x2580ab69, 0x76e4c18f, 0xc1569b2b, 0xd9140a54,
+};
+static int vp9_golden_ok(void) {
+    unsigned n = sizeof vp9_golden / sizeof vp9_golden[0];
+    if (vp9_ncrc != n) return 0;
+    for (unsigned i = 0; i < n; i++)
+        if (vp9_frame_crc[i] != vp9_golden[i]) return 0;
+    return 1;
 }
 
 int main(void) {
@@ -320,17 +448,8 @@ int main(void) {
         /* FE3H VP9 captures compose and decode in order. Jobs 00-03 must come out clean (pins
            today's good frames); the whole 00-18 run must reach 19 packets with no decoder errors. */
         {
-            typedef struct {
-                u8 ps[0x100];
-                u8 prob[0xEA0];
-                u8* bs;
-                u32 bs_n;
-                u64 off[4];
-                int key;
-            } VJob;
             static const unsigned njobs = 20;
             static VJob jobs[20];
-            static u8 pps_buf[0x100], pprob[0xEA0];
             unsigned nj = 0;
             for (unsigned j = 0; j < njobs; j++) {
                 CapJob cj;
@@ -363,74 +482,14 @@ int main(void) {
                 check(memcmp(jobs[0].off, want, sizeof want) == 0, "vp9 job00 offsets");
             }
             {
-                const AVCodec* vc = avcodec_find_decoder(AV_CODEC_ID_VP9);
-                AVCodecContext* vd = NULL;
-                AVPacket* vpkt = NULL;
-                AVFrame* vfr = NULL;
-                int vd_ok = vc != NULL;
-                if (vd_ok) {
-                    vd = avcodec_alloc_context3(vc);
-                    vd_ok = vd != NULL;
-                    if (vd_ok) {
-                        vd->thread_count = 1;
-                        vd_ok = avcodec_open2(vd, vc, NULL) >= 0;
-                    }
-                    vpkt = av_packet_alloc();
-                    vfr = av_frame_alloc();
-                    vd_ok = vd_ok && vpkt && vfr;
-                }
+                AVCodecContext* vd = vp9_open(0);
+                AVPacket* vpkt = av_packet_alloc();
+                AVFrame* vfr = av_frame_alloc();
+                int vd_ok = vd != NULL && vpkt && vfr;
                 check(vd_ok, "vp9 decoder opened");
                 if (vd_ok && nj == njobs) {
-                    Vp9HeadCtx vctx;
-                    u8* pbs = NULL;
-                    u32 plen = 0;
-                    u64 poff[4] = {0, 0, 0, 0};
-                    u8* vout2 = malloc(4u << 20);
-                    int emitted = 0, first_err = -1;
-                    memset(&vctx, 0, sizeof vctx);
-                    if (!vout2) {
-                        fprintf(stderr, "FAIL: vp9 oom\n");
-                        failures++;
-                    }
-                    for (unsigned j = 0; j < nj && vout2; j++) {
-                        u32 nbs = jobs[j].bs_n;
-                        if (pbs) {
-                            u32 o = vp9_compose_frame(&vctx, pps_buf, pprob, pbs, plen, vout2, 4u << 20, poff,
-                                                      jobs[j].off, 1, (rd32(jobs[j].ps, 0x68) & 0x10) != 0);
-                            if (!o || feed_packet(vd, vpkt, vfr, vout2, o) < 0) {
-                                if (!o) fprintf(stderr, "FAIL: vp9 compose pending at job %u\n", j);
-                                if (first_err < 0) first_err = emitted;
-                            }
-                            emitted++;
-                            free(pbs);
-                            pbs = NULL;
-                        }
-                        if (jobs[j].key) {
-                            u64 zero[4] = {0, 0, 0, 0};
-                            u32 o = vp9_compose_frame(&vctx, jobs[j].ps, jobs[j].prob, jobs[j].bs, nbs, vout2,
-                                                      4u << 20, jobs[j].off, zero, 0, 1);
-                            if (!o || feed_packet(vd, vpkt, vfr, vout2, o) < 0) {
-                                if (!o) fprintf(stderr, "FAIL: vp9 compose job %u\n", j);
-                                if (first_err < 0) first_err = emitted;
-                            }
-                            emitted++;
-                        } else {
-                            memcpy(pps_buf, jobs[j].ps, 0x100);
-                            memcpy(pprob, jobs[j].prob, 0xEA0);
-                            free(pbs);
-                            pbs = malloc(nbs);
-                            if (!pbs) {
-                                fprintf(stderr, "FAIL: vp9 oom at job %u\n", j);
-                                failures++;
-                                break;
-                            }
-                            memcpy(pbs, jobs[j].bs, nbs);
-                            plen = nbs;
-                            memcpy(poff, jobs[j].off, sizeof poff);
-                        }
-                    }
-                    free(pbs);
-                    free(vout2);
+                    int emitted, first_err;
+                    emitted = vp9_stream(jobs, nj, vd, vpkt, vfr, &first_err);
                     check(emitted == 19, "vp9 19 packets emitted");
                     if (first_err >= 0) fprintf(stderr, "vp9 first bad packet: %d\n", first_err);
                     check(first_err < 0 || first_err > 3, "vp9 jobs 00-03 decode clean");
@@ -440,13 +499,7 @@ int main(void) {
                     check(first_err < 0, "vp9 jobs 00-18 decode clean");
                     check(vp9_fw == 1280 && vp9_fh == 720, "vp9 1280x720");
                     {
-                        static const u32 golden_crc[] = {
-                            0xd595ffbb, 0xd55e9fda, 0xdaf783cd, 0x9dcd25b2, 0x218072e7, 0x2da3d834, 0x9e2f11cf,
-                            0xa7227ba6, 0x0d580780, 0x5e2a457d, 0x763cf6af, 0xa41386ad, 0xf7c7a146, 0x4fc16d01,
-                            0x08587a9c, 0x2580ab69, 0x76e4c18f, 0xc1569b2b, 0xd9140a54,
-                        };
-                        unsigned same = vp9_ncrc == sizeof golden_crc / sizeof golden_crc[0];
-                        for (unsigned i = 0; same && i < vp9_ncrc; i++) same = vp9_frame_crc[i] == golden_crc[i];
+                        int same = vp9_golden_ok();
                         if (!same) {
                             fprintf(stderr, "FAIL: vp9 frames differ (%u images):", vp9_ncrc);
                             for (unsigned i = 0; i < vp9_ncrc; i++) fprintf(stderr, " %08x", vp9_frame_crc[i]);
@@ -478,8 +531,51 @@ int main(void) {
                         }
                         check(hok, "vp9 hidden frame decodes");
                         check(vp9_ncrc == before + 1, "vp9 hidden frame emits no picture");
-                        if (vp9_ncrc > before) check(vp9_frame_crc[before] == 0xd595ffbb, "vp9 hidden key hash");
+                        if (vp9_ncrc > before) check(vp9_frame_crc[before] == vp9_golden[0], "vp9 hidden key hash");
                         free(hout);
+                    }
+                    /* the same run on the machine's Vulkan decode: 1280x720 sits far above every driver's
+                       minimum picture size, so a driver with VP9 decode takes it. VP9 decoding is exact,
+                       so the pictures read back from the GPU must be the software pass's, byte for byte.
+                       A driver that will not take the stream leaves FFmpeg on the CPU (ff_get_format
+                       retries without Vulkan): that is a pass too, and it says so */
+                    {
+                        AVCodecContext* hd = vp9_open(1);
+                        if (!hd)
+                            printf("NVDEC replay: no Vulkan device here, the hardware pass is skipped\n");
+                        else {
+                            AVPacket* hpkt = av_packet_alloc();
+                            AVFrame* hfr = av_frame_alloc();
+                            if (!hpkt || !hfr) {
+                                fprintf(stderr, "FAIL: vp9 hardware pass oom\n");
+                                failures++;
+                            } else {
+                                int hem, herr;
+                                vp9_ncrc = 0;
+                                vp9_hw_pics = 0;
+                                hem = vp9_stream(jobs, nj, hd, hpkt, hfr, &herr);
+                                check(hem == 19, "vp9 hardware pass emits 19 packets");
+                                if (herr >= 0) fprintf(stderr, "vp9 hardware first bad packet: %d\n", herr);
+                                check(herr < 0, "vp9 hardware pass decodes clean");
+                                int same = vp9_golden_ok();
+                                if (!same) {
+                                    fprintf(stderr, "FAIL: vp9 hardware frames differ (%u images):", vp9_ncrc);
+                                    for (unsigned i = 0; i < vp9_ncrc; i++)
+                                        fprintf(stderr, " %08x", vp9_frame_crc[i]);
+                                    fprintf(stderr, "\n");
+                                }
+                                check(same, "vp9 hardware frame hashes");
+                                if (vp9_hw_pics)
+                                    printf("NVDEC replay: %d pictures decoded on the GPU (Vulkan) match the CPU's\n",
+                                           vp9_hw_pics);
+                                else
+                                    printf("NVDEC replay: the driver would not take the stream, the hardware pass ran "
+                                           "on the CPU\n");
+                            }
+                            av_packet_free(&hpkt);
+                            av_frame_free(&hfr);
+                            avcodec_free_context(&hd);
+                        }
                     }
                 }
                 av_packet_free(&vpkt);

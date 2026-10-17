@@ -22,8 +22,13 @@ static u32 regs[0x1000 / 4];
 static u8* const setup = memory + 0x1000;
 static u8* const stream = memory + 0x2000;
 void logf_(int level, const char* fmt, ...) {
+    /* silent unless SNX_TEST_LOG is set: the channel's messages, FFmpeg's included, are worth reading then */
     (void)level;
-    (void)fmt;
+    if (!getenv("SNX_TEST_LOG")) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
 }
 /* block_linear_test's surfaces, from iova BIG on */
 #define BIG    0x1000000u
@@ -276,6 +281,26 @@ int av_log_format_line2(void* c, int level, const char* fmt, va_list args, char*
     (void)prefix;
     return vsnprintf(line, (size_t)size, fmt, args);
 }
+AVBufferRef* av_buffer_ref(const AVBufferRef* b) {
+    (void)b;
+    return NULL;
+}
+void av_buffer_unref(AVBufferRef** b) { *b = NULL; }
+int av_hwdevice_ctx_create(AVBufferRef** ctx, enum AVHWDeviceType type, const char* name, void* opts, int flags) {
+    (void)ctx;
+    (void)type;
+    (void)name;
+    (void)opts;
+    (void)flags;
+    /* the double has no Vulkan device: the hardware attempt fails and the CPU path opens, as it always did */
+    return AVERROR(ENOSYS);
+}
+int av_hwframe_transfer_data(AVFrame* dst, const AVFrame* src, int flags) {
+    (void)dst;
+    (void)src;
+    (void)flags;
+    return AVERROR(ENOSYS);
+}
 static void submission_tests(void) {
     const Event good[] = {{'S', 0, 1}, {'R', 0, 0}, {'R', AVERROR(EAGAIN), 0}};
     const Event retry[] = {
@@ -373,6 +398,8 @@ static void skip_slice(u32 frame_num) {
     put32(0x48, n);
 }
 static void submission_tests(void) {
+    /* this pass pins the CPU path; the machine's GPU gets its own pass in gpu_tests */
+    setenv("SNX_NVDEC_CPU", "1", 1);
     fixture();
     NvdecCtx* d = nvdec_new();
     CHECK(d != NULL);
@@ -402,6 +429,36 @@ static void submission_tests(void) {
     nvdec_execute(d, regs);
     pixels_are(145, 54, 34);
     nvdec_free(d);
+    unsetenv("SNX_NVDEC_CPU");
+}
+/* The hardware path: the same pictures through FFmpeg's Vulkan video decode, downloaded and written into the same
+   guest surfaces. Only a machine whose driver decodes H.264 over Vulkan takes this pass: where there is no Vulkan
+   device, or the driver cannot decode, the channel falls back to the CPU and the pass says so and checks that. */
+static void gpu_tests(void) {
+    setenv("SNX_NVDEC_CPU", "0", 1); /* 0 is not 1: the machine's GPU may take the jobs */
+    fixture();
+    NvdecCtx* d = nvdec_new();
+    CHECK(d != NULL);
+    pcm_slice(81, 90, 240);
+    nvdec_execute(d, regs);
+    if (d->cur && d->cur->format == AV_PIX_FMT_VULKAN) {
+        CHECK(d->app == 3 && d->dec->hw_device_ctx != NULL);
+        pixels_are(81, 90, 240); /* the downloaded NV12 and the write match the CPU path's surfaces */
+        skip_slice(1);
+        memset(memory + 0x4000, 0xcc, 0x2000);
+        nvdec_execute(d, regs);
+        pixels_are(81, 90, 240); /* a reference-dependent picture, from the hardware's own references */
+        pcm_slice(145, 54, 34);
+        nvdec_execute(d, regs);
+        pixels_are(145, 54, 34); /* distinct pixels: no stale buffer rides along */
+        printf("NVDEC hardware path: Vulkan-decoded pictures match the CPU's\n");
+    } else {
+        /* no Vulkan device on the machine, or a driver that declined this 16x16 picture: FFmpeg retries the
+           format list without Vulkan (radv's floor is 64x64, ff_get_format drops it and the CPU decodes) */
+        printf("NVDEC hardware path: no Vulkan decode for this 16x16 stream here, the CPU path ran\n");
+    }
+    nvdec_free(d);
+    unsetenv("SNX_NVDEC_CPU");
 }
 #endif
 /* A VP9 job opens a VP9 decoder whose opaque is the channel's context; one with no probability table fails
@@ -497,6 +554,9 @@ int main(void) {
     odd_size_test();
     block_linear_test();
     submission_tests();
+#ifdef SNX_TEST_REAL_FFMPEG
+    gpu_tests();
+#endif
     vp9_tests();
     printf("NVDEC packets: %u checks passed (%s)\n", checks, av_version_info());
     return 0;

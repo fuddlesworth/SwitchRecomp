@@ -5,16 +5,23 @@
 # and FFmpeg::avutil), built from the release source in cmake/dependencies.cmake with FFmpeg's own configure and make,
 # which it has instead of a CMake build. Only the decoders NVDEC handles are in (H.264, VP8, VP9), and Opus for hwopus
 # (FFmpeg's Opus decoder resamples its SILK layer with libswresample, which is why that library is in): no programs,
-# formats, filters, devices, network or autodetected system libraries, so the result needs nothing but libc and builds
-# the same everywhere. All of it is LGPL (no --enable-gpl). It needs a POSIX shell and make (gmake on the BSDs), and
-# NASM for the x86-64 assembly.
+# formats, filters, network or autodetected system libraries, so the result needs nothing but libc and builds
+# the same everywhere. The Vulkan video decoders for H.264 and VP9 come with it, so NVDEC jobs run on the machine's
+# GPU where its driver can decode them, with the CPU as the fallback: that code is FFmpeg's own, its headers are the
+# Vulkan-Headers package's, and FFmpeg dlopens the loader at run time, so nothing new is linked and a machine with
+# no Vulkan at all still decodes on the CPU. All of it is LGPL (no --enable-gpl). It needs a POSIX shell and make
+# (gmake on the BSDs), and NASM for the x86-64 assembly.
 # This file is included into the top-level scope: its variables carry the snx_ffmpeg_ prefix.
 set(snx_ffmpeg_src "${FFmpeg_SOURCE_DIR}")
 set(snx_ffmpeg_prefix "${CMAKE_BINARY_DIR}/ffmpeg")
-# FFmpeg's configure stops on a source path with a space in it, which would only show at build time
-if(snx_ffmpeg_src MATCHES "[ \t]")
-    message(FATAL_ERROR "FFmpeg can't be built from a path with spaces in it (${snx_ffmpeg_src}). Move the checkout "
-                        "to a path without spaces or set CPM_SOURCE_CACHE to one. FFmpeg is required by the NX runtime.")
+# The Vulkan video decoders need the Vulkan headers, which the Vulkan-Headers package carries: no system dev package
+set(snx_ffmpeg_vulkan_include "${Vulkan-Headers_SOURCE_DIR}/include")
+# FFmpeg's configure stops on a path with a space in it, which would only show at build time; both of these end up
+# in its command line
+if(snx_ffmpeg_src MATCHES "[ \t]" OR snx_ffmpeg_vulkan_include MATCHES "[ \t]")
+    message(FATAL_ERROR "FFmpeg can't be built from a path with spaces in it (source ${snx_ffmpeg_src}, Vulkan headers "
+                        "${snx_ffmpeg_vulkan_include}). Move the checkout to a path without spaces or set "
+                        "CPM_SOURCE_CACHE to one. FFmpeg is required by the NX runtime.")
 endif()
 # sh before bash: on Windows a bash.exe in System32 is WSL's launcher, and w64devkit's sh is the one to use
 find_program(SNX_FFMPEG_SH NAMES sh bash)
@@ -46,13 +53,19 @@ set(snx_ffmpeg_args
     --disable-swscale
     --disable-iconv
     --enable-decoder=h264,vp8,vp9,opus
+    # The movies' hardware decode: with these in, the runtime can ask FFmpeg for Vulkan-decoded pictures on the
+    # machines whose drivers can produce them (FFmpeg's own device code is what's added here), and the ones that
+    # cannot decode on the CPU as before
+    --enable-vulkan
+    --enable-hwaccel=h264_vulkan,vp9_vulkan
     --cc=${CMAKE_C_COMPILER}
     --cxx=${CMAKE_CXX_COMPILER}
     --ar=${CMAKE_AR}
     --ranlib=${CMAKE_RANLIB}
     --nm=${CMAKE_NM}
-    # FFmpeg's own warnings stay out of the build output
-    --extra-cflags=-w)
+    # FFmpeg's own warnings stay out of the build output, and the Vulkan headers are the package's (quoting keeps
+    # this one configure argument: a list element with a space would be passed as two)
+    "--extra-cflags=-w -I${snx_ffmpeg_vulkan_include}")
 if(WIN32 OR CMAKE_CROSSCOMPILING)
     # configure guesses the target from the machine doing the build, so a cross build names it. CMake names the
     # architecture AMD64 or ARM64 on Windows, which configure doesn't know

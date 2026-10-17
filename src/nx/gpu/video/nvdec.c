@@ -6,17 +6,23 @@
    surface its job names, where VIC reads it */
 #include "nx/gpu/video/nvdec_int.h"
 #include <libavutil/error.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/log.h>
 
 static u32 g_vframes; /* pictures written, all channels: only for the log */
 NvdecCtx* nvdec_new(void) { return calloc(1, sizeof(NvdecCtx)); }
-void nvdec_free(NvdecCtx* d) {
-    if (!d) return;
-    /* the references and the pictures the decoder still holds go with it: the game closed the stream */
+/* the decoder and every picture it holds, or the channel's: the game closed the stream */
+static void dec_teardown(NvdecCtx* d) {
     avcodec_free_context(&d->dec);
     av_packet_free(&d->pkt);
     av_frame_free(&d->frame);
     av_frame_free(&d->cur);
+    av_frame_free(&d->cpu);
+}
+void nvdec_free(NvdecCtx* d) {
+    if (!d) return;
+    dec_teardown(d);
+    av_buffer_unref(&d->hw_dev);
     av_frame_free(&d->vp9_prev);
     nvdec_vp9_pend_drop(d);
     free(d);
@@ -52,6 +58,59 @@ static int get_buf(AVCodecContext* c, AVFrame* f, int flags) {
     }
     return r;
 }
+/* what avcodec_open2 chooses from: Vulkan when the decoder offers it, the first software format otherwise. Set only
+   on the hardware attempt: the CPU one uses FFmpeg's default */
+static enum AVPixelFormat get_format(AVCodecContext* c, const enum AVPixelFormat* fmts) {
+    (void)c;
+    for (const enum AVPixelFormat* p = fmts; *p != AV_PIX_FMT_NONE; p++)
+        if (*p == AV_PIX_FMT_VULKAN) return *p;
+    return fmts[0];
+}
+/* the picture as the CPU sees it: a hardware one is downloaded into d->cpu first, a software one comes back as is.
+   NULL when the download fails, and the caller fails the job as it does for a decode error */
+const AVFrame* cpu_pic(NvdecCtx* d, const AVFrame* f) {
+    if (f->format != AV_PIX_FMT_VULKAN) {
+        /* opened on the Vulkan device and the picture is still software: FFmpeg offered the stream to the
+           driver, it would not take it, and FFmpeg itself put the channel on the CPU (see ff_get_format) */
+        if (d->hw_try && !d->hw_soft) {
+            d->hw_soft = 1;
+            LOG("video: the Vulkan driver would not decode %s, FFmpeg keeps the channel on the CPU\n",
+                d->app == 3 ? "H.264" : "VP9");
+        }
+        return f;
+    }
+    if (!d->cpu) d->cpu = av_frame_alloc();
+    if (!d->cpu) return NULL;
+    av_frame_unref(d->cpu);
+    if (av_hwframe_transfer_data(d->cpu, f, 0) < 0) {
+        LOG_LIMIT(1, "video: the decoded picture could not be read back from the GPU\n");
+        return NULL;
+    }
+    LOG_LIMIT(1, "video: NVDEC pictures are decoded on the GPU (Vulkan)\n");
+    return d->cpu;
+}
+/* one attempt at the channel's decoder: with the Vulkan device on the first try, without on the second. 0 leaves the
+   half-made decoder behind for the caller's teardown */
+static int open_dec(NvdecCtx* d, const AVCodec* codec, int hw) {
+    d->dec = codec ? avcodec_alloc_context3(codec) : NULL;
+    d->pkt = av_packet_alloc();
+    d->frame = av_frame_alloc();
+    d->cur = av_frame_alloc();
+    if (!d->dec || !d->pkt || !d->frame || !d->cur) return 0;
+    /* one thread: the picture is complete when avcodec_send_packet returns, as NVDEC's is when the job ends
+       (frame threading would still be decoding it); a hardware decoder runs on the GPU anyway */
+    d->dec->thread_count = 1;
+    d->dec->opaque = d;
+    d->dec->get_buffer2 = get_buf;
+    if (hw) {
+        /* the machine's Vulkan device, made once per channel and reused by its later decoders */
+        if (!d->hw_dev && av_hwdevice_ctx_create(&d->hw_dev, AV_HWDEVICE_TYPE_VULKAN, NULL, NULL, 0) < 0) return 0;
+        d->dec->hw_device_ctx = av_buffer_ref(d->hw_dev);
+        if (!d->dec->hw_device_ctx) return 0;
+        d->dec->get_format = get_format;
+    }
+    return avcodec_open2(d->dec, codec, NULL) >= 0;
+}
 /* the decoder for the job's codec: SET_APPLICATION_ID (register 0x200), which the game's TVMR library writes before
    every job, is 3 for H.264 and 9 for VP9 (VP8 is 5, HEVC 7). A channel that changes codec gets a new decoder */
 static int dec_open(NvdecCtx* d, u32 app) {
@@ -62,39 +121,40 @@ static int dec_open(NvdecCtx* d, u32 app) {
         return 0;
     }
     /* the decoder, and the state that belongs to it, go first */
-    avcodec_free_context(&d->dec);
-    av_packet_free(&d->pkt);
-    av_frame_free(&d->frame);
-    av_frame_free(&d->cur);
+    dec_teardown(d);
     if (d->vp9_prev) av_frame_unref(d->vp9_prev);
     vp9_head_reset(&d->vp9);
     nvdec_vp9_pend_drop(d);
     d->last_hdr_n = 0;
     ffmpeg_log_init();
     const AVCodec* codec = avcodec_find_decoder(app == 3 ? AV_CODEC_ID_H264 : AV_CODEC_ID_VP9);
-    d->dec = codec ? avcodec_alloc_context3(codec) : NULL;
-    d->pkt = av_packet_alloc();
-    d->frame = av_frame_alloc();
-    d->cur = av_frame_alloc();
-    if (d->dec) {
-        /* one thread: the picture is complete when avcodec_send_packet returns, as NVDEC's is when the job ends
-           (frame threading would still be decoding it) */
-        d->dec->thread_count = 1;
-        d->dec->opaque = d;
-        d->dec->get_buffer2 = get_buf;
+    /* The jobs go to the machine's GPU where its Vulkan driver can decode the codec, and to the CPU otherwise.
+       SNX_NVDEC_CPU=1 keeps them on the CPU whatever the machine has: a capture replays the same everywhere then */
+    const char* cpu = getenv("SNX_NVDEC_CPU");
+    int hw = !(cpu && *cpu && *cpu != '0');
+    int opened = hw && open_dec(d, codec, 1);
+    if (hw && !opened) {
+        dec_teardown(d);
+        if (d->hw_dev)
+            LOG_LIMIT(1, "video: Vulkan does not decode %s here, the CPU does it\n", app == 3 ? "H.264" : "VP9");
+        else
+            LOG_LIMIT(1, "video: no Vulkan device for the NVDEC jobs, the CPU decodes them\n");
+        hw = 0;
     }
-    if (!d->dec || !d->pkt || !d->frame || !d->cur || avcodec_open2(d->dec, codec, NULL) < 0) {
+    if (!opened) opened = open_dec(d, codec, 0);
+    if (!opened) {
+        dec_teardown(d);
         d->fail = 1;
-        avcodec_free_context(&d->dec);
-        av_packet_free(&d->pkt);
-        av_frame_free(&d->frame);
-        av_frame_free(&d->cur);
         LOG_LIMIT(1, "video: the FFmpeg %s decoder could not be opened\n", app == 3 ? "H.264" : "VP9");
         return 0;
     }
     d->app = app;
-    LOG_LIMIT(1, "video: %s decoder ready (FFmpeg %s, NVDEC jobs are decoded on the CPU)\n", app == 3 ? "H.264" : "VP9",
-              av_version_info());
+    /* the driver may still refuse the stream at its first frame (a picture below its minimum size for one):
+       FFmpeg retries get_format without Vulkan then, and cpu_pic says so when it sees the software picture */
+    d->hw_try = hw;
+    d->hw_soft = 0;
+    LOG_LIMIT(1, "video: %s decoder ready (FFmpeg %s, %s)\n", app == 3 ? "H.264" : "VP9", av_version_info(),
+              hw ? "NVDEC jobs are sent to the GPU (Vulkan)" : "NVDEC jobs are decoded on the CPU");
     return 1;
 }
 /* EAGAIN is the normal end of a drain, not a decode error. EOF is unexpected: these per-channel decoders are
@@ -142,12 +202,12 @@ static void row_out(u8* p, const u64* col, u64 base, const u8* s, u32 n) {
     if (k * 16 < n) memcpy(p + base + col[k], s + k * 16, n - k * 16);
 }
 /* The picture into its surface as NVDEC writes it: a luma plane and one interleaved chroma plane (NV12), from
-   FFmpeg's planar 4:2:0. 1 when written */
+   FFmpeg's planar 4:2:0 or from the hardware path's own NV12. 1 when written */
 int write_pic(const AVFrame* f, const PicOut* t) {
     u32 w = (u32)f->width, h = (u32)f->height;
     int sy = f->linesize[0], sc = f->linesize[1], sv = f->linesize[2];
     const u8* const* pl = (const u8* const*)f->data;
-    if (f->format != AV_PIX_FMT_YUV420P && f->format != AV_PIX_FMT_YUVJ420P) {
+    if (f->format != AV_PIX_FMT_YUV420P && f->format != AV_PIX_FMT_YUVJ420P && f->format != AV_PIX_FMT_NV12) {
         LOG_LIMIT(1, "video: the decoder gave pixel format %d, not 4:2:0, which NVDEC can't write\n", f->format);
         return 0;
     }
@@ -174,13 +234,19 @@ int write_pic(const AVFrame* f, const PicOut* t) {
         row_out(py, col, bl_offset(0, y, 0, t->pitch_y, t->h, t->bh, 0), pl[0] + (u64)y * sy, w);
     u8 row[4096];
     for (u32 y = 0; y < (h + 1) / 2; y++) {
-        const u8* u = pl[1] + (u64)y * sc;
-        const u8* v = pl[2] + (u64)y * sv;
-        for (u32 x = 0; x < cw / 2; x++) {
-            row[2 * x] = u[x];
-            row[2 * x + 1] = v[x];
+        const u8* src;
+        if (f->format == AV_PIX_FMT_NV12)
+            src = pl[1] + (u64)y * sc; /* the hardware path hands its chroma interleaved already */
+        else {
+            const u8* u = pl[1] + (u64)y * sc;
+            const u8* v = pl[2] + (u64)y * sv;
+            for (u32 x = 0; x < cw / 2; x++) {
+                row[2 * x] = u[x];
+                row[2 * x + 1] = v[x];
+            }
+            src = row;
         }
-        row_out(pc, col, bl_offset(0, y, 0, t->pitch_c, ch, t->bh, 0), row, cw);
+        row_out(pc, col, bl_offset(0, y, 0, t->pitch_c, ch, t->bh, 0), src, cw);
     }
     g_vframes++;
     return 1;
@@ -299,8 +365,10 @@ void nvdec_execute(NvdecCtx* d, const u32* r) {
                       lay & 3);
         else if (idx >= 17 || !pt.luma || !pt.chroma)
             LOG_LIMIT(4, "video: NVDEC job names output surface %u, which has no address, picture dropped\n", idx);
-        else
-            wrote = write_pic(d->cur, &pt);
+        else {
+            const AVFrame* pf = cpu_pic(d, d->cur);
+            wrote = pf && write_pic(pf, &pt);
+        }
     }
     if (err < 0 || !wrote)
         fail_job(d, r, mbs);

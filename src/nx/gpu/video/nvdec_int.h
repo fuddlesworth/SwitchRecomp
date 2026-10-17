@@ -7,6 +7,7 @@
 #define SNX_NVDEC_INT_H
 #include "nx/gpu/video/host1x_int.h"
 #include <libavcodec/avcodec.h>
+#include <libavutil/buffer.h>
 #include <libavutil/frame.h>
 #include "nx/gpu/video/vp9_head.h"
 
@@ -40,6 +41,10 @@ struct NvdecCtx {
     AVFrame* frame; /* FFmpeg's output, dropped */
     AVFrame* cur;   /* a reference to the buffer of the picture the decoder started last */
     int cur_new;    /* started during this job */
+    AVBufferRef* hw_dev; /* the Vulkan device the decoder's pictures come from, made when the machine has one */
+    AVFrame* cpu;        /* a hardware picture downloaded for writing */
+    int hw_try;          /* the decoder was opened on the Vulkan device: its pictures should come back hardware */
+    int hw_soft;         /* they did not: FFmpeg put the channel on the CPU after a failed hardware start */
     /* SPS + PPS as last sent: full scaling lists with emulation prevention bytes come to about 800 */
     u8 last_hdr[1024];
     u32 last_hdr_n;
@@ -60,6 +65,9 @@ int nvdec_h264_packet(AVPacket* pkt, const u8* hdr, u32 hn, const u8* bs, u32 sl
 
 /* the picture into its surface as NVDEC writes it (nvdec.c) */
 int write_pic(const AVFrame* f, const PicOut* t);
+/* the picture as the CPU sees it: a hardware one is downloaded into the channel's own frame first, a software
+   one comes back as is. NULL when the download fails: the caller fails the job (nvdec.c) */
+const AVFrame* cpu_pic(struct NvdecCtx* d, const AVFrame* f);
 /* nvdec_status_s, its iova in register 0x424 (nvdec.c) */
 void put_status(const u32* r, u32 mbs, int failed);
 /* send the job's packet (d->pkt) and drain FFmpeg's output; cur_new names the picture this job started (nvdec.c) */
