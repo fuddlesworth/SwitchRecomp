@@ -5,12 +5,18 @@
 /* NVDEC H.264 frontend: the game passes no SPS or PPS, they are rebuilt here from the picture
    setup struct (nvdec_h264_pic_s, its iova in register 0x404) */
 #include "nx/gpu/video/nvdec_int.h"
+/* RBSP bit writer, MSB first: one bit, n bits, unsigned and signed Exp-Golomb */
 typedef struct {
     u8* p;
-    u32 cap, bytes;
-    u32 acc;
+    u32 cap, bytes; /* output buffer and bytes written so far */
+    u32 acc; /* bit accumulator, nb bits pending */
     int nb;
 } BW;
+static void bw_init(BW* w, u8* p, u32 cap) {
+    memset(w, 0, sizeof *w);
+    w->p = p;
+    w->cap = cap;
+}
 static void bw_bit(BW* w, u32 b) {
     w->acc = (w->acc << 1) | (b & 1);
     if (++w->nb == 8) {
@@ -55,10 +61,12 @@ static u32 nal_out(u8* dst, u32 cap, u8 hdr, const u8* rbsp, u32 n) {
     return i == n ? o : 0;
 }
 static i32 sext(u32 v, int bits) { return (i32)(v << (32 - bits)) >> (32 - bits); }
+/* zig-zag position to raster position, for the scaling lists in the pic setup */
 static const u8 zz4[16] = {0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15};
 static const u8 zz8[64] = {0,  1,  8,  16, 9,  2,  3,  10, 17, 24, 32, 25, 18, 11, 4,  5,  12, 19, 26, 33, 40, 48,
                            41, 34, 27, 20, 13, 6,  7,  14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23,
                            30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63};
+/* one scaling list as zig-zag deltas of the setup's raster values */
 static void scaling_list(BW* w, const u8* raster, int n, const u8* zz) {
     int last = 8;
     for (int j = 0; j < n; j++) {
@@ -84,73 +92,69 @@ u32 nvdec_h264_build_headers(const u8* ps, u8* out, u32 cap) {
     i32 qp26 = sext((b0 >> 16) & 63, 6), cqo = sext((b0 >> 22) & 31, 5), cqo2 = sext((b0 >> 27) & 31, 5);
     u32 wbi = b1 & 3, qpz = (bl >> 1) & 1;
     /* SPS, High profile so the PPS may use 8x8 transform / scaling lists */
-    memset(&w, 0, sizeof w);
-    w.p = rb;
-    w.cap = sizeof rb;
-    bw_u(&w, 100, 8);
-    bw_u(&w, 0, 8);
-    bw_u(&w, 51, 8);
-    bw_ue(&w, 0);
-    bw_ue(&w, cfi ? cfi : 1);
+    bw_init(&w, rb, sizeof rb);
+    bw_u(&w, 100, 8); /* profile_idc */
+    bw_u(&w, 0, 8); /* constraint_set flags */
+    bw_u(&w, 51, 8); /* level_idc */
+    bw_ue(&w, 0); /* seq_parameter_set_id */
+    bw_ue(&w, cfi ? cfi : 1); /* chroma_format_idc, 4:2:0 when the pic setup leaves it 0 */
     if (cfi == 3) bw_u(&w, 0, 1); /* separate_colour_plane_flag */
-    bw_ue(&w, 0);
-    bw_ue(&w, 0);
-    bw_u(&w, qpz, 1);
-    bw_u(&w, 0, 1);
-    bw_ue(&w, l2fn);
-    bw_ue(&w, poct);
+    bw_ue(&w, 0); /* bit_depth_luma_minus8 */
+    bw_ue(&w, 0); /* bit_depth_chroma_minus8 */
+    bw_u(&w, qpz, 1); /* qpprime_y_zero_transform_bypass_flag */
+    bw_u(&w, 0, 1); /* seq_scaling_matrix_present_flag: the PPS carries the lists */
+    bw_ue(&w, l2fn); /* log2_max_frame_num_minus4 */
+    bw_ue(&w, poct); /* pic_order_cnt_type */
     if (poct == 0)
-        bw_ue(&w, log2_poc);
+        bw_ue(&w, log2_poc); /* log2_max_pic_order_cnt_lsb_minus4 */
     else if (poct == 1) {
-        bw_u(&w, dpoc0, 1);
-        bw_se(&w, 0);
-        bw_se(&w, 0);
-        bw_ue(&w, 0);
+        bw_u(&w, dpoc0, 1); /* delta_pic_order_always_zero_flag */
+        bw_se(&w, 0); /* offset_for_non_ref_pic */
+        bw_se(&w, 0); /* offset_for_top_to_bottom_field */
+        bw_ue(&w, 0); /* num_ref_frames_in_pic_order_cnt_cycle */
     }
-    bw_ue(&w, 16);
-    bw_u(&w, 0, 1);
-    bw_ue(&w, wmb ? wmb - 1 : 0);
-    bw_ue(&w, fmo ? (hmb ? hmb - 1 : 0) : (hmb / 2 ? hmb / 2 - 1 : 0));
-    bw_u(&w, fmo, 1);
-    if (!fmo) bw_u(&w, mbaff, 1);
-    bw_u(&w, d8, 1);
-    bw_u(&w, 0, 1);
-    bw_u(&w, 0, 1);
+    bw_ue(&w, 16); /* max_num_ref_frames */
+    bw_u(&w, 0, 1); /* gaps_in_frame_num_value_allowed_flag */
+    bw_ue(&w, wmb ? wmb - 1 : 0); /* pic_width_in_mbs_minus1 */
+    bw_ue(&w, fmo ? (hmb ? hmb - 1 : 0) : (hmb / 2 ? hmb / 2 - 1 : 0)); /* pic_height_in_map_units_minus1 */
+    bw_u(&w, fmo, 1); /* frame_mbs_only_flag */
+    if (!fmo) bw_u(&w, mbaff, 1); /* mb_adaptive_frame_field_flag */
+    bw_u(&w, d8, 1); /* direct_8x8_inference_flag */
+    bw_u(&w, 0, 1); /* frame_cropping_flag */
+    bw_u(&w, 0, 1); /* vui_parameters_present_flag */
     bw_trailing(&w);
     u32 sn = nal_out(out + o, cap - o, 0x67, rb, w.bytes);
     if (!sn) return 0;
     o += sn;
     /* PPS, scaling matrices taken from the pic setup */
-    memset(&w, 0, sizeof w);
-    w.p = rb;
-    w.cap = sizeof rb;
-    bw_ue(&w, 0);
-    bw_ue(&w, 0);
-    bw_u(&w, ecm, 1);
-    bw_u(&w, pop, 1);
-    bw_ue(&w, 0);
-    bw_ue(&w, l0);
-    bw_ue(&w, l1);
-    bw_u(&w, wp, 1);
-    bw_u(&w, wbi, 2);
-    bw_se(&w, qp26);
-    bw_se(&w, 0);
-    bw_se(&w, cqo);
-    bw_u(&w, dfc, 1);
-    bw_u(&w, cip, 1);
-    bw_u(&w, rpc, 1);
-    bw_u(&w, t8, 1);
-    bw_u(&w, 1, 1);
+    bw_init(&w, rb, sizeof rb);
+    bw_ue(&w, 0); /* pic_parameter_set_id */
+    bw_ue(&w, 0); /* seq_parameter_set_id */
+    bw_u(&w, ecm, 1); /* entropy_coding_mode_flag */
+    bw_u(&w, pop, 1); /* bottom_field_pic_order_in_frame_present_flag */
+    bw_ue(&w, 0); /* num_slice_groups_minus1 */
+    bw_ue(&w, l0); /* num_ref_idx_l0_default_active_minus1 */
+    bw_ue(&w, l1); /* num_ref_idx_l1_default_active_minus1 */
+    bw_u(&w, wp, 1); /* weighted_pred_flag */
+    bw_u(&w, wbi, 2); /* weighted_bipred_idc */
+    bw_se(&w, qp26); /* pic_init_qp_minus26 */
+    bw_se(&w, 0); /* pic_init_qs_minus26 */
+    bw_se(&w, cqo); /* chroma_qp_index_offset */
+    bw_u(&w, dfc, 1); /* deblocking_filter_control_present_flag */
+    bw_u(&w, cip, 1); /* constrained_intra_pred_flag */
+    bw_u(&w, rpc, 1); /* redundant_pic_cnt_present_flag */
+    bw_u(&w, t8, 1); /* transform_8x8_mode_flag */
+    bw_u(&w, 1, 1); /* pic_scaling_matrix_present_flag */
     for (int i = 0; i < 6; i++) {
-        bw_u(&w, 1, 1);
+        bw_u(&w, 1, 1); /* present flag of the 4x4 list */
         scaling_list(&w, ps + 0x1C0 + i * 16, 16, zz4);
     }
     if (t8)
         for (int i = 0; i < 2; i++) {
-            bw_u(&w, 1, 1);
+            bw_u(&w, 1, 1); /* present flag of the 8x8 list */
             scaling_list(&w, ps + 0x220 + i * 64, 64, zz8);
         }
-    bw_se(&w, cqo2);
+    bw_se(&w, cqo2); /* second_chroma_qp_index_offset */
     bw_trailing(&w);
     u32 pn = nal_out(out + o, cap - o, 0x68, rb, w.bytes);
     if (!pn) return 0;

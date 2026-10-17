@@ -230,6 +230,11 @@ void nvdec_execute(NvdecCtx* d, const u32* r) {
             if (rec_n % 120 == 0) LOG("video: %u NVDEC jobs recorded to %s\n", rec_n, recdir);
         }
     }
+    {
+        static u32 njobs;
+        njobs++;
+        if (njobs % 120 == 0) LOG("video: %u NVDEC jobs so far, %u pictures decoded\n", njobs, g_vframes);
+    }
     if (app == 9) {
         nvdec_vp9_job(d, r);
         return;
@@ -261,6 +266,7 @@ void nvdec_execute(NvdecCtx* d, const u32* r) {
         fail_job(d, r, mbs);
         return;
     }
+    /* the rebuilt SPS and PPS ride along only when they change: the decoder keeps the last ones */
     u32 prefix = (hn != d->last_hdr_n || memcmp(hdr, d->last_hdr, hn)) ? hn : 0;
     int err = nvdec_h264_packet(d->pkt, hdr, prefix, bs, slen);
     if (err >= 0) err = submit_packet(d);
@@ -300,11 +306,6 @@ void nvdec_execute(NvdecCtx* d, const u32* r) {
         fail_job(d, r, mbs);
     else
         put_status(r, mbs, 0);
-    {
-        static u32 njobs;
-        njobs++;
-        if (njobs % 120 == 0) LOG("video: %u NVDEC jobs so far, %u pictures decoded\n", njobs, g_vframes);
-    }
     {
         static int said;
         if (said < 3 || (err < 0 && said < 8)) {
