@@ -48,7 +48,7 @@
     },
     {
       "name": "ios",
-      "displayName": "iOS, cross-built on a Mac with Xcode (docs/APPLE.md); LLVM_DIR names scripts/ios-llvm.sh's",
+      "displayName": "iOS, cross-built on a Mac with Xcode (docs/APPLE.md); LLVM_DIR names scripts/apple-llvm.sh's",
       "inherits": "base",
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
       "cacheVariables": {

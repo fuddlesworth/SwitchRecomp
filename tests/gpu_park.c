@@ -112,12 +112,18 @@ void pm_unlock(PMutex* m) { pthread_mutex_unlock(&m->l); }
 void pc_init(PCond* c) {
     pthread_condattr_t a;
     pthread_condattr_init(&a);
+#ifndef __APPLE__ /* Darwin has no clock to choose: pc_wait waits a relative time there, as plat_posix.c's does */
     pthread_condattr_setclock(&a, CLOCK_MONOTONIC);
+#endif
     pthread_cond_init(&c->c, &a);
 }
 void pc_broadcast(PCond* c) { pthread_cond_broadcast(&c->c); }
 int pc_wait(PCond* c, PMutex* m, i64 ns) {
     if (ns < 0) return pthread_cond_wait(&c->c, &m->l), 0;
+#ifdef __APPLE__
+    struct timespec rel = {(time_t)(ns / 1000000000), (long)(ns % 1000000000)};
+    return pthread_cond_timedwait_relative_np(&c->c, &m->l, &rel) != 0;
+#endif
     u64 t = plat_ns() + (u64)ns;
     struct timespec ts = {(time_t)(t / 1000000000ull), (long)(t % 1000000000ull)};
     return pthread_cond_timedwait(&c->c, &m->l, &ts) != 0;

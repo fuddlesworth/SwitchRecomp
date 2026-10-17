@@ -640,7 +640,7 @@ jobs:
   macos:
     name: macOS (arm64)
     runs-on: macos-26
-    timeout-minutes: 90
+    timeout-minutes: 150
     continue-on-error: true
     env:
       MOLTENVK_RELEASE: v1.4.1-ryujinx
@@ -658,10 +658,28 @@ jobs:
         with:
           path: .cache/cpm
           key: cpm-${{ github.job }}-${{ hashFiles('cmake/dependencies.cmake') }}
-      # llvm: llvm-config and LLVM-C for the recompiler, keg-only (named below). Xcode's Clang builds everything, as a
-      # user's Mac does
+      # LLVM's libraries for the Mac (scripts/apple-llvm.sh) with AArch64's code generator alone, the one the recompiler
+      # uses, built once per script and Xcode as the iOS job's. Saved as soon as they are built: actions/cache saves
+      # only a job that succeeds, and a later step's failure would build them again next run. Xcode's Clang builds
+      # everything, as a user's Mac does
+      - name: Name the Xcode
+        id: xcode
+        run: echo "version=$(xcodebuild -version | tr '\n' ' ' | tr -s ' ' '-')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v5
+        id: llvm
+        with:
+          path: apple-llvm
+          key: macos-llvm-${{ hashFiles('scripts/apple-llvm.sh') }}-${{ steps.xcode.outputs.version }}
       - name: Install tools
-        run: brew install llvm ninja ccache
+        run: brew install ninja ccache
+      - name: Build LLVM's libraries
+        if: steps.llvm.outputs.cache-hit != 'true'
+        run: scripts/apple-llvm.sh macos "$PWD/apple-llvm"
+      - if: steps.llvm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: apple-llvm
+          key: ${{ steps.llvm.outputs.cache-primary-key }}
       # ccache and the dependency builds, set up as in the linux job
       - uses: actions/cache/restore@v5
         with:
@@ -685,7 +703,7 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Build the runtime
         run: |
-          cmake --preset macos -DSNX_LLVM_CONFIG="$(brew --prefix llvm)/bin/llvm-config" \
+          cmake --preset macos -DLLVM_DIR="$PWD/apple-llvm/lib/cmake/llvm" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build --preset macos
           cmake --install build/macos --prefix stage
@@ -752,20 +770,26 @@ jobs:
         with:
           path: .cache/cpm
           key: cpm-${{ github.job }}-${{ hashFiles('cmake/dependencies.cmake') }}
-      # LLVM's libraries for iOS (scripts/ios-llvm.sh), built once per script and Xcode, as Android's per NDK
+      # LLVM's libraries for iOS (scripts/apple-llvm.sh) with AArch64's code generator alone, built once per script and
+      # Xcode as Android's per NDK, and saved as soon as they are built (see the macos job)
       - name: Name the Xcode
         id: xcode
         run: echo "version=$(xcodebuild -version | tr '\n' ' ' | tr -s ' ' '-')" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v5
+      - uses: actions/cache/restore@v5
         id: llvm
         with:
           path: ios-llvm
-          key: ios-llvm-${{ hashFiles('scripts/ios-llvm.sh') }}-${{ steps.xcode.outputs.version }}
+          key: ios-llvm-${{ hashFiles('scripts/apple-llvm.sh') }}-${{ steps.xcode.outputs.version }}
       - name: Install tools
         run: brew install ninja ccache
       - name: Build LLVM's libraries
         if: steps.llvm.outputs.cache-hit != 'true'
-        run: scripts/ios-llvm.sh "$PWD/ios-llvm"
+        run: scripts/apple-llvm.sh ios "$PWD/ios-llvm"
+      - if: steps.llvm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ios-llvm
+          key: ${{ steps.llvm.outputs.cache-primary-key }}
       # ccache and the dependency builds, set up as in the linux job
       - uses: actions/cache/restore@v5
         with:

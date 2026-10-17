@@ -62,29 +62,36 @@ framework.
 
 ## Building
 
-macOS, with Homebrew's LLVM for the recompiler's libraries:
+LLVM's libraries first, once for each system, with AArch64's code generator alone, the one the recompiler uses
+(about 10 minutes on an M1). `scripts/apple-llvm.sh` builds them, and the CI caches them:
 
 ```sh
-brew install llvm ninja
-cmake --preset macos -DSNX_LLVM_CONFIG="$(brew --prefix llvm)/bin/llvm-config"
+scripts/apple-llvm.sh macos ~/apple-llvm/macos
+scripts/apple-llvm.sh ios ~/apple-llvm/ios
+```
+
+macOS, then the app:
+
+```sh
+cmake --preset macos -DLLVM_DIR=$HOME/apple-llvm/macos/lib/cmake/llvm
 cmake --build --preset macos
 cmake --install build/macos --prefix stage
 scripts/apple-app.sh macos stage out moltenvk   # out/ScarletNX.app
 ```
 
 `moltenvk` is the release's `MoltenVK-macos.tar`, extracted (`MoltenVK-ios.tar` for iOS). The CI pins the release and
-its SHA-256 (`.github/workflows/build.yml`).
+its SHA-256 (`.github/workflows/build.yml`). Homebrew's LLVM works too, with every code generator:
+`-DSNX_LLVM_CONFIG="$(brew --prefix llvm)/bin/llvm-config"` in place of `LLVM_DIR`.
 
-iOS: LLVM's libraries once (about 10 minutes on an M1), then the app, then the IPA:
+iOS, then the IPA:
 
 ```sh
-scripts/ios-llvm.sh ~/ios-llvm
-cmake --preset ios -DLLVM_DIR=$HOME/ios-llvm/lib/cmake/llvm
+cmake --preset ios -DLLVM_DIR=$HOME/apple-llvm/ios/lib/cmake/llvm
 cmake --build --preset ios
 cmake --install build/ios --prefix stage
 scripts/apple-app.sh ios stage out moltenvk     # out/ScarletNX.ipa
 ```
 
-`IOS_VERSION` (default 16.0) is the oldest iOS `ios-llvm.sh` builds for, as the preset's
-`CMAKE_OSX_DEPLOYMENT_TARGET` is the app's. FFmpeg, OpenSSL and the recompiler's runtime library are built outside
+`MACOS_VERSION` (default 13.0) and `IOS_VERSION` (default 16.0) are the oldest systems `apple-llvm.sh` builds for,
+as the presets' `CMAKE_OSX_DEPLOYMENT_TARGET` are the apps'. FFmpeg, OpenSSL and the recompiler's runtime library are built outside
 CMake's compiles and get the SDK, architecture and oldest version from `cmake/apple.cmake`.
