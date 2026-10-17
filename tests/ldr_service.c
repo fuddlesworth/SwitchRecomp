@@ -208,9 +208,24 @@ static void execute(u64 base) {
     CHECK(cpu.x[0] == 42 && cpu.pc == 0x1234);
 }
 #endif
+/* the two loads and the main thread start together, at a gate the three wait at once: a barrier, which Darwin's
+   pthreads don't have */
+typedef struct {
+    pthread_mutex_t lock;
+    pthread_cond_t open;
+    int waiting;
+} Gate;
+static void gate_wait(Gate* g) {
+    pthread_mutex_lock(&g->lock);
+    if (++g->waiting == 3)
+        pthread_cond_broadcast(&g->open);
+    else
+        while (g->waiting < 3) pthread_cond_wait(&g->open, &g->lock);
+    pthread_mutex_unlock(&g->lock);
+}
 typedef struct {
     SvcObj* service;
-    pthread_barrier_t* barrier;
+    Gate* gate;
     u64 source, bss, base;
     int result;
 } LoadRace;
@@ -218,7 +233,7 @@ static void* race_load(void* arg) {
     LoadRace* r = arg;
     u64 args[] = {0, r->source, 0x3000, r->bss, 0x1000};
     IpcCtx c = {.cmd = 0, .raw = (const u8*)args, .raw_size = sizeof args, .has_pid = 1, .pid = K_PROCESS_ID};
-    pthread_barrier_wait(r->barrier);
+    gate_wait(r->gate);
     r->result = r->service->dispatch(r->service, &c);
     if (!r->result) memcpy(&r->base, c.out, 8);
     return NULL;
@@ -230,16 +245,15 @@ static void concurrency(void) {
     request(2, NRR, 0x1000, 0, 0);
     CHECK(!call(o));
     for (int repeat = 0; repeat < 8; repeat++) {
-        pthread_barrier_t barrier;
-        CHECK(!pthread_barrier_init(&barrier, NULL, 3));
-        LoadRace a = {o, &barrier, SRC, BSS, 0, 0}, b = {o, &barrier, SRC2, SRC2 + 0x3000, 0, 0};
+        Gate gate = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0};
+        LoadRace a = {o, &gate, SRC, BSS, 0, 0}, b = {o, &gate, SRC2, SRC2 + 0x3000, 0, 0};
         pthread_t first, second;
         CHECK(!pthread_create(&first, NULL, race_load, &a));
         CHECK(!pthread_create(&second, NULL, race_load, &b));
-        pthread_barrier_wait(&barrier);
+        gate_wait(&gate);
         CHECK(!pthread_join(first, NULL));
         CHECK(!pthread_join(second, NULL));
-        CHECK(!pthread_barrier_destroy(&barrier));
+        CHECK(!pthread_cond_destroy(&gate.open) && !pthread_mutex_destroy(&gate.lock));
         CHECK((!a.result && b.result == RO(3)) || (!b.result && a.result == RO(3)));
         request(1, a.base ? a.base : b.base, 0, 0, 0);
         CHECK(!call(o));
