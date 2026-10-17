@@ -145,6 +145,11 @@ if(BUILD_TESTING)
     add_executable(snx-test-gui-sdl "${PROJECT_SOURCE_DIR}/tests/gui_sdl.c")
     target_link_libraries(snx-test-gui-sdl PRIVATE snx_gui_support scarletnx-common SDL3::SDL3 snx_window_icon
                           snx_build_info snx_pad_sdl snx_splash)
+    if(APPLE) # it compiles main.c itself, which calls the frontend (apple.m and its Swift), as scarletnx-gui links it
+        target_sources(snx-test-gui-sdl PRIVATE apple.m)
+        target_link_libraries(snx-test-gui-sdl PRIVATE snx_apple_frontend "-framework Foundation")
+        set_target_properties(snx-test-gui-sdl PROPERTIES LINKER_LANGUAGE CXX)
+    endif()
     add_test(NAME gui_sdl_events COMMAND snx-test-gui-sdl)
     # no file picker of the desktop's: the portal would open one on the screen, DBus being there without a display
     set_tests_properties(gui_sdl_events PROPERTIES TIMEOUT 30
