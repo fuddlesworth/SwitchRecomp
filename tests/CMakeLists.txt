@@ -739,9 +739,20 @@ snx_test_target(snx_codegen_test 90)
 target_link_libraries(snx_codegen_test PRIVATE snx_driver)
 add_test(NAME native_codegen COMMAND snx_codegen_test "${CMAKE_C_COMPILER}" "${PROJECT_SOURCE_DIR}")
 
+# A64 cases ported from rEden's dynarmic tests, on the AOT and interpreter paths (a64_ported_cases.h)
+add_executable(snx-test-a64-ported a64_ported.c)
+snx_test_target(snx-test-a64-ported 11)
+target_link_libraries(snx-test-a64-ported PRIVATE snx_driver)
+add_test(NAME a64_ported_cases COMMAND snx-test-a64-ported "${CMAKE_C_COMPILER}" "${PROJECT_SOURCE_DIR}")
+
 add_executable(snx-test-astc astc_decode.c "${PROJECT_SOURCE_DIR}/src/nx/gpu/texture/astc.c")
 snx_test_target(snx-test-astc 23)
 add_test(NAME astc_decode COMMAND snx-test-astc)
+
+# single blocks from rEden's ASTC decoder tests, against edenprobe's and astcenc's texels (astc_blocks.c)
+add_executable(snx-test-astc-blocks astc_blocks.c "${PROJECT_SOURCE_DIR}/src/nx/gpu/texture/astc.c")
+snx_test_target(snx-test-astc-blocks 23)
+add_test(NAME astc_blocks COMMAND snx-test-astc-blocks)
 
 add_executable(snx-test-audio-out audio_out.c)
 snx_test_target(snx-test-audio-out 11)
@@ -810,6 +821,10 @@ if(UNIX)
         add_test(NAME kernel_cores COMMAND snx-test-kernel-cores)
 endif()
 
+# EAC worked examples and edenprobe's blocks from rEden's decode_eac test (eac_blocks.c)
+add_executable(snx-test-eac-blocks eac_blocks.c "${PROJECT_SOURCE_DIR}/src/nx/gpu/texture/etc2.c")
+snx_test_target(snx-test-eac-blocks 23)
+add_test(NAME eac_blocks COMMAND snx-test-eac-blocks)
 
 if(UNIX)
     add_executable(snx-test-memory memory_accounting.c
