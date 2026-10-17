@@ -5,7 +5,7 @@
    Logic ported from Eden (GPL-3.0-or-later, originally yuzu GPL-2.0-or-later)
    src/video_core/host1x/codecs/vp9.cpp. */
 #include "nx/gpu/video/vp9_head.h"
-#include <stdlib.h>
+#include "nx/gpu/video/vp9_head_coef.h" /* the coef default table: large, generated from Eden */
 #include <string.h>
 
 /* Vp9 entropy based off Eden's Vp9EntropyProbs */
@@ -16,8 +16,6 @@ static const u8 def_partition[64] = {
     83,  0,   82,  99, 50,  0,  53,  39, 39,  0,   177, 58, 59,  0,   68,  26, 63,  0,  52, 79, 25, 0,
     17,  14,  12,  0,  222, 34, 30,  0,  72,  16,  44,  0,  58,  32,  12,  0,  10,  7,  6,  0,
 };
-/* coef default table is large: generated from Eden, see vp9_head_coef.h */
-#include "nx/gpu/video/vp9_head_coef.h"
 static const u8 def_switchable[8] = {235, 162, 36, 255, 34, 3, 149, 144};
 static const u8 def_inter_mode[28] = {2,  173, 34, 0,  7,  145, 85, 0,  7,  166, 63, 0,  7,  94,
                                       66, 0,   8,  64, 46, 0,   17, 81, 31, 0,   25, 29, 30, 0};
@@ -85,8 +83,8 @@ static void bitw_init(BitW* w, u8* out, u32 cap) {
 }
 static void bitw_bits(BitW* w, u32 v, int n) {
     while (n > 0) {
-        int free = 8 - w->nbits;
-        int take = n < free ? n : free;
+        int room = 8 - w->nbits;
+        int take = n < room ? n : room;
         int shift = n - take;
         w->buf = (w->buf << take) | ((v >> shift) & ((1u << take) - 1));
         w->nbits += take;
@@ -122,44 +120,15 @@ static void range_init(RangeE* e, u8* out, u32 cap) {
     e->range = 0x80;
     e->count = -24;
 }
-static u8 range_peek(RangeE* e) {
-    if (!e->len) return 0;
-    return e->out[e->len - 1];
-}
 static void range_put(RangeE* e, u8 b) {
     if (e->len < e->cap) e->out[e->len++] = b;
 }
-static int vp9_clz32(u32 x) {
-    if (!x) return 32;
-    int n = 0;
-    if (!(x & 0xFFFF0000u)) {
-        n += 16;
-        x <<= 16;
-    }
-    if (!(x & 0xFF000000u)) {
-        n += 8;
-        x <<= 8;
-    }
-    if (!(x & 0xF0000000u)) {
-        n += 4;
-        x <<= 4;
-    }
-    if (!(x & 0xC0000000u)) {
-        n += 2;
-        x <<= 2;
-    }
-    if (!(x & 0x80000000u)) n += 1;
-    return n;
-}
 static void range_write(RangeE* e, int bit, int prob) {
-    u32 rng = e->range;
-    u32 split = 1 + (((rng - 1) * (u32)prob) >> 8);
-    rng = split;
-    if (bit) {
-        e->low += split;
-        rng = e->range - split;
-    }
-    int shift = (rng == 0) ? 0 : (vp9_clz32(rng) - 24);
+    u32 range = e->range;
+    u32 split = 1 + (((range - 1) * (u32)prob) >> 8);
+    u32 rng = bit ? range - split : split;
+    if (bit) e->low += split;
+    int shift = rng ? (int)__builtin_clz(rng) - 24 : 0; /* __builtin_clz(0) is undefined: rng 0 shifts nothing */
     rng <<= shift;
     e->count += shift;
     if (e->count >= 0) {
@@ -172,8 +141,6 @@ static void range_write(RangeE* e, int bit, int prob) {
                 pos--;
             }
             if (pos >= 0) e->out[pos]++;
-            /* reposition: Eden seeks, we append so just continue */
-            (void)range_peek;
         }
         range_put(e, (u8)(e->low >> (24 - off)));
         e->low <<= off;
@@ -215,34 +182,31 @@ static int remap_prob(int np, int op) {
 static void write_prob_upd(RangeE* e, u8 np, u8 op) {
     int upd = np != op;
     range_write(e, upd, 252);
-    if (upd) {
-        int d = remap_prob(np, op);
-        /* EncodeTermSubExp */
-        if (!upd) return;
-        int v = d;
-        int lt16 = v < 16;
-        range_write_eq(e, !lt16);
-        if (lt16) {
-            range_write_bits(e, v, 4);
-        } else {
-            int lt32 = v < 32;
-            range_write_eq(e, !lt32);
-            if (lt32)
-                range_write_bits(e, v - 16, 4);
+    if (!upd) return;
+    /* EncodeTermSubExp */
+    int v = remap_prob(np, op);
+    int lt16 = v < 16;
+    range_write_eq(e, !lt16);
+    if (lt16) {
+        range_write_bits(e, v, 4);
+    } else {
+        int lt32 = v < 32;
+        range_write_eq(e, !lt32);
+        if (lt32)
+            range_write_bits(e, v - 16, 4);
+        else {
+            int lt64 = v < 64;
+            range_write_eq(e, !lt64);
+            if (lt64)
+                range_write_bits(e, v - 32, 5);
             else {
-                int lt64 = v < 64;
-                range_write_eq(e, !lt64);
-                if (lt64)
-                    range_write_bits(e, v - 32, 5);
+                v -= 64;
+                int size = 8, mask = (1 << size) - 191, delta = v - mask;
+                if (delta < 0)
+                    range_write_bits(e, v, size - 1);
                 else {
-                    v -= 64;
-                    int size = 8, mask = (1 << size) - 191, delta = v - mask;
-                    if (delta < 0)
-                        range_write_bits(e, v, size - 1);
-                    else {
-                        range_write_bits(e, delta / 2 + mask, size - 1);
-                        range_write_eq(e, delta & 1);
-                    }
+                    range_write_bits(e, delta / 2 + mask, size - 1);
+                    range_write_eq(e, delta & 1);
                 }
             }
         }
@@ -401,36 +365,28 @@ u32 vp9_compose_frame(Vp9HeadCtx* c, const u8* pic, const u8* entropy_g, const u
     int is_key = (flags & 1) != 0, err_res = (flags & 8) != 0, intra_only_pic = (flags & 32) != 0;
     int width = (int)(int16_t)rd16(pic, 0x60), height = (int)(int16_t)rd16(pic, 0x62);
     if (width <= 0 || height <= 0 || width > 4096 || height > 4096) return 0;
-    int is_key_frame = is_key;
     /* a picture's visibility only appears in the next job's setup (bit 4 = last picture was shown):
        0 means the pending one was a hidden alt-ref and its header must say show_frame = 0 */
-    int show_frame = has_next ? last_shown : 1, intra_only = is_key_frame;
-    if (is_key_frame) {
-        c->prev = c->ctxs[0];
-        /* reset to defaults */
+    int show_frame = has_next ? last_shown : 1, intra_only = is_key; /* a keyframe is intra-only */
+    if (is_key) {
+        /* a keyframe's probability updates are coded from the defaults, where a decoder resets its
+           context: seed the context slot with them. vp9_head_reset would also clear last_seg, which
+           write_segmentation compares the picture against, so only the slot is taken from it */
         Vp9HeadCtx tmp;
         vp9_head_reset(&tmp);
-        c->prev = tmp.prev;
-        for (int i = 0; i < 4; i++) c->ctxs[i] = tmp.ctxs[i];
-        /* the decoder resets loop filter deltas to the VP9 defaults at a keyframe (6.2.9) */
+        c->ctxs[0] = tmp.prev;
+        c->swap_ref = 0;
+    } else {
+        /* hidden pictures carry the setup's intra_only flag; shown pictures never do */
+        intra_only = show_frame ? 0 : intra_only_pic;
+    }
+    /* loop filter deltas return to the VP9 defaults at a keyframe and at an intra-only frame (6.2.9) */
+    if (intra_only) {
         c->loop_ref[0] = 1;
         c->loop_ref[1] = 0;
         c->loop_ref[2] = -1;
         c->loop_ref[3] = -1;
         memset(c->loop_mode, 0, sizeof c->loop_mode);
-        c->swap_ref = 0;
-        intra_only = 1;
-    } else {
-        /* hidden pictures carry the setup's intra_only flag; shown pictures never do */
-        intra_only = show_frame ? 0 : intra_only_pic;
-        if (intra_only) {
-            /* an intra-only frame resets loop filter deltas to the defaults too (6.2.9) */
-            c->loop_ref[0] = 1;
-            c->loop_ref[1] = 0;
-            c->loop_ref[2] = -1;
-            c->loop_ref[3] = -1;
-            memset(c->loop_mode, 0, sizeof c->loop_mode);
-        }
     }
     int lossless = pic[0x76] != 0, tx_mode = pic[0x77], allow_hp = pic[0x78] != 0;
     int interp = pic[0x79], ref_mode = pic[0x7A];
@@ -446,26 +402,24 @@ u32 vp9_compose_frame(Vp9HeadCtx* c, const u8* pic, const u8* entropy_g, const u
     bitw_bits(&w, 2, 2);
     bitw_bits(&w, 0, 2);
     bitw_bit(&w, 0);
-    bitw_bit(&w, !is_key_frame);
+    bitw_bit(&w, !is_key);
     bitw_bit(&w, show_frame);
     bitw_bit(&w, err_res);
-    if (is_key_frame) {
+    if (is_key) {
         bitw_bits(&w, 0x498342, 24);
         bitw_bits(&w, 0, 3);
         bitw_bit(&w, 0);
         bitw_bits(&w, width - 1, 16);
         bitw_bits(&w, height - 1, 16);
         bitw_bit(&w, 0);
-        intra_only = 1;
     } else {
         if (!show_frame) bitw_bit(&w, intra_only);
         if (!err_res) bitw_bits(&w, 0, 2);
         /* refresh from surfaces as the hardware does: current's slot 3 feeds next's refs */
-        u32 refresh;
         int ref_idx[3] = {0, 1, 2};
         u64 nxt[4];
         for (int i = 0; i < 4; i++) nxt[i] = has_next ? next_off[i] : curr_off[i];
-        refresh = 0;
+        u32 refresh = 0;
         for (int i = 0; i < 3; i++)
             if (curr_off[3] == nxt[i]) refresh |= 1u << i;
         int ref_diff = curr_off[1] != curr_off[2];
@@ -568,7 +522,7 @@ u32 vp9_compose_frame(Vp9HeadCtx* c, const u8* pic, const u8* entropy_g, const u
     u8 chdr[8192];
     RangeE e;
     range_init(&e, chdr, sizeof chdr);
-    int upd_probs = !is_key_frame && show_frame;
+    int upd_probs = !is_key && show_frame;
     Vp9Ent prev = c->prev;
     if (!lossless) {
         if (tx_mode >= 3) {
@@ -662,10 +616,8 @@ u32 vp9_compose_frame(Vp9HeadCtx* c, const u8* pic, const u8* entropy_g, const u
     range_end(&e);
     if (upd_probs) c->prev = prev;
 
-    /* uncompressed header size goes after compressed header in Eden's order: write size then flush */
-    /* Eden: uncomp_writer.WriteU(compressed_size,16) then flush */
+    /* the compressed header's size is the last 16 bits of the uncompressed header (Eden's order) */
     u32 chdr_len = e.len;
-    /* append size to bit writer */
     bitw_bits(&w, chdr_len, 16);
     bitw_flush(&w);
     u32 uhdr_len = w.len;

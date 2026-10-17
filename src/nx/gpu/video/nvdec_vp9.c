@@ -6,17 +6,24 @@
    then decoded. Inter frames wait one job so refresh flags come from the next job's surfaces and its
    "last frame shown" flag proves visibility, as the hardware sees it */
 #include "nx/gpu/video/nvdec_int.h"
-#include <errno.h>
 #include <libavutil/error.h>
 
-/* the decoded frame goes to the surface this job names; 0 when composed and decoded, an FFmpeg error otherwise */
-static int vp9_decode_one(NvdecCtx* d, const u8* ps, const u8* prob, const u8* bs, u32 slen, const u64 coff[4],
-                          const u64 noff[4], int has_next, int last_shown, u64 luma, u64 chroma, u32 py, u32 pc, u32 w,
-                          u32 h, u32* mbs_out) {
+/* let the held job go: the channel no longer waits on it */
+void nvdec_vp9_pend_drop(NvdecCtx* d) {
+    free(d->pend.bs);
+    d->pend.bs = NULL;
+    d->pend_have = 0;
+}
+
+/* decode one job into the surface it names: next is the next job's surfaces, read when there is one,
+   and last_shown is bit 4 of the next job's setup. 0, or an FFmpeg error; mbs_out, when given, gets
+   the decoded frame's macroblock count */
+static int vp9_decode_one(NvdecCtx* d, const Vp9Job* j, const u64 next[4], int has_next, int last_shown, u32* mbs_out) {
     /* the composed packet is the frame body plus rebuilt headers: it can grow the body by a lot */
-    int err = av_new_packet(d->pkt, (int)(slen + 16384));
+    int err = av_new_packet(d->pkt, (int)(j->len + 16384));
     if (err < 0) return err;
-    u32 o = vp9_compose_frame(&d->vp9, ps, prob, bs, slen, d->pkt->data, (u32)d->pkt->size, coff, noff, has_next, last_shown);
+    u32 o = vp9_compose_frame(&d->vp9, j->ps, j->prob, j->bs, j->len, d->pkt->data, (u32)d->pkt->size, j->off, next,
+                              has_next, last_shown);
     if (!o) {
         av_packet_unref(d->pkt);
         return AVERROR_INVALIDDATA;
@@ -42,8 +49,8 @@ static int vp9_decode_one(NvdecCtx* d, const u8* ps, const u8* prob, const u8* b
     else if (d->cur_new && d->cur->buf[0])
         show = d->cur; /* nothing good yet: partial is better than green */
     if (show) {
-        PicOut pt = {luma, chroma, py, pc, 1, w, h};
-        if (luma && chroma) write_pic(show, &pt);
+        PicOut pt = {j->luma, j->chroma, j->pitch_y, j->pitch_c, 1, j->w, j->h};
+        if (j->luma && j->chroma) write_pic(show, &pt);
         if (show == d->vp9_prev) err = 0; /* concealed: report success */
     }
     return err;
@@ -94,19 +101,25 @@ void nvdec_vp9_job(NvdecCtx* d, const u32* r) {
     u32 w = wmb * 16, h = hmb * 16;
     int is_key = (rd32(ps, 0x68) & 1) != 0;
     int last_shown = (rd32(ps, 0x68) & 0x10) != 0; /* bit 4: the previous job's picture was shown */
+
+    /* the job's pieces in one place, the tile data still the guest's */
+    Vp9Job j = {.bs = bs, .len = slen, .luma = luma, .chroma = chroma,
+                .pitch_y = py, .pitch_c = pc, .w = w, .h = h};
+    memcpy(j.ps, ps, sizeof j.ps);
+    memcpy(j.prob, prob, sizeof j.prob);
+    memcpy(j.off, coff, sizeof j.off);
+
+    /* the held job's turn: this job's surfaces say what it refreshed, and this job's bit 4 says
+       whether the hardware showed it */
+    if (d->pend_have) {
+        vp9_decode_one(d, &d->pend, coff, 1, last_shown, NULL);
+        nvdec_vp9_pend_drop(d);
+    }
     if (is_key) {
-        /* flush pending first so its refs see this job's surfaces */
-        if (d->pend_have) {
-            u32 pmbs = d->pend_mbs;
-            vp9_decode_one(d, d->pend_ps, d->pend_prob, d->pend_bs, d->pend_len, d->pend_off, coff, 1, last_shown,
-                           d->pend_luma, d->pend_chroma, d->pend_py, d->pend_pc, d->pend_w, d->pend_h, &pmbs);
-            free(d->pend_bs);
-            d->pend_bs = NULL;
-            d->pend_have = 0;
-        }
-        u32 m2 = mbs;
-        int err = vp9_decode_one(d, ps, prob, bs, slen, coff, NULL, 0, 1, luma, chroma, py, pc, w, h, &m2);
-        put_status(r, m2, err < 0);
+        /* a keyframe decodes on arrival and is its own reference */
+        u32 m = mbs;
+        int err = vp9_decode_one(d, &j, j.off, 0, 1, &m);
+        put_status(r, m, err < 0);
         {
             static int said;
             if (said < 3 || (err < 0 && said < 8)) {
@@ -118,34 +131,15 @@ void nvdec_vp9_job(NvdecCtx* d, const u32* r) {
         }
         return;
     }
-    /* inter frame: decode the pending one against this job, then hold this job */
-    if (d->pend_have) {
-        u32 pmbs = d->pend_mbs;
-        vp9_decode_one(d, d->pend_ps, d->pend_prob, d->pend_bs, d->pend_len, d->pend_off, coff, 1, last_shown,
-                       d->pend_luma, d->pend_chroma, d->pend_py, d->pend_pc, d->pend_w, d->pend_h, &pmbs);
-        free(d->pend_bs);
-        d->pend_bs = NULL;
-        d->pend_have = 0;
-    }
+    /* hold the job: only the next job's surfaces can say what it refreshed, and whether it was shown */
     u8* pb = malloc(slen ? slen : 1);
     if (!pb) {
         put_status(r, mbs, 1);
         return;
     }
-    memcpy(d->pend_ps, ps, 0x100);
-    memcpy(d->pend_prob, prob, 0xEA0);
     if (slen) memcpy(pb, bs, slen);
-    free(d->pend_bs);
-    d->pend_bs = pb;
-    d->pend_len = slen;
-    for (int i = 0; i < 4; i++) d->pend_off[i] = coff[i];
-    d->pend_luma = luma;
-    d->pend_chroma = chroma;
-    d->pend_py = py;
-    d->pend_pc = pc;
-    d->pend_w = w;
-    d->pend_h = h;
-    d->pend_mbs = mbs;
+    j.bs = pb;
+    d->pend = j;
     d->pend_have = 1;
     put_status(r, mbs, 0);
 }

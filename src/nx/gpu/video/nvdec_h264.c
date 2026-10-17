@@ -5,7 +5,6 @@
 /* NVDEC H.264 frontend: the game passes no SPS or PPS, they are rebuilt here from the picture
    setup struct (nvdec_h264_pic_s, its iova in register 0x404) */
 #include "nx/gpu/video/nvdec_int.h"
-/* ------------------------------------------------------------ H.264: SPS/PPS rebuilt from nvdec_h264_pic_s */
 typedef struct {
     u8* p;
     u32 cap, bytes;

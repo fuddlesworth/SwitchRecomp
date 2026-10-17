@@ -18,7 +18,7 @@ void nvdec_free(NvdecCtx* d) {
     av_frame_free(&d->frame);
     av_frame_free(&d->cur);
     av_frame_free(&d->vp9_prev);
-    free(d->pend_bs);
+    nvdec_vp9_pend_drop(d);
     free(d);
 }
 /* FFmpeg's messages go to the game log at warning level and above, a limited number: by default they go to stderr
@@ -68,9 +68,7 @@ static int dec_open(NvdecCtx* d, u32 app) {
     av_frame_free(&d->cur);
     if (d->vp9_prev) av_frame_unref(d->vp9_prev);
     vp9_head_reset(&d->vp9);
-    free(d->pend_bs);
-    d->pend_bs = NULL;
-    d->pend_have = 0;
+    nvdec_vp9_pend_drop(d);
     d->last_hdr_n = 0;
     ffmpeg_log_init();
     const AVCodec* codec = avcodec_find_decoder(app == 3 ? AV_CODEC_ID_H264 : AV_CODEC_ID_VP9);

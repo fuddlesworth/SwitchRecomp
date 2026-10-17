@@ -21,6 +21,18 @@ typedef struct {
     u32 bh;               /* GOBs per block, log2 */
     u32 w, h;             /* the picture in pixels */
 } PicOut;
+/* a VP9 job's decode inputs, kept whole while it waits a job: a picture's refresh flags and its visibility
+   only appear in the next job's surfaces, so the pieces the guest owns are copied in. bs is the channel's
+   own copy while held, the guest's for a job decoded on arrival */
+typedef struct {
+    u8 ps[0x100];
+    u8 prob[0xEA0];
+    u8* bs;
+    u32 len;
+    u64 off[4];       /* Last, Golden, AltRef, Current luma iovas */
+    u64 luma, chroma; /* the output surface */
+    u32 pitch_y, pitch_c, w, h;
+} Vp9Job;
 struct NvdecCtx {
     u32 app; /* the codec the decoder was opened for (SET_APPLICATION_ID): 3 H.264, 9 VP9 */
     AVCodecContext* dec;
@@ -33,14 +45,7 @@ struct NvdecCtx {
     u32 last_hdr_n;
     Vp9HeadCtx vp9;    /* per-channel VP9 header state */
     AVFrame* vp9_prev; /* last good VP9 picture, shown again when a job fails */
-    /* VP9 1-frame delay for correct refresh flags: the pending job waits for the next job's surfaces */
-    u8 pend_ps[0x100];
-    u8 pend_prob[0xEA0];
-    u8* pend_bs;
-    u32 pend_len;
-    u64 pend_off[4];
-    u64 pend_luma, pend_chroma;
-    u32 pend_py, pend_pc, pend_w, pend_h, pend_mbs;
+    Vp9Job pend;       /* the held job, waiting for the next job's surfaces */
     int pend_have;
     int fail; /* the decoder could not be opened */
 };
@@ -61,6 +66,8 @@ void put_status(const u32* r, u32 mbs, int failed);
 int submit_packet(struct NvdecCtx* d);
 /* one VP9 job: gather, compose, decode, write, status (nvdec_vp9.c) */
 void nvdec_vp9_job(struct NvdecCtx* d, const u32* r);
+/* let go of the held VP9 job and its copies (nvdec_vp9.c) */
+void nvdec_vp9_pend_drop(struct NvdecCtx* d);
 
 /* ------------------------------------------------------------ VP9 frontend (nvdec_vp9.c) */
 /* surface luma iovas for Last, Golden, AltRef, Current: registers 0x430/4+idx hold page numbers */
