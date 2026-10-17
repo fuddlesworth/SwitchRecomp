@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the ScarletNX contributors
+name: Bug on a computer
+description: A game, the menu or the recompile goes wrong on Linux, Windows or FreeBSD.
+title: "[area] "
+labels: ["kind: bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Name the part that goes wrong in the title's brackets, as the other issues do (`[gpu]`, `[audio]`, `[hid]`, `[gui]`, `[recompiler]`), then say what happens.
+
+        Never attach keys (`prod.keys`, `title.keys`), dumps (XCI, NSP, NCA), files from `work/` or from a game's folder other than its log, or saves. Nothing of the game goes into an issue.
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      description: For Linux, the desktop and whether it runs on Wayland or X11.
+      placeholder: Arch Linux, KDE Plasma 6.4 on Wayland
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      description: The game's log names the GPU on its `vulkan:` line. Add the driver and its version.
+      placeholder: AMD Radeon RX 6700 XT, Mesa 25.2.3 (RADV)
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Build
+      description: The first line of the menu's Share log, or the end of the menu's or the game's window title.
+      placeholder: ScarletNX <branch> <commit> (<compiler>, <OS> <arch>)
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install kind
+      options:
+        - Nightly AppImage
+        - Nightly Windows zip
+        - A pull request's build
+        - Built from source
+        - Other (say which in the steps)
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game title ID and version
+      description: The title ID is the name of the game's folder in `games/`. The version is the base game's or the update's you installed.
+      placeholder: 010019A01E2F2000 v0
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: What you did, from the start, so someone else can do the same.
+      placeholder: |
+        1. Load Switch NSP/XCI/NRO, pick the XCI
+        2. Start a new game in it
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: What happens instead. A screenshot helps for anything on the screen.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        Use the menu's Share log after the problem. It saves `scarletnx.log` with the build, the last run's output and the newest game log, and copies its path: `~/.local/state/scarletnx/` on Linux, `%APPDATA%\scarletnx\state\` on Windows, the working folder for a checkout. Drag that file here.
+        Without the menu, the game's own `<id>.log` is in the folders [docs/USAGE.md](https://github.com/scarletnx/ScarletNX/blob/main/docs/USAGE.md#folders) lists (`~/.local/state/scarletnx/games/<id>/` on Linux).
+    validations:
+      required: true
+  - type: checkboxes
+    id: nothing-of-the-game
+    attributes:
+      label: Nothing of the game
+      options:
+        - label: I attached no keys, dumps or game files.
+          required: true
