@@ -2,11 +2,12 @@
 # Copyright 2026 the ScarletNX contributors
 # LLVM's C API is required by the recompiler on every platform. SNX_LLVM_CONFIG selects an llvm-config that runs
 # on the build machine and describes the LLVM development files for the target, including when cross-compiling.
+include("${CMAKE_CURRENT_LIST_DIR}/llvm_components.cmake")
 if(ANDROID OR IOS OR (APPLE AND LLVM_DIR AND NOT SNX_LLVM_CONFIG))
     # Android's and iOS's LLVM (scripts/android-llvm.sh, scripts/apple-llvm.sh) have an llvm-config that only runs on the
     # device, and the Mac's from scripts/apple-llvm.sh none: their CMake package instead, named by LLVM_DIR
     find_package(LLVM REQUIRED CONFIG)
-    llvm_map_components_to_libnames(SNX_LLVM_LIBS core native passes target analysis mcjit)
+    llvm_map_components_to_libnames(SNX_LLVM_LIBS ${SNX_LLVM_COMPONENTS})
     set(SNX_LLVM_VERSION "${LLVM_PACKAGE_VERSION}")
     set(SNX_LLVM_INCLUDE_DIR "${LLVM_INCLUDE_DIRS}")
     set(SNX_LLVM_LIBRARY_DIR "${LLVM_LIBRARY_DIRS}")
@@ -36,8 +37,8 @@ endfunction()
 snx_llvm_query(SNX_LLVM_VERSION --version)
 snx_llvm_query(SNX_LLVM_INCLUDE_DIR --includedir)
 snx_llvm_query(SNX_LLVM_LIBRARY_DIR --libdir)
-snx_llvm_query(SNX_LLVM_LIBS --libs core native passes target analysis mcjit)
-snx_llvm_query(SNX_LLVM_SYSTEM_LIBS --system-libs core native passes target analysis mcjit)
+snx_llvm_query(SNX_LLVM_LIBS --libs ${SNX_LLVM_COMPONENTS})
+snx_llvm_query(SNX_LLVM_SYSTEM_LIBS --system-libs ${SNX_LLVM_COMPONENTS})
 if(NOT SNX_LLVM_VERSION OR NOT EXISTS "${SNX_LLVM_INCLUDE_DIR}/llvm-c/Core.h" OR
    NOT IS_DIRECTORY "${SNX_LLVM_LIBRARY_DIR}" OR NOT SNX_LLVM_LIBS)
     message(FATAL_ERROR "LLVM's development files are required, but ${SNX_LLVM_CONFIG} reports an incomplete "

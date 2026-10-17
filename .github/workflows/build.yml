@@ -97,7 +97,7 @@ jobs:
       - name: Build the runtime
         run: |
           cmake --preset default -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build --preset default
+          cmake --build --preset default --parallel "$(getconf _NPROCESSORS_ONLN)"
           cmake --install build/default --prefix stage
       # The fallback is CMake's (cmake/dependencies.cmake pins SDL3) and the Windows job builds the same SDL3 from
       # source: a pull request that changes no CMake file and not this workflow skips it, a push always builds it
@@ -118,12 +118,12 @@ jobs:
           cmake --preset default -B build/sdl-fallback -DCMAKE_DISABLE_FIND_PACKAGE_SDL3=ON \
             -DSNX_DEPLOY=OFF -DBUILD_TESTING=OFF -DSDL_WAYLAND=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build build/sdl-fallback --target scarletnx
+          cmake --build build/sdl-fallback --target scarletnx --parallel "$(getconf _NPROCESSORS_ONLN)"
       - name: Build SDL3 with headless Vulkan tests
         run: |
           cmake --preset default -B build/headless -DSNX_BUILD_GUI=OFF -DSNX_DEPLOY=OFF -DSNX_TEST_VULKAN=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build build/headless
+          cmake --build build/headless --parallel "$(getconf _NPROCESSORS_ONLN)"
       # Only what this run used is kept, so the cache saved is one build's worth
       - name: Trim the compiler cache
         run: |
@@ -255,7 +255,7 @@ jobs:
           git config --global --add safe.directory '*'
           cmake --preset default -DSNX_DEPLOY=OFF -DCMAKE_INSTALL_PREFIX=/usr \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build --preset default
+          cmake --build --preset default --parallel "$(getconf _NPROCESSORS_ONLN)"
           cmake --install build/default
       - name: Trim the compiler cache
         run: |
@@ -391,7 +391,7 @@ jobs:
             -DSNX_GCCJIT_INCLUDE_DIR="$(cygpath -m "$PWD/build/gccjit-include")" \
             -DSNX_GCCJIT_LIBRARY="$(cygpath -m /ucrt64/lib/libgccjit.dll.a)" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build --preset default --parallel 4
+          cmake --build --preset default --parallel "$(getconf _NPROCESSORS_ONLN)"
           cmake --install build/default --prefix stage
       - name: Trim the compiler cache
         run: |
@@ -705,7 +705,7 @@ jobs:
         run: |
           cmake --preset macos -DLLVM_DIR="$PWD/apple-llvm/lib/cmake/llvm" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build --preset macos
+          cmake --build --preset macos --parallel "$(getconf _NPROCESSORS_ONLN)"
           cmake --install build/macos --prefix stage
       - name: Trim the compiler cache
         run: |
@@ -815,7 +815,7 @@ jobs:
         run: |
           cmake --preset ios -DLLVM_DIR="$PWD/ios-llvm/lib/cmake/llvm" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build --preset ios
+          cmake --build --preset ios --parallel "$(getconf _NPROCESSORS_ONLN)"
           cmake --install build/ios --prefix stage
       - name: Trim the compiler cache
         run: |

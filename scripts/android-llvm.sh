@@ -43,5 +43,10 @@ cmake -S "$source/llvm" -B "$work/$abi" -G Ninja \
     -DLLVM_BUILD_TOOLS=OFF -DLLVM_BUILD_UTILS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
     -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_DOCS=OFF -DLLVM_ENABLE_BINDINGS=OFF -DLLVM_ENABLE_ZLIB=OFF \
     -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_LIBEDIT=OFF -DLLVM_ENABLE_LIBPFM=OFF "$@"
-cmake --build "$work/$abi" --target install
+# the libraries the recompiler links and those they link (scripts/llvm-libraries), their headers and the CMake
+# package ScarletNX finds them with: LLVM's others (ObjCopy, the DWARF linker...) are neither built nor in the package
+cmake -S "$(dirname "$0")/llvm-libraries" -B "$work/$abi-libraries" -DLLVM_BUILD="$work/$abi" \
+    -DOUTPUT="$work/$abi-libraries.txt"
+cmake "$work/$abi" -DLLVM_DISTRIBUTION_COMPONENTS="$(cat "$work/$abi-libraries.txt");llvm-headers;cmake-exports"
+cmake --build "$work/$abi" --parallel "$(getconf _NPROCESSORS_ONLN)" --target install-distribution
 echo "LLVM for $abi in $prefix: configure ScarletNX with -DLLVM_DIR=$prefix/lib/cmake/llvm"

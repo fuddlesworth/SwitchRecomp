@@ -22,7 +22,7 @@ for abi in $abis; do
     cmake -S "$src" -B "$out/$abi" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake" \
         -DANDROID_ABI="$abi" -DANDROID_PLATFORM=android-${ANDROID_API:-21} -DLLVM_DIR="$llvm/$abi/lib/cmake/llvm" \
         -DSNX_DEPLOY=OFF -DSNX_BUILD_GNUABI=OFF -DBUILD_TESTING=OFF "$@"
-    cmake --build "$out/$abi"
+    cmake --build "$out/$abi" --parallel "$(getconf _NPROCESSORS_ONLN)"
     cmake --install "$out/$abi" --prefix "$out/stage" --strip
 done
 "${GRADLE:-gradle}" -p "$src/dist/android" --project-cache-dir "$out/gradle-cache" assembleDebug \
