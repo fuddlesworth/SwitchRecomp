@@ -43,7 +43,8 @@ int main(void) {
     printf("%s\n", snx_build_info());
     assert(!arch || !strcmp(snx_build_info(), want));
     assert(strlen(SNX_COMMIT) >= 7); /* a hash, or "unknown" */
-    assert(SNX_BRANCH[0]);           /* a branch, "detached" or "unknown" */
+    assert(!strcmp(snx_build_commit(), SNX_COMMIT));
+    assert(SNX_BRANCH[0]); /* a branch, "detached" or "unknown" */
     puts("build info: commit, compiler and host in the window titles' line passed");
     return 0;
 }

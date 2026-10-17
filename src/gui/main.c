@@ -129,6 +129,7 @@ typedef struct {
     GuiConfirm confirm; /* the question before a run is aborted, when ask_abort says to ask it */
     bool ask_abort;     /* ESC asks first: on a phone it is Back, an edge swipe easily made by mistake */
     int native;
+    bool recompile;           /* R on Games: the run recompiles its game (-r) and plays nothing */
     Uint64 finger;            /* the finger on the screen (finger_id), 0 for none */
     float finger_x, finger_y; /* where it went down, 0 to 1 across the window */
     float finger_mark;        /* the height a drag last moved the focus at, a row at a time */
@@ -203,7 +204,7 @@ typedef struct {
     int outside_place;
     char* room_file; /* a run asked about (GUI_ASK_ROOM): its file, its load and whether it was prepared */
     int room_item;
-    bool room_prepared;
+    bool room_prepared, room_recompile;
     bool room_ok;       /* asked and answered: the run goes */
     char room_line[96]; /* the question: what it takes, what is free */
     uint64_t room_free; /* fixed free space for tests; 0 asks the disk */
@@ -233,7 +234,7 @@ static const char* const items[] = {"Load Switch NSP/XCI/NRO",
    a computer has the picker too (on Linux the desktop's portal, else zenity), on a screen of its own as the keys' */
 #ifdef SDL_PLATFORM_ANDROID
 #define SAY_MENU       "Tap: select. Back: go back."
-#define SAY_GAMES      "Tap: open. Swipe across: turn the page. Back: go back."
+#define SAY_GAMES      "Tap: open. Swipe across: turn the page. Recompile: tap it. Back: go back."
 #define SAY_KEYS_HOW   "Back: go back."
 #define SAY_KEYS_WAIT  "Pick prod.keys"
 #define SAY_PICK_BOX   "tap the box to open the file picker"
@@ -253,7 +254,7 @@ static const char* const items[] = {"Load Switch NSP/XCI/NRO",
 #define SAY_PAD        "Tap a control; tap it again for a press. Back: go back."
 #else
 #define SAY_MENU       "Arrows/mouse: move. Space/Enter/click: select."
-#define SAY_GAMES      "Up/Down: select. Enter/Space: open. Left/Right/PgUp/PgDown: page."
+#define SAY_GAMES      "Up/Down: select. Enter/Space: open. R: recompile. Left/Right/PgUp/PgDown: page."
 #define SAY_PICK_BOX   "click the box (or Enter) to open the file picker"
 #define SAY_KEYS_HOW   "Ctrl+V: paste a path, or drop the file on the window. ESC: back."
 #define SAY_KEYS_WAIT  "Pick or drop prod.keys"
@@ -493,7 +494,9 @@ static GuiScreen menu_screen(const App* app) {
 }
 static GuiScreen screen(const App* app) {
     if (app->menu.running || app->finished)
-        return app->native || gui_steps_last(&app->steps, "LAUNCH") ? GUI_SCREEN_LOADING : GUI_SCREEN_COMPILING;
+        return (app->native && !gui_steps_last(&app->steps, "RECOMPILE")) || gui_steps_last(&app->steps, "LAUNCH")
+                   ? GUI_SCREEN_LOADING
+                   : GUI_SCREEN_COMPILING;
     return menu_screen(app);
 }
 /* the theme step themes after or before the one shown, round the list */
@@ -836,12 +839,13 @@ static void run_name(const App* app, char* out, size_t size) {
     const char* q;
     size_t n;
     const char* dot;
-    const GuiStep* launch = gui_steps_last(&app->steps, "LAUNCH");
-    const char* name = launch ? launch->detail : app->file ? app->file : "";
+    const GuiStep *launch = gui_steps_last(&app->steps, "LAUNCH"), *made = gui_steps_last(&app->steps, "RECOMPILE");
+    /* a game made already is named by its title ID: its recompile's line says what it is shown as */
+    const char* name = launch ? launch->detail : app->native && made ? made->detail : app->file ? app->file : "";
     for (q = name; *q; ++q)
         if (*q == '/' || *q == '\\') name = q + 1;
     n = 0;
-    dot = launch ? NULL : strrchr(name, '.');
+    dot = launch || (app->native && made) ? NULL : strrchr(name, '.');
     for (q = name; *q && q != dot && n + 1 < size; ++q) out[n++] = *q >= 'a' && *q <= 'z' ? (char)(*q - 32) : *q;
     out[n] = 0;
 }
@@ -3893,12 +3897,15 @@ static int play(App* app, const char* game) {
     free(option);
     return ok;
 }
-/* the game a run of the driver made ready, in its folder of games/: there the driver names it, as it cannot open it;
-   whether it opened */
+/* the game a run of the driver made ready: the one it ran, when it was a game already, else in its folder of games/,
+   where the driver names it, as it cannot open it; whether it opened */
 static int ready(App* app) {
     const GuiStep* made = gui_steps_last(&app->steps, "READY");
-    char* folder = made ? snx_path_join(app->games_dir, made->detail) : NULL;
-    char* game = folder ? snx_path_join(folder, made->detail) : NULL;
+    char* folder = made && !app->native ? snx_path_join(app->games_dir, made->detail) : NULL;
+    char* game = !made         ? NULL
+                 : app->native ? snx_strdup(app->file)
+                 : folder      ? snx_path_join(folder, made->detail)
+                               : NULL;
     int ok = game && play(app, game);
     free(game);
     free(folder);
@@ -4269,15 +4276,22 @@ static void launch(App* app, char* absolute, bool prepared) {
     /* The 3DS browser lists CIA inputs, not prepared host executables. */
     if (app->menu.selected == GUI_3DS) prepared = false;
     bool native = prepared && app->menu.selected == GUI_SWITCH;
-    char* driver = native ? NULL : find_driver(app, app->menu.selected);
-    if (!native && !driver) {
+    /* a game in a folder of its own goes through the driver, which recompiles it first when another build made it; one
+       an older version laid out beside the others runs as it is, as every game on iOS, which runs no other program */
+#ifdef SDL_PLATFORM_IOS
+    bool direct = native && !app->recompile;
+#else
+    bool direct = native && !app->recompile && !gui_game_folder(absolute);
+#endif
+    char* driver = direct ? NULL : find_driver(app, app->menu.selected);
+    if (!direct && !driver) {
         snprintf(app->message, sizeof(app->message), "Cannot find %s beside the GUI or on PATH.",
                  driver_name(app->menu.selected) ? driver_name(app->menu.selected) : "the selected driver");
         free(absolute);
         return;
     }
 #if defined(SDL_PLATFORM_ANDROID) || defined(SDL_PLATFORM_IOS)
-    if (native) {
+    if (direct) {
         if (play(app, absolute) && app->recent_file && !gui_recent_add(&app->recent, absolute, GUI_SWITCH, true))
             recent_changed(app);
         free(absolute);
@@ -4297,6 +4311,7 @@ static void launch(App* app, char* absolute, bool prepared) {
         app->room_file = absolute;
         app->room_item = app->menu.selected;
         app->room_prepared = prepared;
+        app->room_recompile = app->recompile;
         gui_confirm_open(&app->confirm, GUI_ASK_ROOM, true);
         free(driver);
         return;
@@ -4306,12 +4321,17 @@ static void launch(App* app, char* absolute, bool prepared) {
     const char** argv = (const char**)snx_alloc((size_t)(s->count + 10) * sizeof(*argv));
     char* out = NULL; /* a dump's extraction in the picked extractions folder */
     size_t n = 1;
-    argv[0] = native ? absolute : driver;
-    if (!native) argv[n++] = absolute;
-    /* Switch options only, never guest argv for the CPU-only Linux driver or the 3DS one. The drivers work in the
-       menu's data folder, so they list the same games */
-    if (app->menu.selected == GUI_SWITCH) n += gui_settings_options(s, 1, native, argv + n);
-    if (folders) {
+    argv[0] = direct ? absolute : driver;
+    if (app->recompile) argv[n++] = "-r";
+    if (!direct) argv[n++] = absolute;
+    /* Switch options only, never guest argv for the CPU-only Linux driver or the 3DS one; R's recompile takes the
+       backend picked alone, no option of a run. The drivers work in the menu's data folder, so they list the same
+       games */
+    if (app->recompile && gui_settings_backend(s))
+        argv[n++] = gui_settings_backend(s);
+    else if (app->menu.selected == GUI_SWITCH && !app->recompile)
+        n += gui_settings_options(s, 1, native, argv + n);
+    if (folders || (native && !direct)) {
         argv[n++] = "--repo";
         argv[n++] = app->data_dir;
     }
@@ -4378,10 +4398,12 @@ static void room_answer(App* app, bool taken) {
         return;
     }
     app->room_ok = true;
+    app->recompile = app->room_recompile;
     app->menu.selected = app->room_item;
     launch(app, file, app->room_prepared);
     app->menu.selected = item;
     app->room_ok = false;
+    app->recompile = false;
 }
 /* a recent game, run as the menu would: its driver, the options the menu has now */
 static void open_recent(App* app, int index) {
@@ -4397,6 +4419,33 @@ static void open_recent(App* app, int index) {
     app->menu.selected = game.driver;
     launch(app, snx_strdup(game.path), game.prepared);
     app->menu.selected = item;
+}
+/* a game of Games' page, at index of the list: a CIA is the 3DS driver's, anything else a Switch game's, ready to run
+   or a dump to prepare */
+static void open_game(App* app, size_t index) {
+    int item = app->menu.selected;
+    app->menu.selected = gui_is_cia(app->games.names[index]) ? GUI_3DS : GUI_SWITCH;
+    launch(app, snx_absolute(app->games.paths[index]), !gui_is_dump(app->games.names[index]));
+    if (!app->menu.running) app->menu.selected = item;
+}
+/* R on Games: the focused Switch game recompiled where it is, or its dump prepared again, playing nothing; else why
+   not */
+static void recompile_focus(App* app) {
+    size_t row = app->browser.selected, head = app->browser.head;
+    size_t index = app->browser.page * app->browser.page_size + row - head;
+    bool recent = row && row < head && (int)row - 1 < recent_shown(app), game = row >= head && index < app->games.count;
+    if (!recent && !game)
+        snprintf(app->message, sizeof app->message, "No game in focus to recompile.");
+    else if (recent ? app->recent.game[row - 1].driver != GUI_SWITCH : gui_is_cia(app->games.names[index]))
+        snprintf(app->message, sizeof app->message, "R recompiles Switch games only.");
+    else {
+        app->recompile = true;
+        if (recent)
+            open_recent(app, (int)row - 1);
+        else
+            open_game(app, index);
+        app->recompile = false;
+    }
 }
 #define SNX_GUI_KEYS_MAX (1 << 20) /* a prod.keys is a few kilobytes: past this it is not one */
 /* the bytes of file (a path, or on Android a document's URI, which SDL opens through its app), up to SNX_GUI_KEYS_MAX;
@@ -4727,13 +4776,7 @@ static void menu_key(App* app, GuiKey key) {
             layout(app);
         } else if (action == GUI_BROWSER_OPEN) {
             size_t index = app->browser.page * app->browser.page_size + row - app->browser.head;
-            if (index < app->games.count) {
-                /* a CIA is the 3DS driver's, anything else a Switch game's: ready to run, or a dump to prepare */
-                int item = app->menu.selected;
-                app->menu.selected = gui_is_cia(app->games.names[index]) ? GUI_3DS : GUI_SWITCH;
-                launch(app, snx_absolute(app->games.paths[index]), !gui_is_dump(app->games.names[index]));
-                if (!app->menu.running) app->menu.selected = item;
-            }
+            if (index < app->games.count) open_game(app, index);
         }
         return;
     }
@@ -4869,6 +4912,8 @@ static const struct {
                  {"PgDown", SDLK_PAGEDOWN, 0},
                  {"Swipe across", SDLK_PAGEDOWN, 0},
                  {"Del", SDLK_DELETE, 0},
+                 {"R", SDLK_R, 0},
+                 {"Recompile", SDLK_R, 0},
                  {"Ctrl+S", SDLK_S, SDL_KMOD_CTRL},
                  {"Ctrl+V", SDLK_V, SDL_KMOD_CTRL},
                  {"Add a folder", SDLK_UNKNOWN, 0}};
@@ -5328,6 +5373,12 @@ static void event(App* app, const SDL_Event* e) {
     }
     if (e->key.key == SDLK_TAB && !e->key.repeat) {
         screen_tab(app, e->key.mod & SDL_KMOD_SHIFT ? -1 : 1);
+        return;
+    }
+    if (e->key.key == SDLK_R && !e->key.repeat && !(e->key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) &&
+        app->menu.view == GUI_LOAD_GAMES && !app->finished) {
+        layout(app); /* the page a resize in the same poll gave */
+        recompile_focus(app);
         return;
     }
     if (menu_key_of(&e->key, &key)) menu_key(app, key);

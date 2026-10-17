@@ -12,6 +12,7 @@
 #include "nx/loader/module_llvm.h"
 #include "common/cpu/recompiler/backend.h"
 #include "nx/runtime/driver/toolchain.h"
+#include "common/utilities/build_info.h"
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
@@ -48,6 +49,8 @@ static unsigned number(const char* text, unsigned max) {
 /* This build's, not the checkout's cpu.h: the modules are laid out as this build's headers say, and an installed
    build has no checkout */
 unsigned snx_game_abi(void) { return snx_module_abi(); }
+/* the commit too: a change to the generator, or to the runtime the game's folder gets a copy of, may keep SNX_ABI */
+char* snx_game_stamp(void) { return snx_format("%u\n%s\n", snx_game_abi(), snx_build_commit()); }
 #ifdef SNX_WITH_RUNTIME
 /* In an AppImage this program is a launcher in its mount, which runs nothing once copied out: the AppImage is the
    runtime, and a copy named after the game runs it. APPIMAGE is inherited, so it counts only inside the mount */
@@ -462,11 +465,10 @@ int snx_recompile(int argc, char** argv, const SnxPaths* paths) {
         goto done;
     }
     {
-        char* stamp = snx_format("%s.abi", base);
-        char version[32];
-        sprintf(version, "%u\n", gen.abi);
+        char *stamp = snx_format("%s.abi", base), *version = snx_game_stamp();
         i = snx_write_file(stamp, version, strlen(version));
         free(stamp);
+        free(version);
         if (i) {
             snx_error("cannot record the compiled game's ABI");
             goto done;

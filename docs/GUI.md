@@ -128,7 +128,7 @@ built in, drawn at the window's size ([lunasvg](https://github.com/sammycage/lun
   defaults**, every one. The launcher's own choices start picked: `fullscreen` 0, `controls` 0 (on Android 1,
   and `fullscreen` puts the launcher itself on the whole screen too).
   **libgccjit** passes `--backend=gcc` when preparing a dump (it stays off in a build without
-  libgccjit; games in `games/` are not recompiled), **gdbstub** passes `-S` and `-s`, the
+  libgccjit; a game of `games/` another build made is recompiled with LLVM), **gdbstub** passes `-S` and `-s`, the
   runtime's stub on port 1234 waiting for the debugger at startup (UNIX only). None of them
   reaches the Linux or the 3DS driver.
 - The Status box, after the RAM and the CPU, says what ScarletNX's folders take (games/,
@@ -207,15 +207,20 @@ cannot be read is named and the others still listed.
 - **Add a folder** is the first row on every page, a wider gap under it: it opens the folder picker of Settings >
   App > Game folders. Under it the recent games, then the page's games. ESC returns to the menu.
 - Up/Down go round Add a folder, the recent games and the page's files. Enter/Space opens one.
+- **R** (on Android a tap on *Recompile* at the foot) recompiles the Switch game in focus, recent or on the page,
+  where it is, or prepares its dump again: `scarletnx -r`, with libgccjit when **libgccjit** is on. It plays nothing;
+  Enter then does. On another row, or a 3DS game, it says why it does nothing.
 - Left/Right and PgUp/PgDown go to the previous/next page. The page number and
   total file count are shown. Paging stops at the first and last pages.
 - Resizing adjusts the page size while keeping the selected file visible.
 - Empty or missing directories show a diagnostic and still provide Add a folder.
 
-A recompiled game is an already-prepared native launcher, so selecting one runs it directly with
-the Settings rather than trying to extract it as a dump. A CIA goes to `scarletnx-3ds`, which is
-never executed on it directly. Output capture, resource accounting and the return to the main menu
-work as for a file picked by a load.
+A recompiled game, in a folder of its own (`games/<id>/<id>`), runs with the Settings through the menu's own
+`scarletnx` and is never extracted as a dump: it plays as it is when this build made it, and is recompiled first,
+where it is, when another build did ([USAGE](USAGE.md#extract--aot--run)), the run showing the recompile before the
+game loads. A game an older version laid out beside the others runs directly, as every game does on iOS. A CIA goes
+to `scarletnx-3ds`, which is never executed on it directly. Output capture, resource accounting and the return to
+the main menu work as for a file picked by a load.
 
 ## Output and resource use
 
@@ -475,7 +480,7 @@ accounting. See [BUILD](BUILD.md) for SDL3's desktop dependencies.
 The tests cover menu transitions, bounded console scrolling, split UTF-8/ANSI
 sequences, path parsing, argument quoting, inherited grandchild output, resource
 accounting and process-tree cleanup. Browser tests cover filtering, missing/empty
-directories, pagination, resizing, Back/ESC and launching selected files.
+directories, pagination, resizing, Back/ESC, launching selected files and R's recompile.
 Key setup tests cover installation, replacement, invalid drops, failed writes,
 self-copy safety, cancellation, and the bright-red overwrite warning.
 Settings tests cover the runtime's list read into rows, picks, the options each combination

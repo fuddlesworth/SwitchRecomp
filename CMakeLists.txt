@@ -100,6 +100,7 @@ if(SNX_BUILD_NX)
     add_subdirectory(src/nx/runtime/driver host-tools)
 endif()
 include(CTest)
+include(cmake/build_info.cmake) # the window titles' line; the driver stamps games with its commit
 if(SNX_BUILD_3DS)
     add_subdirectory(src/3ds)
 endif()

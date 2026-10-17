@@ -25,6 +25,7 @@ recompiles on the phone, then the game opens.
 - **The driver** runs as a child of the menu, as on a desktop, from `libscarletnx-run.so`: an executable named so
   that Android installs it with the libraries, the only files of its own an app may execute. It loads the runtime,
   `libscarletnx.so`, beside it. It cannot open a window there, so it ends at `Ready <game>` and the menu opens it.
+  A game of *Games* goes through it too, recompiled first when another version of the app made it.
 - **Behind other apps** the driver keeps going: a notification shows the game, its step and a bar, and a tap on it
   returns to the menu. A run that ends there leaves a notification saying so, and its game opens once the menu shows.
   The first run asks to show it (Android 13) and to lift the battery limit; on a phone whose maker adds its own limit

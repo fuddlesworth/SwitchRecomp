@@ -96,12 +96,23 @@ int main(void) {
         path = snx_path_join(ready, made[1]);
         assert(!strcmp(games.paths[0], inside) && !strcmp(games.paths[1], path));
         assert(!strcmp(games.shown[0], games.names[0]) && !strcmp(games.shown[1], games.names[1])); /* no NACP */
+        /* the one in a folder of its own goes through the driver once it has its data; the older version's, beside
+           its data and the others, never */
+        assert(!gui_game_folder(inside) && !gui_game_folder(path));
         /* shown by the name in the control.nacp its data holds, and sorted by it, the folder still its title ID */
         {
             static unsigned char nacp[0x300 * 2];
             char* file = snx_path_join(ready, "0100ABCD12345000/0100ABCD12345000_data/control.nacp");
             char* data = snx_dirname(file);
             assert(data && !snx_mkdirs(data));
+            assert(gui_game_folder(inside) && !gui_game_folder(path) && !gui_game_folder(data));
+            {
+                char* other = snx_path_join(ready, "Other/Else" EXE);
+                char* other_data = snx_path_join(ready, "Other/Else_data");
+                assert(!snx_mkdirs(other_data) && !gui_game_folder(other)); /* not its folder's name */
+                free(other_data);
+                free(other);
+            }
             memcpy(nacp + 0x300, "Zeta Quest", 10); /* the second language's: American English's is empty */
             assert(!snx_write_file(file, nacp, sizeof nacp));
             assert(gui_games_scan(&games, ready, false, error, sizeof error) && games.count == 2);

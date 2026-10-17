@@ -54,30 +54,121 @@ static int is_nro_path(const char* path) {
     return ext && strlen(ext) == 4 && tolower((unsigned char)ext[1]) == 'n' && tolower((unsigned char)ext[2]) == 'r' &&
            tolower((unsigned char)ext[3]) == 'o';
 }
-static int cached_abi(const char* base) {
-    char* stamp = snx_format("%s.abi", base);
-    FILE* f = snx_fopen(stamp, "r");
-    unsigned abi = 0, expected = snx_game_abi();
-    if (f) {
-        char newline, trailing;
-        /* A partial write or trailing garbage is not a completed build. */
-        if (fscanf(f, "%u%c%c", &abi, &newline, &trailing) != 2 || newline != '\n') abi = 0;
-        fclose(f);
-    }
+/* whether this build made the game at base: its stamp says what this build writes, a partial write or anything after
+   it being no completed build */
+static int stamped(const char* base) {
+    char *stamp = snx_format("%s.abi", base), *expected = snx_game_stamp();
+    size_t size = 0;
+    unsigned char* found = snx_read_file(stamp, &size);
+    int same = found && size == strlen(expected) && !memcmp(found, expected, size);
+    free(found);
+    free(expected);
     free(stamp);
-    return expected && abi == expected;
+    return same;
 }
-/* games/ and the extraction in work/ of the data folder, else the folder outdir names and the extraction out names */
+/* a game the recompile made, named by its folder (games/<id>) or its program there (games/<id>/<id>, .exe on Windows):
+   1 with its folder and name, owned when asked for. A game an older version laid out beside the others is not one */
+static int prepared_game(const char* input, char** folder, char** name) {
+    char *path = snx_absolute(input), *dir = NULL, *own = NULL, *program = NULL, *data = NULL;
+    const char* leaf;
+    size_t n;
+    int found = 0;
+    if (!path) return 0;
+    n = strlen(path);
+    while (n > 1 && (path[n - 1] == '/' || path[n - 1] == '\\')) path[--n] = 0;
+    dir = snx_is_dir(path) ? snx_strdup(path) : snx_is_file(path) ? snx_dirname(path) : NULL;
+    for (leaf = path + n; leaf > path && leaf[-1] != '/' && leaf[-1] != '\\'; --leaf) continue;
+    own = snx_strdup(leaf);
+#ifdef _WIN32
+    n = strlen(own);
+    if (n > 4 && own[n - 4] == '.' && tolower((unsigned char)own[n - 3]) == 'e' &&
+        tolower((unsigned char)own[n - 2]) == 'x' && tolower((unsigned char)own[n - 1]) == 'e' && !snx_is_dir(path))
+        own[n - 4] = 0;
+#endif
+    if (dir) {
+        for (leaf = dir + strlen(dir); leaf > dir && leaf[-1] != '/' && leaf[-1] != '\\'; --leaf) continue;
+#ifdef _WIN32
+        program = snx_format("%s/%s.exe", dir, own);
+#else
+        program = snx_format("%s/%s", dir, own);
+#endif
+        data = snx_format("%s/%s_data", dir, own);
+        found = *own && !strcmp(leaf, own) && snx_is_file(program) && snx_is_dir(data);
+    }
+    if (found && folder) {
+        *folder = dir;
+        dir = NULL;
+    }
+    if (found && name) {
+        *name = own;
+        own = NULL;
+    }
+    free(path);
+    free(dir);
+    free(own);
+    free(program);
+    free(data);
+    return found;
+}
+/* a game an older version laid out beside the others (games/<name>, games/<name>_data/), which runs where it is but is
+   neither played nor recompiled by the driver until it has a folder of its own */
+static int left_beside(const char* input) {
+    size_t n = strlen(input);
+    char* data;
+    int found;
+#ifdef _WIN32
+    if (n > 4 && input[n - 4] == '.' && tolower((unsigned char)input[n - 3]) == 'e' &&
+        tolower((unsigned char)input[n - 2]) == 'x' && tolower((unsigned char)input[n - 1]) == 'e')
+        n -= 4;
+#endif
+    data = snx_format("%.*s_data", (int)n, input);
+    found = snx_is_file(input) && snx_is_dir(data) && !prepared_game(input, NULL, NULL);
+    free(data);
+    return found;
+}
+/* games/ and the extraction in work/ of the data folder, else the folder outdir names and the extraction out names. A
+   game made already stays where it is */
 static int play_dump(const char* input, const SnxPaths* paths, unsigned flags, const char* backend, const char* outdir,
                      const char* out, int settings, char** setting, int game_argc, char** game_argv) {
-    char *dumped = snx_dump_name(input), *dump = snx_absolute(input), *name = NULL;
-    char* games = outdir ? snx_absolute(outdir) : snx_path_join(paths->repo, "games");
-    char* extracted = out ? snx_absolute(out) : NULL;
-    char* work = !out ? snx_work_dir(paths->repo) : extracted ? snx_dirname(extracted) : NULL;
-    char *pending, *game = NULL, *folder = NULL, *base = NULL, *code = NULL, error[256];
+    char *dumped = NULL, *dump = snx_absolute(input), *name = NULL, *games = NULL, *extracted = NULL, *work = NULL;
+    char *pending = NULL, *game = NULL, *folder = NULL, *base = NULL, *code = NULL, *source = NULL, error[256];
     const char** command = (const char**)snx_alloc((size_t)(game_argc + settings + 16) * sizeof(*command));
-    int rc = 1, nro = is_nro_path(input), n, j;
+    int rc = 1, nro = is_nro_path(input), prepared = prepared_game(input, &folder, &name), named = 0, n, j;
     SnxNpdm npdm;
+    command[0] = paths->executable;
+    command[1] = "--repo";
+    command[2] = paths->repo;
+    command[3] = "--build-dir";
+    command[4] = paths->build;
+    if (prepared) {
+        /* recompiled in its folder, from what its _data keeps (the ExeFS or the NRO, the RomFS, control.nacp), when
+           another build made it: no dump, keys or extraction */
+        if (outdir || out) {
+            snx_error("--outdir and --out name where a dump's game and extraction go, and %s is a game", input);
+            goto done;
+        }
+        games = snx_dirname(folder);
+        base = snx_path_join(folder, name);
+        source = snx_format("%s_data/exefs/main.nro", base);
+        if (!snx_is_file(source)) {
+            free(source);
+            source = snx_format("%s_data", base);
+        }
+        /* its folder's name given only when the recompile would name it otherwise (an NRO's, one named when it was
+           made): a game named by its title ID stays shown by its control.nacp's */
+        if (snx_load_npdm(source, &npdm, error, sizeof error))
+            named = 1;
+        else {
+            char* own = snx_game_name(NULL, &npdm, source);
+            named = strcmp(own, name) != 0;
+            free(own);
+        }
+        goto made;
+    }
+    dumped = snx_dump_name(input);
+    games = outdir ? snx_absolute(outdir) : snx_path_join(paths->repo, "games");
+    extracted = out ? snx_absolute(out) : NULL;
+    work = !out ? snx_work_dir(paths->repo) : extracted ? snx_dirname(extracted) : NULL;
     if (!out && work) extracted = snx_path_join(work, dumped);
     pending = extracted ? snx_format("%s.extracting", extracted) : NULL;
     if (!pending || !games) {
@@ -92,11 +183,6 @@ static int play_dump(const char* input, const SnxPaths* paths, unsigned flags, c
         snx_error("Input dump is missing or is not a file: %s", input);
         goto done;
     }
-    command[0] = paths->executable;
-    command[1] = "--repo";
-    command[2] = paths->repo;
-    command[3] = "--build-dir";
-    command[4] = paths->build;
     /* NROs are already executable images. No keys, hactool or extraction checkpoint is needed. */
     if (!nro && !snx_is_dir(extracted)) {
         /* Publish only a finished extraction. A killed extractor may leave its staging directory. */
@@ -131,6 +217,8 @@ static int play_dump(const char* input, const SnxPaths* paths, unsigned flags, c
     name = snx_game_name(NULL, &npdm, nro ? dump : extracted);
     folder = snx_path_join(games, name); /* the game's own, as the recompile makes it */
     base = snx_path_join(folder, name);
+    source = snx_strdup(nro ? dump : extracted);
+made:
 #ifdef _WIN32
     code = snx_format("%s_code.dll", base);
     game = snx_format("%s.exe", base);
@@ -140,7 +228,7 @@ static int play_dump(const char* input, const SnxPaths* paths, unsigned flags, c
 #endif
     /* Always restage an NRO: a same-named cached game may belong to another input or an older build. */
     /* An explicit backend must not silently reuse a game built by another compiler. */
-    if (backend || nro || (flags & SNX_RECOMP) || !snx_is_file(game) || !snx_is_file(code) || !cached_abi(base)) {
+    if (backend || nro || (flags & SNX_RECOMP) || !snx_is_file(game) || !snx_is_file(code) || !stamped(base)) {
         command[5] = "-r";
         command[6] = "--outdir";
         command[7] = games;
@@ -150,7 +238,8 @@ static int play_dump(const char* input, const SnxPaths* paths, unsigned flags, c
             command[n++] = backend;
         }
         command[n++] = "--";
-        command[n++] = nro ? dump : extracted;
+        command[n++] = source;
+        if (named) command[n++] = name;
         command[n] = NULL;
         rc = snx_run_stage(command, NULL, "Recompilation");
         if (rc) goto done;
@@ -197,6 +286,7 @@ done:
     free(folder);
     free(base);
     free(code);
+    free(source);
     free(command);
     return rc;
 }
@@ -301,7 +391,17 @@ int snx_driver(int argc, char** argv) {
         result = 0;
         goto done;
     }
-    automatic = input && (!(flags & (SNX_EXTRACT | SNX_RECOMP)) || ((flags & SNX_RECOMP) && container_path(input)));
+    /* a game made already is played or, with -r, recompiled where it is */
+    automatic = input && (!(flags & (SNX_EXTRACT | SNX_RECOMP)) ||
+                          ((flags & SNX_RECOMP) &&
+                           (container_path(input) || (!(flags & SNX_EXTRACT) && prepared_game(input, NULL, NULL)))));
+    if (input && (automatic || (flags & SNX_RECOMP)) && left_beside(input)) {
+        result =
+            snx_error("%s was laid out by an older version: move its files as docs/DEPRECATIONS.md says, or run it "
+                      "as it is with --game=%s",
+                      input, input);
+        goto done;
+    }
     /* played, a --key=value that is not the driver's own is a setting of the game's .ini, passed on to it when the
        runtime knows the key; any other is refused */
     for (i = 0; automatic && i < n; ++i)

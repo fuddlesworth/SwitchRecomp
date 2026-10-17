@@ -165,6 +165,9 @@ int main(int argc, char** argv) {
                             assert(gui_settings_set(&s, "libgccjit", gcc ? "on" : "off") ==
                                    (!gcc || SNX_GUI_HAS_GCCJIT));
                             assert(gui_settings_set(&s, "gdbstub", stub ? "on" : "off"));
+                            /* what R's recompile takes, alone */
+                            assert(gcc && SNX_GUI_HAS_GCCJIT ? !strcmp(gui_settings_backend(&s), "--backend=gcc")
+                                                             : !gui_settings_backend(&s));
                             n = gui_settings_options(&s, launch, prepared, options);
                             assert(n <= (size_t)s.count + 1);
                             if (fullscreen) {

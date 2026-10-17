@@ -63,6 +63,9 @@ void gui_settings_shown(const GuiSettings* settings, int row, char* out, size_t 
 /* the value picked for key, NULL for the .ini's or no such row */
 const char* gui_settings_value(const GuiSettings* settings, const char* key);
 /* argv's options for a run: --key=value for each setting picked; with launch the launcher's too, -S -s for the stub
-   and --backend=gcc unless prepared (a game from games/ runs no compiler). Their count, count + 1 at most */
+   and --backend=gcc unless prepared (a game made already, recompiled only when another build made it, takes LLVM's).
+   Their count, count + 1 at most */
 size_t gui_settings_options(GuiSettings* settings, int launch, int prepared, const char** argv);
+/* the backend a recompile is asked for: --backend=gcc while libgccjit is on, else NULL (LLVM, the driver's own) */
+const char* gui_settings_backend(const GuiSettings* settings);
 #endif

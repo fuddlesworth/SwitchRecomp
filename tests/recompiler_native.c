@@ -5,6 +5,7 @@
 #include "common/utilities/common.h"
 #include "common/cpu/aarch64/cpu.h"
 #include "nx/loader/module_abi.h"
+#include "nx/runtime/driver/recompile.h"
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
@@ -219,6 +220,15 @@ int main(int argc, char** argv) {
             check(!rc, pass == 2 ? "interpreter CLI build" : "AOT CLI build");
         data_file = snx_path_join(out, "Native Fixture/Native Fixture.abi");
         check(snx_is_file(data_file) == !rc, "ABI checkpoint published only after a successful build");
+        if (!rc) { /* what the driver takes for this build's: the ABI and the commit */
+            char* stamp = snx_game_stamp();
+            cached = (char*)snx_read_file(data_file, &cached_size);
+            check(cached && cached_size == strlen(stamp) && !memcmp(cached, stamp, cached_size) &&
+                      strchr(stamp, '\n') < stamp + strlen(stamp) - 1,
+                  "the ABI checkpoint names the ABI and the build");
+            free(cached);
+            free(stamp);
+        }
         free(data_file);
         if (pass == 1) {
             data_file = snx_path_join(out, "Native Fixture/Native Fixture_data/romfs.bin");

@@ -263,6 +263,9 @@ const char* gui_settings_value(const GuiSettings* s, const char* key) {
     int i = find(s, key);
     return i < s->count ? picked(s, i) : NULL;
 }
+const char* gui_settings_backend(const GuiSettings* s) {
+    return s->count >= GUI_SETTINGS_OWN && s->values[0].word ? "--backend=gcc" : NULL;
+}
 size_t gui_settings_options(GuiSettings* s, int launch, int prepared, const char** argv) {
     size_t n = 0;
     int i;
@@ -272,7 +275,7 @@ size_t gui_settings_options(GuiSettings* s, int launch, int prepared, const char
         snprintf(s->values[i].option, sizeof s->values[i].option, "--%s=%s", s->values[i].key, value);
         argv[n++] = s->values[i].option;
     }
-    if (launch && s->count >= GUI_SETTINGS_OWN && s->values[0].word && !prepared) argv[n++] = "--backend=gcc";
+    if (launch && !prepared && gui_settings_backend(s)) argv[n++] = gui_settings_backend(s);
     if (launch && s->count >= GUI_SETTINGS_OWN && s->values[1].word) {
         argv[n++] = "-S";
         argv[n++] = "-s";

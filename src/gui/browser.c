@@ -22,6 +22,23 @@ bool gui_is_dump(const char* name) {
     return suffix(name, ".nro") || suffix(name, ".xci") || suffix(name, ".nsp") || suffix(name, ".dxci") ||
            suffix(name, ".dnsp");
 }
+bool gui_game_folder(const char* path) {
+    char *folder = snx_dirname(path), *name, *data;
+    const char *own = path + strlen(path), *leaf = folder + strlen(folder);
+    bool found;
+    while (own > path && own[-1] != '/' && own[-1] != '\\') --own;
+    while (leaf > folder && leaf[-1] != '/' && leaf[-1] != '\\') --leaf;
+    name = snx_strdup(own);
+#ifdef _WIN32
+    if (suffix(name, ".exe")) name[strlen(name) - 4] = 0;
+#endif
+    data = snx_format("%s/%s_data", folder, name);
+    found = *name && !strcmp(leaf, name) && snx_is_file(path) && snx_is_dir(data);
+    free(data);
+    free(name);
+    free(folder);
+    return found;
+}
 void gui_games_free(GuiGames* games) {
     snx_free_strings(games->names, games->count);
     snx_free_strings(games->shown, games->count);

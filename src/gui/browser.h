@@ -30,6 +30,10 @@ void gui_games_free(GuiGames* games);
 uint64_t gui_tree_size(const char* path, const int* stop);
 /* An NRO, XCI or NSP (or a decrypted one) by its name: a dump the driver prepares, not a game ready to run */
 bool gui_is_dump(const char* name);
+/* A game's program in a folder of its own beside its data (<name>/<name>, .exe on Windows, and <name>/<name>_data/),
+   as the recompile lays games out: the driver plays it, and recompiles it first when another build made it. A game
+   an older version laid out beside the others is not one */
+bool gui_game_folder(const char* path);
 /* A 3DS CIA by its name */
 bool gui_is_cia(const char* name);
 #endif
