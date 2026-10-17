@@ -654,6 +654,25 @@ if(NOT SNX_TOOLS_ONLY)
     target_link_libraries(snx-test-nvdec-decode PRIVATE FFmpeg::avcodec)
     add_test(NAME nvdec_decode COMMAND snx-test-nvdec-decode)
 endif()
+# NVDEC replay: the frontends' synthetic checks, then recorded jobs through them and FFmpeg's
+# decoders. The game captures are local files (tests/data/nvdec): the test skips, 77, without
+# them. FFmpeg::avcodec comes from cmake/dependencies.cmake, before this folder, in every build
+# but a tools-only one
+if(NOT SNX_TOOLS_ONLY)
+    add_executable(snx-test-nvdec-replay nvdec_replay.c
+        "${PROJECT_SOURCE_DIR}/src/nx/gpu/video/nvdec_h264.c"
+        "${PROJECT_SOURCE_DIR}/src/nx/gpu/video/vp9_head.c")
+    snx_test_target(snx-test-nvdec-replay 11)
+    target_compile_definitions(snx-test-nvdec-replay PRIVATE NVDEC_CAPTURES="${PROJECT_SOURCE_DIR}/tests/data/nvdec")
+    target_link_libraries(snx-test-nvdec-replay PRIVATE FFmpeg::avcodec)
+    add_test(NAME nvdec_replay COMMAND snx-test-nvdec-replay)
+    set_tests_properties(nvdec_replay PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(snx-test-nvdec-rec nvdec_rec_test.c
+        "${PROJECT_SOURCE_DIR}/src/nx/gpu/video/nvdec_rec.c")
+    snx_test_target(snx-test-nvdec-rec 11)
+    target_link_libraries(snx-test-nvdec-rec PRIVATE FFmpeg::avcodec)
+    add_test(NAME nvdec_rec COMMAND snx-test-nvdec-rec)
+endif()
 # the 2D engine's blit in guest memory (fermi2d.c, dma.c's bl_span_ptr): block linear scaling, an odd window, the
 # renderer's hooks once a blit
 add_executable(snx-test-fermi2d-blit fermi2d_blit.c)

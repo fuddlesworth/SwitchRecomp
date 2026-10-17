@@ -20,6 +20,10 @@ romfs/
 /keys/
 /dumps/
 
+# Recorded NVDEC job captures (tests/data/nvdec): game movie data, kept local, read by
+# tests/nvdec_replay.c when present
+/tests/data/nvdec/
+
 # Made from the game's files: shader corpora (SNX_SHADER_CORPUS), SPIR-V dumps, screenshots
 *.snxs
 *.spv
