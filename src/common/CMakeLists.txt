@@ -32,4 +32,6 @@ target_compile_options(scarletnx-net PRIVATE -fno-strict-aliasing -Wall -Wextra 
 target_link_libraries(scarletnx-net PUBLIC Threads::Threads)
 if(WIN32)
     target_link_libraries(scarletnx-net PUBLIC ws2_32 iphlpapi)
+elseif(APPLE) # the system resolver's DNS servers (network/net_iface.c)
+    target_link_libraries(scarletnx-net PUBLIC resolv)
 endif()

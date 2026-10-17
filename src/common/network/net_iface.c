@@ -18,6 +18,17 @@
 #include <net/if.h>
 #include <unistd.h>
 #endif
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#include <resolv.h>
+#if !TARGET_OS_IPHONE /* the routing and media headers are macOS's: the iOS SDK has neither (apple_gateway) */
+#include <net/if_media.h>
+#include <net/route.h>
+#include <sys/ioctl.h>
+#include <sys/sockio.h>
+#include <sys/sysctl.h>
+#endif
+#endif
 #if defined(__ANDROID__) && __ANDROID_API__ < 24
 #include <dlfcn.h>
 /* getifaddrs comes with Android 7: looked up where the app may run on an older one, which lists no interface */
@@ -128,6 +139,75 @@ static int linux_wireless(const char* name) {
     snprintf(path, sizeof path, "/sys/class/net/%s/wireless", name);
     return access(path, F_OK) == 0;
 }
+#elif defined(__APPLE__) && TARGET_OS_IPHONE
+/* iOS: no gateway (0.0.0.0, unknown) and no Wi-Fi flag. Its SDK has no routing or media header to read them with, and
+   the sandbox's answer to those queries is unchecked: nifm reports a wired interface without a gateway, as before */
+static void apple_gateway(const char* name, uint8_t out[4]) {
+    (void)name;
+    (void)out;
+}
+static int apple_wireless(const char* name) {
+    (void)name;
+    return 0;
+}
+#elif defined(__APPLE__)
+/* the gateway of interface name's default route, from the kernel's routing table as netstat -r reads it: the routes
+   with a gateway, each a message whose addresses follow in the order of their bits, each rounded up to 4 bytes */
+static void apple_gateway(const char* name, uint8_t out[4]) {
+    int mib[6] = {CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_GATEWAY};
+    unsigned index = if_nametoindex(name);
+    size_t size = 0;
+    char *table, *p;
+    if (!index || sysctl(mib, 6, NULL, &size, NULL, 0) || !size) return;
+    size += size / 4; /* room for routes added since */
+    table = malloc(size);
+    if (!table) return;
+    if (!sysctl(mib, 6, table, &size, NULL, 0))
+        for (p = table; p + sizeof(struct rt_msghdr) <= table + size;) {
+            const struct rt_msghdr* m = (const struct rt_msghdr*)p;
+            const struct sockaddr *dst = NULL, *gw = NULL;
+            const char* a = (const char*)(m + 1);
+            if (m->rtm_msglen < sizeof *m || p + m->rtm_msglen > table + size) break;
+            for (int bit = 0; bit < 8 && a < p + m->rtm_msglen; bit++) {
+                const struct sockaddr* sa = (const struct sockaddr*)a;
+                if (!(m->rtm_addrs & (1 << bit))) continue;
+                if (bit == 0) dst = sa; /* RTA_DST */
+                if (bit == 1) gw = sa;  /* RTA_GATEWAY */
+                a += sa->sa_len ? (sa->sa_len + 3) & ~3 : 4;
+            }
+            /* a routing message leaves an address's trailing zeroes out: a destination shorter than its address
+               (the default route's, often of length 0) is 0.0.0.0. The table holds AF_INET's routes alone */
+            int to_any = dst && (dst->sa_len < 8 || !((const struct sockaddr_in*)dst)->sin_addr.s_addr);
+            if (m->rtm_index == index && (m->rtm_flags & RTF_GATEWAY) && to_any && gw && gw->sa_family == AF_INET &&
+                gw->sa_len >= 8) {
+                memcpy(out, &((const struct sockaddr_in*)gw)->sin_addr, 4);
+                break;
+            }
+            p += m->rtm_msglen;
+        }
+    free(table);
+}
+/* Wi-Fi by the interface's functional type (macOS 10.11 on), else by its media */
+static int apple_wireless(const char* name) {
+    int s = socket(AF_INET, SOCK_DGRAM, 0), wireless = 0;
+    if (s < 0) return 0;
+/* where the SDK declares it: the request, the type and the field it fills (ifr_functional_type, a macro) */
+#if defined(SIOCGIFFUNCTIONALTYPE) && defined(IFRTYPE_FUNCTIONAL_WIFI_INFRA) && defined(ifr_functional_type)
+    struct ifreq r;
+    memset(&r, 0, sizeof r);
+    snprintf(r.ifr_name, sizeof r.ifr_name, "%s", name);
+    if (!ioctl(s, SIOCGIFFUNCTIONALTYPE, &r)) {
+        close(s);
+        return r.ifr_functional_type == IFRTYPE_FUNCTIONAL_WIFI_INFRA;
+    }
+#endif
+    struct ifmediareq m;
+    memset(&m, 0, sizeof m);
+    snprintf(m.ifm_name, sizeof m.ifm_name, "%s", name);
+    if (!ioctl(s, SIOCGIFMEDIA, &m)) wireless = (m.ifm_current & IFM_NMASK) == IFM_IEEE80211;
+    close(s);
+    return wireless;
+}
 #endif
 static int list_interfaces(SnxNetInterface* out, int max) {
     struct ifaddrs* list;
@@ -145,11 +225,52 @@ static int list_interfaces(SnxNetInterface* out, int max) {
 #ifdef __linux__
         linux_gateway(i->name, i->gateway);
         i->wireless = linux_wireless(i->name);
+#elif defined(__APPLE__)
+        apple_gateway(i->name, i->gateway);
+        i->wireless = apple_wireless(i->name);
 #endif
     }
     freeifaddrs(list);
     return n;
 }
+#ifdef __APPLE__
+/* The system resolver's configuration, as libresolv has it from the system's DNS settings (configd): iOS has no
+   /etc/resolv.conf, and macOS's is the primary resolver's copy alone. The text is a resolv.conf of its servers and
+   search domains, as Windows' is made */
+int snx_net_dns_servers(uint8_t (*ipv4)[4], int max, char* text, size_t text_size) {
+    struct __res_state res;
+    union res_sockaddr_union servers[MAXNS];
+    int n = 0, count;
+    if (text && text_size) text[0] = 0;
+    memset(&res, 0, sizeof res);
+    if (res_ninit(&res)) return 0;
+    count = res_getservers(&res, servers, MAXNS);
+    for (int i = 0; i < count; i++) {
+        char name[INET6_ADDRSTRLEN];
+        const void* addr = servers[i].sin.sin_family == AF_INET    ? (const void*)&servers[i].sin.sin_addr
+                           : servers[i].sin6.sin6_family == AF_INET6 ? (const void*)&servers[i].sin6.sin6_addr
+                                                                     : NULL;
+        if (!addr || !inet_ntop(servers[i].sin.sin_family, addr, name, sizeof name)) continue;
+        if (servers[i].sin.sin_family == AF_INET && ipv4 && n < max) memcpy(ipv4[n++], addr, 4);
+        if (text && strlen(text) + strlen(name) + 13 < text_size && !strstr(text, name)) {
+            strcat(text, "nameserver ");
+            strcat(text, name);
+            strcat(text, "\n");
+        }
+    }
+    if (text && res.dnsrch[0] && strlen(text) + 8 < text_size) {
+        strcat(text, "search");
+        for (int i = 0; i < MAXDNSRCH && res.dnsrch[i]; i++)
+            if (strlen(text) + strlen(res.dnsrch[i]) + 3 < text_size) {
+                strcat(text, " ");
+                strcat(text, res.dnsrch[i]);
+            }
+        strcat(text, "\n");
+    }
+    res_ndestroy(&res);
+    return n;
+}
+#else
 int snx_net_dns_servers(uint8_t (*ipv4)[4], int max, char* text, size_t text_size) {
     if (text && text_size) text[0] = 0;
     FILE* f = fopen("/etc/resolv.conf", "r");
@@ -168,6 +289,7 @@ int snx_net_dns_servers(uint8_t (*ipv4)[4], int max, char* text, size_t text_siz
     fclose(f);
     return n;
 }
+#endif
 #endif
 
 int snx_net_interfaces(SnxNetInterface* out, int max) {

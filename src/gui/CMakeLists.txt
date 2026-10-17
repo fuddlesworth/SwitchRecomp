@@ -71,6 +71,9 @@ if(APPLE)
     set_source_files_properties(apple.m PROPERTIES COMPILE_OPTIONS -fobjc-arc)
     # PUBLIC: the link folders above go with it to the program that links the menu
     target_link_libraries(scarletnx-gui PUBLIC snx_apple_frontend "-framework Foundation")
+    # not Swift's, which linking a Swift library made CMake pick: the archive was made by swiftc, given the C flags.
+    # C++: the menu alone (no Switch runtime) is a program, and links the splash's C++ (lunasvg)
+    set_target_properties(scarletnx-gui PROPERTIES LINKER_LANGUAGE CXX)
 endif()
 set_target_properties(scarletnx-gui PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")

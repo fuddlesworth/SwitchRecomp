@@ -37,9 +37,12 @@
 #endif
 #include <sched.h>
 #include <errno.h>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 extern char** environ;
-#ifdef __ANDROID__
-/* zenity and kdialog are a desktop's: Android has no dialog to ask for text yet */
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+/* zenity and kdialog are a desktop's: Android has no dialog to ask for text yet, and an iOS app runs no program */
 int plat_text_input(char* out, size_t cap, const char* initial) {
     (void)out;
     (void)cap;
@@ -95,6 +98,23 @@ static int text_dialog_run(char* out, size_t cap, char* const argv[]) {
 int plat_text_input(char* out, size_t cap, const char* initial) {
     if (!cap) return -1;
     if (!initial) initial = "";
+#ifdef __APPLE__
+    /* macOS's own dialog, through AppleScript. The text is the script's argument, never part of it: it is game data.
+       Cancel exits with 1, as zenity's does */
+    char* osascript[] = {"osascript",
+                         "-e",
+                         "on run argv",
+                         "-e",
+                         "text returned of (display dialog \"Enter text\" default answer (item 1 of argv) with title "
+                         "\"ScarletNX\")",
+                         "-e",
+                         "end run",
+                         "--",
+                         (char*)initial,
+                         NULL};
+    int apple = text_dialog_run(out, cap, osascript);
+    return apple == -2 ? -1 : apple;
+#endif
     char* zenity[] = {"zenity",       "--entry", "--title=ScarletNX", "--text=Enter text", "--entry-text",
                       (char*)initial, NULL};
     char* kdialog[] = {"kdialog", "--title", "ScarletNX", "--inputbox", "Enter text", (char*)initial, NULL};

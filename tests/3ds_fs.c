@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#if defined(__unix__)
+#if defined(__unix__) || defined(__APPLE__) /* Darwin defines no __unix__ */
 #include <sys/resource.h>
 #include <sys/stat.h>
 #endif
@@ -131,7 +131,11 @@ static uint64_t host_datetime(const char* path) {
 #else
     struct stat st;
     assert(!stat(path, &st) && st.st_mtime >= 0);
+#if defined(__APPLE__) /* as fs/tree.c reads it */
+    return (uint64_t)st.st_mtime * 1000 + (uint64_t)st.st_mtimespec.tv_nsec / 1000000 + UINT64_C(2208988800000);
+#else
     return (uint64_t)st.st_mtime * 1000 + (uint64_t)st.st_mtim.tv_nsec / 1000000 + UINT64_C(2208988800000);
+#endif
 #endif
 }
 static uint64_t get64(SnxCtrProcess* p, uint32_t address) {
@@ -317,7 +321,7 @@ static void sd_area(SnxCtrProcess* p, uint32_t fs, const char* directory) {
 }
 int main(int argc, char** argv) {
     assert(argc == 4);
-#if defined(__unix__)
+#if defined(__unix__) || defined(__APPLE__)
     if (!strcmp(argv[3], "fallback")) {
         struct rlimit limit = {64, 64};
         assert(!setrlimit(RLIMIT_NOFILE, &limit));
