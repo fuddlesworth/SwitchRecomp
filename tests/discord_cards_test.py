@@ -23,13 +23,23 @@ from fake_github import FAKE_GH, Discord, posted, serve
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / 'scripts' / 'discord-cards.py'
 REPO, TO = 'owner/repo', 'owner/nightly'
-JOBS = ['Linux AppImage (x86_64)', 'Linux AppImage (aarch64)', 'Windows (Clang + LLVM)', 'Android APK']
+JOBS = [
+    'Linux AppImage (x86_64)',
+    'Linux AppImage (aarch64)',
+    'Windows (Clang + LLVM)',
+    'Android APK',
+    'macOS (arm64)',
+    'iOS (arm64)',
+]
 FILES = [
     'ScarletNX-linux-x86_64.AppImage',
     'ScarletNX-linux-aarch64.AppImage',
     'ScarletNX-windows-x86_64.zip',
     'ScarletNX-android-universal.apk',
+    'ScarletNX-macos-arm64.zip',
+    'ScarletNX-ios-arm64.ipa',
 ]
+N = len(JOBS)  # the packages, one job each
 failures = []
 
 
@@ -49,7 +59,7 @@ def job(name, status, conclusion=None, run=1):
 
 
 def jobs(states, run=1):
-    """the four packages' jobs: each (status, conclusion)"""
+    """the packages' jobs: each (status, conclusion)"""
     return [job(name, *state, run=run) for name, state in zip(JOBS, states)]
 
 
@@ -171,11 +181,11 @@ with tempfile.TemporaryDirectory() as temporary:
     # ---- a push to main: its card at once, then each package as its job ends
     w, b, ok = ('queued', None), ('in_progress', None), ('completed', 'success')
     steps = [
-        {'status': 'in_progress', 'jobs': jobs([w, w, w, w])},
-        {'status': 'in_progress', 'jobs': jobs([b, b, b, w])},
-        {'status': 'in_progress', 'jobs': jobs([b, b, b, w])},  # no change: no edit
-        {'status': 'in_progress', 'jobs': jobs([ok, b, b, w])},
-        {'status': 'completed', 'conclusion': 'success', 'jobs': jobs([ok, ok, ok, ok])},
+        {'status': 'in_progress', 'jobs': jobs([w] * N)},
+        {'status': 'in_progress', 'jobs': jobs([b, b, b, w, w, w])},
+        {'status': 'in_progress', 'jobs': jobs([b, b, b, w, w, w])},  # no change: no edit
+        {'status': 'in_progress', 'jobs': jobs([ok, b, b, w, w, w])},
+        {'status': 'completed', 'conclusion': 'success', 'jobs': jobs([ok] * N)},
     ]
     save_state(dict(base, runs=[push_run(sha, steps)]))
     watch = {'workflow_run': {'id': 1}}
@@ -198,8 +208,8 @@ with tempfile.TemporaryDirectory() as temporary:
         and card['description'].startswith(f'Building main at [`{sha[:7]}`]')
         and f'- \\[gui\\] its title ([#5](https://github.com/{REPO}/pull/5))' in card['description']
         and card['color'] == cards.BUILDING
-        and [f['value'] for f in card['fields'][:4]] == ['Waiting'] * 4
-        and card['fields'][4]['name'] == 'Source',
+        and [f['value'] for f in card['fields'][:N]] == ['Waiting'] * N
+        and card['fields'][N]['name'] == 'Source',
         card,
     )
     message = sent[0].get('reply')
@@ -213,17 +223,17 @@ with tempfile.TemporaryDirectory() as temporary:
     )
     done = run('event', event=watch, name='workflow_run')
     edits = posted('nightly')[1:]
-    values = [[f['value'].split('\n')[0] for f in e['body']['embeds'][0]['fields'][:4]] for e in edits]
+    values = [[f['value'].split('\n')[0] for f in e['body']['embeds'][0]['fields'][:N]] for e in edits]
     check(
         'following the build edits the card at each change of its jobs, never posting',
         done.returncode == 0
         and all(e['method'] == 'PATCH' and e['path'].endswith(f'/messages/{message}') for e in edits)
         and values
         == [
-            ['Waiting'] * 4,
-            ['Building', 'Building', 'Building', 'Waiting'],
-            ['Built', 'Building', 'Building', 'Waiting'],
-            ['Built'] * 4,
+            ['Waiting'] * N,
+            ['Building', 'Building', 'Building', 'Waiting', 'Waiting', 'Waiting'],
+            ['Built', 'Building', 'Building', 'Waiting', 'Waiting', 'Waiting'],
+            ['Built'] * N,
         ],
         values,
     )
@@ -259,7 +269,7 @@ with tempfile.TemporaryDirectory() as temporary:
     # an older commit's build ending after a newer nightly: not published; a failed one says so
     s = state()
     s['releases'][TO] = [nightly_release(previous, '2026-10-01'), nightly_release(newer, '2026-10-03')]
-    s['runs'] = [dict(push_run(sha, []), status='completed', conclusion='success', jobs=jobs([ok] * 4))]
+    s['runs'] = [dict(push_run(sha, []), status='completed', conclusion='success', jobs=jobs([ok] * N))]
     save_state(s)
     run('refresh', 'nightly', sha)
     card = posted('nightly')[-1]['body']['embeds'][0]
@@ -270,7 +280,7 @@ with tempfile.TemporaryDirectory() as temporary:
         and card['fields'][0]['value'] == 'Built\nnot published',
         card,
     )
-    failed = jobs([ok, ok, ('completed', 'failure'), ok])
+    failed = jobs([ok, ok, ('completed', 'failure'), ok, ok, ok])
     s['releases'][TO] = [nightly_release(previous, '2026-10-01')]
     s['runs'] = [dict(push_run(sha, []), status='completed', conclusion='failure', jobs=failed)]
     save_state(s)
@@ -331,7 +341,7 @@ with tempfile.TemporaryDirectory() as temporary:
         '`kind: bug` | assigned to [bob](https://x/bob) | closes [#12](https://x/issues/12)\n'
         in card['description']
         and '**3 commits**, the newest first\n- \\[gui\\] commit 2\n' in card['description']
-        and [f['value'] for f in card['fields']] == ['Waiting'] * 4 + ['Not started', 'None yet']
+        and [f['value'] for f in card['fields']] == ['Waiting'] * N + ['Not started', 'None yet']
         and card['color'] == cards.OPEN,
         card,
     )
@@ -405,7 +415,7 @@ with tempfile.TemporaryDirectory() as temporary:
             'html_url': 'https://x/runs/60',
             'head_repository': {'full_name': 'alice/fork'},
             'pull_requests': [],
-            'jobs': jobs([ok] * 4, 60),
+            'jobs': jobs([ok] * N, 60),
         }
     ]
     save_state(s)
@@ -416,7 +426,7 @@ with tempfile.TemporaryDirectory() as temporary:
         done.returncode == 0
         and posted('prs')[-1]['method'] == 'PATCH'
         and card['fields'][0]['value'] == "Built\nwaits for the team's label"
-        and card['fields'][4]['value'] == '[Passed](https://x/runs/60)',
+        and card['fields'][N]['value'] == '[Passed](https://x/runs/60)',
         card,
     )
     # merged: green, no packages

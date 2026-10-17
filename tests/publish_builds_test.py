@@ -27,6 +27,8 @@ FILES = [
     'ScarletNX-linux-aarch64.AppImage',
     'ScarletNX-windows-x86_64.zip',
     'ScarletNX-android-universal.apk',
+    'ScarletNX-macos-arm64.zip',
+    'ScarletNX-ios-arm64.ipa',
 ]
 ZSYNC = ['ScarletNX-linux-x86_64.AppImage.zsync', 'ScarletNX-linux-aarch64.AppImage.zsync']
 failures = []
@@ -110,6 +112,8 @@ with tempfile.TemporaryDirectory() as temporary:
             },
             f'ScarletNX-windows-x86_64-{short}': {'bin/scarletnx.exe': 'MZ', 'share/licenses/LICENSE': 'GPL'},
             f'ScarletNX-android-universal-{short}.apk': {f'ScarletNX-android-universal-{short}.apk': 'PK apk'},
+            f'ScarletNX-macos-arm64-{short}.zip': {f'ScarletNX-macos-arm64-{short}.zip': 'PK app'},
+            f'ScarletNX-ios-arm64-{short}.ipa': {f'ScarletNX-ios-arm64-{short}.ipa': 'PK ipa'},
         }
         for artifact, files in made.items():
             for file, text in files.items():
@@ -237,7 +241,7 @@ with tempfile.TemporaryDirectory() as temporary:
         made,
     )
     check(
-        "its four files, and the AppImages' .zsync",
+        "its files, and the AppImages' .zsync",
         made and sorted(a['name'] for a in made['assets']) == sorted(FILES + ZSYNC),
         made and made['assets'],
     )
@@ -252,8 +256,14 @@ with tempfile.TemporaryDirectory() as temporary:
         and '.AppImage.zsync' not in made['body'],
         made and made['body'],
     )
-    archive = next((a['data'] for a in made['assets'] if a['name'].endswith('.zip')), '') if made else ''
+    data = {a['name']: a['data'] for a in made['assets']} if made else {}
+    archive = data.get('ScarletNX-windows-x86_64.zip', '')
     check('the Windows build zipped from its folder', archive.startswith('PK') and 'bin/scarletnx.exe' in archive)
+    check(
+        'the macOS app and the iOS IPA as their jobs made them, not zipped again',
+        data.get('ScarletNX-macos-arm64.zip') == 'PK app' and data.get('ScarletNX-ios-arm64.ipa') == 'PK ipa',
+        {k: v[:20] for k, v in data.items()},
+    )
     check(
         'only the newest 2 kept, the oldest and its tag gone',
         sorted(r['tag_name'] for r in releases(s=s)) == sorted([tag, f'nightly-2026-10-15-{previous[:7]}'])
@@ -308,7 +318,16 @@ with tempfile.TemporaryDirectory() as temporary:
     check(
         'the message links each download with its size, then the source and every nightly',
         [f['name'] for f in shown.get('fields', [])]
-        == ['Linux x86-64', 'Linux ARM64', 'Windows x86-64', 'Android', 'Source', 'Every nightly']
+        == [
+            'Linux x86-64',
+            'Linux ARM64',
+            'Windows x86-64',
+            'Android',
+            'macOS ARM64',
+            'iOS ARM64',
+            'Source',
+            'Every nightly',
+        ]
         and shown['fields'][2]['value']
         == f'[zip](https://github.com/{TO}/releases/download/{tag}/ScarletNX-windows-x86_64.zip)\n0.0 MB'
         and all(f['inline'] for f in shown['fields'])
@@ -408,8 +427,8 @@ with tempfile.TemporaryDirectory() as temporary:
         'one message on the releases channel, its downloads, the source, and since which version',
         len(sent) == 1
         and sent[0]['body']['embeds'][0]['title'] == 'ScarletNX v0.2.0'
-        and [f['name'] for f in sent[0]['body']['embeds'][0]['fields']][4:] == ['Source', 'Since']
-        and '/compare/v0.1.0...v0.2.0' in sent[0]['body']['embeds'][0]['fields'][5]['value'],
+        and [f['name'] for f in sent[0]['body']['embeds'][0]['fields']][len(FILES) :] == ['Source', 'Since']
+        and '/compare/v0.1.0...v0.2.0' in sent[0]['body']['embeds'][0]['fields'][len(FILES) + 1]['value'],
         sent,
     )
     git('tag', 'v0.3.0-rc1')
@@ -484,7 +503,7 @@ with tempfile.TemporaryDirectory() as temporary:
         and '| **Windows** | x86-64 | not built, [see the run](https://github.com/owner/repo/actions/runs/50) |  |'
         in pre['body']
         and '- **Windows**' not in pre['body']
-        and len(pre['assets']) == 5,
+        and len(pre['assets']) == len(FILES + ZSYNC) - 1,
         pre,
     )
     check(
@@ -518,7 +537,7 @@ with tempfile.TemporaryDirectory() as temporary:
         and shown['fields'][2]
         == {'name': 'Windows x86-64', 'value': 'Failed\n[log](https://x/runs/50/Windo)', 'inline': True}
         and shown['fields'][0]['value'].startswith(f'[AppImage](https://github.com/{TO}/releases/download/pr-7/')
-        and shown['fields'][4:]
+        and shown['fields'][len(FILES) :]
         == [
             {'name': 'Build', 'value': '[Failure](https://x/runs/50)', 'inline': True},
             {'name': 'Builds', 'value': f'[All files](https://github.com/{TO}/releases/tag/pr-7)', 'inline': True},
@@ -555,7 +574,10 @@ with tempfile.TemporaryDirectory() as temporary:
     )
     check(
         'the push replaces it',
-        pre and len(pre['assets']) == 6 and head2[:7] in pre['body'] and 'not built' not in pre['body'],
+        pre
+        and len(pre['assets']) == len(FILES + ZSYNC)
+        and head2[:7] in pre['body']
+        and 'not built' not in pre['body'],
         pre,
     )
     check(

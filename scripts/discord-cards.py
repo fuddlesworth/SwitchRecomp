@@ -52,6 +52,8 @@ JOBS = {
     'ScarletNX-linux-aarch64.AppImage': 'Linux AppImage (aarch64)',
     'ScarletNX-windows-x86_64.zip': 'Windows (Clang + LLVM)',
     'ScarletNX-android-universal.apk': 'Android APK',
+    'ScarletNX-macos-arm64.zip': 'macOS (arm64)',
+    'ScarletNX-ios-arm64.ipa': 'iOS (arm64)',
 }
 # a nightly's colours: building, published, a package failed, not published
 BUILDING, SCARLET, AMBER, CLOSED = 0x1F6FEB, 0xB0102A, 0xD29922, 0x6E7681

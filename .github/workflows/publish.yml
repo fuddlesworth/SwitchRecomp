@@ -98,6 +98,24 @@ jobs:
           path: artifacts/ScarletNX-android-universal-${{ steps.plan.outputs.short }}.apk
           run-id: ${{ steps.plan.outputs.run }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download the macOS app
+        if: steps.plan.outputs.run
+        continue-on-error: ${{ steps.plan.outputs.kind == 'pr' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ScarletNX-macos-arm64-${{ steps.plan.outputs.short }}.zip
+          path: artifacts/ScarletNX-macos-arm64-${{ steps.plan.outputs.short }}.zip
+          run-id: ${{ steps.plan.outputs.run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download the iOS IPA
+        if: steps.plan.outputs.run
+        continue-on-error: ${{ steps.plan.outputs.kind == 'pr' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ScarletNX-ios-arm64-${{ steps.plan.outputs.short }}.ipa
+          path: artifacts/ScarletNX-ios-arm64-${{ steps.plan.outputs.short }}.ipa
+          run-id: ${{ steps.plan.outputs.run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish them
         if: steps.plan.outputs.run
         env:

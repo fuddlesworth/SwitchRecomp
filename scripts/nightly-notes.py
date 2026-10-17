@@ -23,6 +23,8 @@ SYSTEMS = {
     'ScarletNX-linux-aarch64.AppImage': ('Linux', 'ARM64', 'AppImage'),
     'ScarletNX-windows-x86_64.zip': ('Windows', 'x86-64', 'zip'),
     'ScarletNX-android-universal.apk': ('Android', 'ARM64, x86-64', 'APK'),
+    'ScarletNX-macos-arm64.zip': ('macOS', 'ARM64', 'zip'),
+    'ScarletNX-ios-arm64.ipa': ('iOS', 'ARM64', 'IPA'),
 }
 # how each system's file runs, under the downloads; {updates}: the release AppImageUpdate takes an AppImage to, the
 # latest of the repository its update information names (scripts/make-appimage.sh)
@@ -30,6 +32,8 @@ RUNNING = {
     'Linux': 'make the AppImage executable and run it. AppImageUpdate takes it to {updates}.',
     'Windows': 'unzip it anywhere and run `bin\\scarletnx.exe`.',
     'Android': 'Android 5.0 and later. The APK is signed with a debug key.',
+    'macOS': "unzip it and open `ScarletNX.app`; signed ad hoc, so a download may need *Open* from the Finder's menu the first time.",
+    'iOS': 'unsigned: AltStore, SideStore or a developer account signs it for the device.',
 }
 MERGE = re.compile(r'Merge pull request #(\d+) from \S+')
 # what text from a commit or a pull request could make of the markdown around it: a link, a tag, a table cell

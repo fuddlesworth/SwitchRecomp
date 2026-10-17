@@ -58,6 +58,8 @@ ARTIFACTS = {
     'ScarletNX-linux-aarch64-{short}.AppImage': 'ScarletNX-linux-aarch64.AppImage',
     'ScarletNX-windows-x86_64-{short}': 'ScarletNX-windows-x86_64.zip',
     'ScarletNX-android-universal-{short}.apk': 'ScarletNX-android-universal.apk',
+    'ScarletNX-macos-arm64-{short}.zip': 'ScarletNX-macos-arm64.zip',
+    'ScarletNX-ios-arm64-{short}.ipa': 'ScarletNX-ios-arm64.ipa',
 }
 
 
@@ -121,13 +123,13 @@ class Publisher(cards.Hub):
                 missing.append(name)
                 continue
             path = self.work / name
-            if name.endswith('.zip'):  # the Windows build is a folder: zipped as it is
+            if not Path(pattern).suffix:  # the Windows build is a folder: zipped as it is
                 with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as archive:
                     for item in sorted(folder.rglob('*')):
                         if item.is_file():
                             archive.write(item, item.relative_to(folder).as_posix())
             else:
-                found = sorted(folder.rglob(name if name.endswith('.AppImage') else '*.apk'))
+                found = sorted(folder.rglob(name if name.endswith('.AppImage') else '*' + Path(name).suffix))
                 if len(found) != 1:
                     raise RuntimeError(f'{folder.name} holds {len(found)} of {name}, not one')
                 shutil.copyfile(found[0], path)
