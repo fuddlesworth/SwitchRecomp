@@ -227,9 +227,12 @@ i64 plat_tz_offset(void) {
     long b = z.Bias + (r == TIME_ZONE_ID_DAYLIGHT ? z.DaylightBias : r == TIME_ZONE_ID_STANDARD ? z.StandardBias : 0);
     return -(i64)b * 60;
 }
-static int g_ww_ok; /* MEM_WRITE_WATCH: Windows tracks written pages, so unchanged buffers don't need a reread */
+/* MEM_WRITE_WATCH: Windows tracks written pages, so unchanged buffers don't need a reread. On unless SNX_NO_WW is set,
+   as on Linux: without it every cache checks its memory by content each time, and Super Mario Odyssey's GPU thread
+   spent a third of its time hashing render targets */
+static int g_ww_ok;
 u8* plat_vm_reserve(u64 size) {
-    void* p = !getenv("SNX_WW") ? NULL : VirtualAlloc(NULL, size, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS);
+    void* p = getenv("SNX_NO_WW") ? NULL : VirtualAlloc(NULL, size, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS);
     if (p) {
         g_ww_ok = 1;
         return (u8*)p;

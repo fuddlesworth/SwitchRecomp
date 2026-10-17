@@ -57,7 +57,7 @@ i64 plat_tz_offset(void); /* local - UTC, seconds */
 u8* plat_vm_reserve(u64 size);
 /* written-page tracking by range: calls cb for each run of pages in [p, p+size) written since the range was last
    scanned, and starts tracking them again. -1 when the platform can't (then everything must be checked by content).
-   Linux: userfaultfd write protection (async) and PAGEMAP_SCAN; Windows: GetWriteWatch, with SNX_WW set */
+   Linux: userfaultfd write protection (async) and PAGEMAP_SCAN; Windows: GetWriteWatch. SNX_NO_WW turns either off */
 int plat_ww_scan(u8* p, u64 size, void (*cb)(u8* p, u64 size));
 int plat_vm_commit(u8* p, u64 size);
 void plat_vm_decommit(u8* p, u64 size);
